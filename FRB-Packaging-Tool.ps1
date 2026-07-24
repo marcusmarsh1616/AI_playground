@@ -2250,6 +2250,65 @@ $statusBar.Controls.Add($btnCancel)
 
 #region Event Handlers
 
+function Load-ExistingPackageDataIfPresent {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PackagePath
+    )
+
+    $existingStartupPath = Join-Path $PackagePath $script:ProjectFileName
+    if (-not (Test-Path $existingStartupPath)) {
+        return
+    }
+
+    if (-not $script:LastLoadedStartupPath) {
+        $script:LastLoadedStartupPath = ""
+    }
+
+    # Avoid reloading the same Startup.pss repeatedly while fields are unchanged.
+    if ($script:LastLoadedStartupPath -eq $existingStartupPath) {
+        return
+    }
+
+    Update-Status "Loading custom commands from existing package..." "Blue"
+    $form.Refresh()
+
+    try {
+        $loadResult = Get-CustomCommandsFromStartupPss -StartupPssPath $existingStartupPath
+
+        if ($script:txtPreInstall) { $script:txtPreInstall.Text = $loadResult.PreInstall }
+        if ($script:txtCustomInstall) { $script:txtCustomInstall.Text = $loadResult.CustomInstall }
+        if ($script:txtPostInstall) { $script:txtPostInstall.Text = $loadResult.PostInstall }
+        if ($script:txtPreUninstall) { $script:txtPreUninstall.Text = $loadResult.PreUninstall }
+        if ($script:txtCustomUninstall) { $script:txtCustomUninstall.Text = $loadResult.CustomUninstall }
+        if ($script:txtPostUninstall) { $script:txtPostUninstall.Text = $loadResult.PostUninstall }
+
+        if ($script:txtUninstallExecutable) {
+            $script:txtUninstallExecutable.Text = $loadResult.AppUninstallExeName
+            $script:txtUninstallExecutable.Visible = $true
+        }
+        if ($script:lblUninstallExecutable) { $script:lblUninstallExecutable.Visible = $true }
+
+        if ($script:txtInstallSwitch) {
+            $script:txtInstallSwitch.Text = $loadResult.AppInstallCommandLine
+            $script:txtInstallSwitch.Visible = $true
+        }
+        if ($script:lblInstallSwitch) { $script:lblInstallSwitch.Visible = $true }
+
+        if ($script:txtUninstallSwitch) {
+            $script:txtUninstallSwitch.Text = $loadResult.AppUninstallCommandLine
+            $script:txtUninstallSwitch.Visible = $true
+        }
+        if ($script:lblUninstallSwitch) { $script:lblUninstallSwitch.Visible = $true }
+
+        $script:LastLoadedStartupPath = $existingStartupPath
+        Update-Status "Custom commands and metadata loaded from existing package!" "Green"
+    }
+    catch {
+        Write-Warning "Failed to load existing package data from Startup.pss: $($_.Exception.Message)"
+    }
+}
+
 # Function to check if package folder exists
 function Check-PackageFolderExists {
     if (-not [string]::IsNullOrWhiteSpace($txtVendor.Text) -and 
@@ -2265,11 +2324,14 @@ function Check-PackageFolderExists {
         
         if (Test-Path $checkPath) {
             $lblFolderExistsFlag.Visible = $true
+            Load-ExistingPackageDataIfPresent -PackagePath $checkPath
         } else {
             $lblFolderExistsFlag.Visible = $false
+            $script:LastLoadedStartupPath = ""
         }
     } else {
         $lblFolderExistsFlag.Visible = $false
+        $script:LastLoadedStartupPath = ""
     }
 }
 
@@ -2308,70 +2370,8 @@ $btnBrowse.Add_Click({
             $txtVersion.Text = $metadata.Version
         }
         
-                
-        # Auto-load custom commands from existing package if folder exists (v3.2 Feature)
-        if (-not [string]::IsNullOrWhiteSpace($txtVendor.Text) -and 
-            -not [string]::IsNullOrWhiteSpace($txtName.Text) -and 
-            -not [string]::IsNullOrWhiteSpace($txtVersion.Text)) {
-            
-            $existingPackagePath = Join-Path $script:BasePackagingPath $txtVendor.Text
-            $existingPackagePath = Join-Path $existingPackagePath $txtName.Text
-            if (-not [string]::IsNullOrWhiteSpace($txtEdition.Text)) {
-                $existingPackagePath = Join-Path $existingPackagePath $txtEdition.Text
-            }
-            $existingPackagePath = Join-Path $existingPackagePath $txtVersion.Text
-            $existingStartupPath = Join-Path $existingPackagePath $script:ProjectFileName
-            
-            if (Test-Path $existingStartupPath) {
-                Update-Status "Loading custom commands from existing package..." "Blue"
-                $form.Refresh()
-                
-                try {
-                    $loadResult = Get-CustomCommandsFromStartupPss -StartupPssPath $existingStartupPath
-                    
-                    # Populate custom command textboxes (6 sections)
-                    if (-not [string]::IsNullOrWhiteSpace($loadResult.PreInstall)) {
-                        $txtPreInstall.Text = $loadResult.PreInstall
-                    }
-                    if (-not [string]::IsNullOrWhiteSpace($loadResult.CustomInstall)) {
-                        $txtCustomInstall.Text = $loadResult.CustomInstall
-                    }
-                    if (-not [string]::IsNullOrWhiteSpace($loadResult.PostInstall)) {
-                        $txtPostInstall.Text = $loadResult.PostInstall
-                    }
-                    if (-not [string]::IsNullOrWhiteSpace($loadResult.PreUninstall)) {
-                        $txtPreUninstall.Text = $loadResult.PreUninstall
-                    }
-                    if (-not [string]::IsNullOrWhiteSpace($loadResult.CustomUninstall)) {
-                        $txtCustomUninstall.Text = $loadResult.CustomUninstall
-                    }
-                    if (-not [string]::IsNullOrWhiteSpace($loadResult.PostUninstall)) {
-                        $txtPostUninstall.Text = $loadResult.PostUninstall
-                    }
-                    
-                    # Populate metadata fields (3 new fields)
-                    if (-not [string]::IsNullOrWhiteSpace($loadResult.AppUninstallExeName)) {
-                        $txtUninstallExecutable.Text = $loadResult.AppUninstallExeName
-                        $txtUninstallExecutable.Visible = $true
-                        $lblUninstallExecutable.Visible = $true
-                    }
-                    if (-not [string]::IsNullOrWhiteSpace($loadResult.AppInstallCommandLine)) {
-                        $txtInstallSwitch.Text = $loadResult.AppInstallCommandLine
-                        $txtInstallSwitch.Visible = $true
-                        $lblInstallSwitch.Visible = $true
-                    }
-                    if (-not [string]::IsNullOrWhiteSpace($loadResult.AppUninstallCommandLine)) {
-                        $txtUninstallSwitch.Text = $loadResult.AppUninstallCommandLine
-                        $txtUninstallSwitch.Visible = $true
-                        $lblUninstallSwitch.Visible = $true
-                    }
-                    
-                    Update-Status "Custom commands and metadata loaded from existing package!" "Green"
-                } catch {
-                    Write-Warning "Failed to load existing package data from Startup.pss: $($_.Exception.Message)"
-                }
-            }
-        }
+        # Folder recognition is the single trigger for Startup.pss rehydrate.
+        Check-PackageFolderExists
         # Show Start Packaging button
         $btnCreate.Visible = $true
         
