@@ -69,10 +69,12 @@ function Start-InstallationTest {
         }
         
         Write-Verbose "InstallTestEngine: Launching Install.exe (using embedded manifest)..."
+        $installWorkingDirectory = Split-Path -Path $InstallExePath -Parent
         
         # Create process start info for UAC elevation  
         $processInfo = New-Object System.Diagnostics.ProcessStartInfo
         $processInfo.FileName = $InstallExePath
+        $processInfo.WorkingDirectory = $installWorkingDirectory
         $processInfo.UseShellExecute = $true
         # Removed: Verb = runas (let manifest control)
         $processInfo.WindowStyle = "Normal"
@@ -186,11 +188,12 @@ function Start-UninstallationTest {
         }
         
         Write-Verbose "InstallTestEngine: Launching Install.exe /uninstall (using embedded manifest)..."
+        $installWorkingDirectory = Split-Path -Path $InstallExePath -Parent
         
         # Use Start-Process (no elevation - use embedded manifest)
         $uninstallProcess = Start-Process -FilePath $InstallExePath `
                                           -ArgumentList "/uninstall" `
-
+                          -WorkingDirectory $installWorkingDirectory `
                                           -PassThru `
                                           -Wait
         
