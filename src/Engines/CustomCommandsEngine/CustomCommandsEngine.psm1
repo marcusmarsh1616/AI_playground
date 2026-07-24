@@ -329,6 +329,7 @@ function Get-CustomCommandsFromStartupPss {
         $foundUninstallExe = $false
         $foundInstallCmd = $false
         $foundUninstallCmd = $false
+        $assignmentRegex = '^\s*\[string\]\s*\$(?<varName>appUninstallExeName|appInstallCommandLine|appUninstallCommandLine)\s*=\s*[\x27\x22](?<value>.*?)[\x27\x22]'
         
         foreach ($line in $lines) {
             # Find section boundaries
@@ -342,29 +343,22 @@ function Get-CustomCommandsFromStartupPss {
             
             # Only extract if we are inside VARIABLE DECLARATION section
             if ($inVarDeclaration) {
-                if (-not $foundUninstallExe -and $line.Contains("[string]`$appUninstallExeName")) {
-                    $startQuote = $line.IndexOf("'") + 1
-                    $endQuote = $line.IndexOf("'", $startQuote)
-                    if ($startQuote -gt 0 -and $endQuote -gt $startQuote) {
-                        $result.AppUninstallExeName = $line.Substring($startQuote, $endQuote - $startQuote)
+                if ($line -match $assignmentRegex) {
+                    $varName = $matches['varName']
+                    $value = $matches['value']
+
+                    if ($varName -eq 'appUninstallExeName' -and -not $foundUninstallExe) {
+                        $result.AppUninstallExeName = $value
+                        $foundUninstallExe = $true
                     }
-                    $foundUninstallExe = $true
-                }
-                elseif (-not $foundInstallCmd -and $line.Contains("[string]`$appInstallCommandLine")) {
-                    $startQuote = $line.IndexOf("'") + 1
-                    $endQuote = $line.IndexOf("'", $startQuote)
-                    if ($startQuote -gt 0 -and $endQuote -gt $startQuote) {
-                        $result.AppInstallCommandLine = $line.Substring($startQuote, $endQuote - $startQuote)
+                    elseif ($varName -eq 'appInstallCommandLine' -and -not $foundInstallCmd) {
+                        $result.AppInstallCommandLine = $value
+                        $foundInstallCmd = $true
                     }
-                    $foundInstallCmd = $true
-                }
-                elseif (-not $foundUninstallCmd -and $line.Contains("[string]`$appUninstallCommandLine")) {
-                    $startQuote = $line.IndexOf("'") + 1
-                    $endQuote = $line.IndexOf("'", $startQuote)
-                    if ($startQuote -gt 0 -and $endQuote -gt $startQuote) {
-                        $result.AppUninstallCommandLine = $line.Substring($startQuote, $endQuote - $startQuote)
+                    elseif ($varName -eq 'appUninstallCommandLine' -and -not $foundUninstallCmd) {
+                        $result.AppUninstallCommandLine = $value
+                        $foundUninstallCmd = $true
                     }
-                    $foundUninstallCmd = $true
                 }
             }
         }
@@ -414,7 +408,7 @@ function Get-CustomCommandsFromStartupPss {
                 Marker = "#region <Perform Uninstallation tasks here>"
                 FallbackMarker = "##* UNINSTALL"
                 EndMarker = "#endregion"
-                FallbackEndMarker = "##* END-INSTALL"
+                FallbackEndMarker = "##* END-UNINSTALL"
                 CommandKey = "CustomUninstall"
                 HasTemplateCode = $true
                 TemplateStartMarker = "## Uninstaller is Setup"
