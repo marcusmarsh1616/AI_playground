@@ -2276,6 +2276,7 @@ function Check-PackageFolderExists {
 # TextBox Change Events - Check if folder exists
 $txtVendor.Add_TextChanged({ Check-PackageFolderExists })
 $txtName.Add_TextChanged({ Check-PackageFolderExists })
+$txtEdition.Add_TextChanged({ Check-PackageFolderExists })
 $txtVersion.Add_TextChanged({ Check-PackageFolderExists })
 
 # Browse Button Click Event
@@ -2315,6 +2316,9 @@ $btnBrowse.Add_Click({
             
             $existingPackagePath = Join-Path $script:BasePackagingPath $txtVendor.Text
             $existingPackagePath = Join-Path $existingPackagePath $txtName.Text
+            if (-not [string]::IsNullOrWhiteSpace($txtEdition.Text)) {
+                $existingPackagePath = Join-Path $existingPackagePath $txtEdition.Text
+            }
             $existingPackagePath = Join-Path $existingPackagePath $txtVersion.Text
             $existingStartupPath = Join-Path $existingPackagePath $script:ProjectFileName
             
@@ -2322,13 +2326,8 @@ $btnBrowse.Add_Click({
                 Update-Status "Loading custom commands from existing package..." "Blue"
                 $form.Refresh()
                 
-                                try {
-                    Write-Host "=== DIAGNOSTIC: Custom Commands Load ===" -ForegroundColor Magenta
-                    Write-Host "DEBUG: About to call Get-CustomCommandsFromStartupPss" -ForegroundColor Magenta
-                    Write-Host "DEBUG: Path: dollar existingStartupPath" -ForegroundColor Magenta
-                    Write-Host "DEBUG: File exists: dollar (Test-Path dollar existingStartupPath)" -ForegroundColor Magenta
-                    
-                    dollar loadResult = Get-CustomCommandsFromStartupPss -StartupPssPath $existingStartupPath
+                try {
+                    $loadResult = Get-CustomCommandsFromStartupPss -StartupPssPath $existingStartupPath
                     
                     # Populate custom command textboxes (6 sections)
                     if (-not [string]::IsNullOrWhiteSpace($loadResult.PreInstall)) {
@@ -2369,7 +2368,7 @@ $btnBrowse.Add_Click({
                     
                     Update-Status "Custom commands and metadata loaded from existing package!" "Green"
                 } catch {
-                    Write-Verbose "Failed to load custom commands: $($_.Exception.Message)"
+                    Write-Warning "Failed to load existing package data from Startup.pss: $($_.Exception.Message)"
                 }
             }
         }

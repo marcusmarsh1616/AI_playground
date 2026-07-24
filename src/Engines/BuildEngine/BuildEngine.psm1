@@ -148,9 +148,9 @@ WARNING: Install.exe not found after waiting $maxWaitTime seconds
         
     }
     catch {
-        $result.Message = "Build error: $(_.Exception.Message)"
+        $result.Message = "Build error: $($_.Exception.Message)"
         $result.BuildLog += "
-EXCEPTION: $(_.Exception.Message)
+    EXCEPTION: $($_.Exception.Message)
 "
         $result.BuildLog += $_.ScriptStackTrace
     }
@@ -193,7 +193,7 @@ function Test-SAPIENBuildAvailable {
         }
     }
     catch {
-        Write-Verbose "Error checking SAPIEN availability: $(_.Exception.Message)"
+        Write-Verbose "Error checking SAPIEN availability: $($_.Exception.Message)"
     }
     
     return $result
@@ -236,7 +236,7 @@ function Find-ProjectFile {
         return ""
     }
     catch {
-        Write-Verbose "Error finding project file: $(_.Exception.Message)"
+        Write-Verbose "Error finding project file: $($_.Exception.Message)"
         return ""
     }
 }
