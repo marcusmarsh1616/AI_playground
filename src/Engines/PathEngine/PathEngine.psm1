@@ -577,7 +577,6 @@ function Set-FirstRunComplete {
         
         # Set first run completed flag
         $config.settings | Add-Member -MemberType NoteProperty -Name 'firstRunCompleted' -Value $true -Force
-        $config.settings | Add-Member -MemberType NoteProperty -Name 'setupCompletedDate' -Value (Get-Date -Format "yyyy-MM-dd HH:mm:ss") -Force
         
         # Save config
         $config | ConvertTo-Json -Depth 10 | Set-Content $ConfigPath -Encoding UTF8 -Force

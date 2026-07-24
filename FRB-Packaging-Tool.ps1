@@ -144,9 +144,8 @@ $script:ToolRoot = $PSScriptRoot  # Script is in root directory
 $configPath = Join-Path $script:ToolRoot "config\app.config.json"
 
 # Variables to control splash screen display based on config
-$script:ShouldShowSplash = $true
+$script:ShouldShowSplash = -not $SkipSplash
 $script:FirstRunCompleted = $false
-$script:GitLabTokenInConfig = ""
 
 if (Test-Path $configPath) {
     try {
@@ -160,31 +159,6 @@ if (Test-Path $configPath) {
         # Check first-run status
         if ($appConfig.settings.PSObject.Properties.Name -contains 'firstRunCompleted') {
             $script:FirstRunCompleted = $appConfig.settings.firstRunCompleted
-        }
-        
-        # Check GitLab token in config (NOT secure storage)
-        if ($appConfig.PSObject.Properties.Name -contains 'gitlab') {
-            if ($appConfig.gitlab.PSObject.Properties.Name -contains 'accessToken') {
-                $script:GitLabTokenInConfig = $appConfig.gitlab.accessToken
-            }
-        }
-        
-        # Determine splash screen logic NOW (before anything else):
-        # Path A: If first-run needed, show splash (then first-run dialog)
-        # Path B: If token needed, skip splash (token dialog will show)
-        # Path C: If normal launch, show splash
-        if (-not $script:FirstRunCompleted) {
-            # First-run: Show splash
-            $script:ShouldShowSplash = $true
-        }
-        elseif ([string]::IsNullOrWhiteSpace($script:GitLabTokenInConfig)) {
-            # Token needed: SKIP splash (token dialog will show)
-            $script:ShouldShowSplash = $false
-            Write-Verbose "Splash disabled: GitLab token needed"
-        }
-        else {
-            # Normal launch: Show splash
-            $script:ShouldShowSplash = $true
         }
         
         # Configuration loaded successfully
@@ -233,15 +207,164 @@ function Show-SplashScreen {
 
 #endregion Splash Screen Function
 
+#region Prerequisite Detection
+
+function Get-PrerequisiteDetectionStatus {
+    $status = @{
+        PowerShellStudio2026Found = $false
+        VSCodeFound = $false
+        PowerShell7Found = $false
+        Python3Found = $false
+        PlaywrightFound = $false
+        PythonPlaywrightInstalled = $false
+        LastChecked = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+    }
+
+    try {
+        $studioExe = "C:\Program Files\SAPIEN Technologies, Inc\PowerShell Studio 2026\PowerShell Studio.exe"
+        $sapienCmd = "C:\Program Files\SAPIEN Technologies, Inc\PowerShell Studio 2026\SAPIENCommandLine.exe"
+        $status.PowerShellStudio2026Found = (Test-Path $studioExe) -and (Test-Path $sapienCmd)
+    } catch {
+    }
+
+    try {
+        $vsCodePaths = @(
+            "$env:LOCALAPPDATA\Programs\Microsoft VS Code\Code.exe",
+            "$env:ProgramFiles\Microsoft VS Code\Code.exe",
+            "${env:ProgramFiles(x86)}\Microsoft VS Code\Code.exe"
+        )
+        $status.VSCodeFound = ($vsCodePaths | Where-Object { Test-Path $_ } | Measure-Object).Count -gt 0
+    } catch {
+    }
+
+    try {
+        $status.PowerShell7Found = [bool](Get-Command pwsh.exe -ErrorAction SilentlyContinue)
+    } catch {
+    }
+
+    $pythonExec = $null
+    try {
+        $pythonCmd = Get-Command python.exe -ErrorAction SilentlyContinue
+        if ($pythonCmd) {
+            $pythonExec = $pythonCmd.Source
+            $pythonOutput = (& $pythonExec --version 2>&1 | Select-Object -First 1).ToString().Trim()
+            if ($pythonOutput -match '^Python\s+(\d+)\.') {
+                $status.Python3Found = ([int]$matches[1] -ge 3)
+            }
+        }
+    } catch {
+    }
+
+    if (-not $status.Python3Found) {
+        try {
+            $pyCmd = Get-Command py.exe -ErrorAction SilentlyContinue
+            if ($pyCmd) {
+                $pythonExec = $pyCmd.Source
+                $pythonOutput = (& $pythonExec -3 --version 2>&1 | Select-Object -First 1).ToString().Trim()
+                if ($pythonOutput -match '^Python\s+(\d+)\.') {
+                    $status.Python3Found = ([int]$matches[1] -ge 3)
+                }
+            }
+        } catch {
+        }
+    }
+
+    try {
+        if ($status.Python3Found -and $pythonExec) {
+            if ($pythonExec -like '*py.exe') {
+                & $pythonExec -3 -c "import playwright" 2>$null
+            } else {
+                & $pythonExec -c "import playwright" 2>$null
+            }
+
+            if ($LASTEXITCODE -eq 0) {
+                $status.PlaywrightFound = $true
+            }
+        }
+
+        if (-not $status.PlaywrightFound) {
+            $playwrightCache = Join-Path $env:LOCALAPPDATA "ms-playwright"
+            if (Test-Path $playwrightCache) {
+                $status.PlaywrightFound = (Get-ChildItem -Path $playwrightCache -Force -ErrorAction SilentlyContinue | Measure-Object).Count -gt 0
+            }
+        }
+    } catch {
+    }
+
+    $status.PythonPlaywrightInstalled = $status.Python3Found -and $status.PlaywrightFound
+    return $status
+}
+
+function Update-PrerequisiteStatusInConfig {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ConfigPath,
+
+        [Parameter(Mandatory = $false)]
+        [string]$TechnicianPackagingFolder = ""
+    )
+
+    try {
+        if (-not (Test-Path $ConfigPath)) {
+            return @{ Success = $false; Message = "Config file not found" }
+        }
+
+        $config = Get-Content $ConfigPath -Raw | ConvertFrom-Json
+        $prereq = Get-PrerequisiteDetectionStatus
+
+        # Remove deprecated sections/fields.
+        if ($config.PSObject.Properties.Name -contains 'gitlab') {
+            $config.PSObject.Properties.Remove('gitlab')
+        }
+        if ($config.settings.PSObject.Properties.Name -contains 'setupCompletedDate') {
+            $config.settings.PSObject.Properties.Remove('setupCompletedDate')
+        }
+
+        if (-not ($config.settings.PSObject.Properties.Name -contains 'prerequisites')) {
+            $config.settings | Add-Member -NotePropertyName 'prerequisites' -NotePropertyValue ([PSCustomObject]@{}) -Force
+        }
+
+        $config.settings.prerequisites | Add-Member -NotePropertyName 'powerShellStudio2026Found' -NotePropertyValue $prereq.PowerShellStudio2026Found -Force
+        $config.settings.prerequisites | Add-Member -NotePropertyName 'vsCodeFound' -NotePropertyValue $prereq.VSCodeFound -Force
+        $config.settings.prerequisites | Add-Member -NotePropertyName 'powerShell7Found' -NotePropertyValue $prereq.PowerShell7Found -Force
+        $config.settings.prerequisites | Add-Member -NotePropertyName 'python3Found' -NotePropertyValue $prereq.Python3Found -Force
+        $config.settings.prerequisites | Add-Member -NotePropertyName 'playwrightFound' -NotePropertyValue $prereq.PlaywrightFound -Force
+        $config.settings.prerequisites | Add-Member -NotePropertyName 'lastChecked' -NotePropertyValue $prereq.LastChecked -Force
+        $config.settings.pythonPlaywrightInstalled = $prereq.PythonPlaywrightInstalled
+
+        # Enforce deployment defaults.
+        if (-not ($config.PSObject.Properties.Name -contains 'deployment')) {
+            $config | Add-Member -NotePropertyName 'deployment' -NotePropertyValue ([PSCustomObject]@{}) -Force
+        }
+        $config.deployment.networkSharePath = "\\rb.win.frb.org\k1\shared\DSC_Pkgs\Pkgxfer"
+        $config.deployment.overwriteExisting = $true
+
+        if (-not ($config.PSObject.Properties.Name -contains 'launcher')) {
+            $config | Add-Member -NotePropertyName 'launcher' -NotePropertyValue ([PSCustomObject]@{}) -Force
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($TechnicianPackagingFolder)) {
+            $config.launcher | Add-Member -NotePropertyName 'technicianPackagingFolder' -NotePropertyValue $TechnicianPackagingFolder -Force
+        }
+
+        $config | ConvertTo-Json -Depth 12 | Set-Content $ConfigPath -Encoding UTF8 -Force
+        return @{ Success = $true; Message = "Prerequisite status updated" }
+    }
+    catch {
+        return @{ Success = $false; Message = $_.Exception.Message }
+    }
+}
+
+#endregion Prerequisite Detection
+
 #region Engine Imports
 
 # Import all engine modules (use $script:ToolRoot for portability)
 $enginePath = Join-Path $script:ToolRoot "src\Engines"
 
-# List of engines to load (16 total engines)
+# List of engines to load
 $enginesToLoad = @(
     @{ Name = "MetadataEngine"; Path = "MetadataEngine\MetadataEngine.psm1" },
-    @{ Name = "AuthenticationModule"; Path = "AuthenticationModule\AuthenticationModule.psm1" },
     @{ Name = "DetectionEngine"; Path = "DetectionEngine\DetectionEngine.psm1" },
     @{ Name = "SwitchEngine"; Path = "SwitchEngine\SwitchEngine.psm1" },
     @{ Name = "UninstallEngine"; Path = "UninstallEngine\UninstallEngine.psm1" },
@@ -254,8 +377,6 @@ $enginesToLoad = @(
     @{ Name = "InstallTestEngine"; Path = "InstallTestEngine\InstallTestEngine.psm1" },
     @{ Name = "PathEngine"; Path = "PathEngine\PathEngine.psm1" },
     @{ Name = "DeploymentEngine"; Path = "DeploymentEngine\DeploymentEngine.psm1" },
-    @{ Name = "TemplateDownloadEngine"; Path = "TemplateDownloadEngine\TemplateDownloadEngine.psm1" },
-    @{ Name = "GitLabAuthEngine"; Path = "GitLabAuthEngine\GitLabAuthEngine.psm1" },
     @{ Name = "CustomCommandsEngine"; Path = "CustomCommandsEngine\CustomCommandsEngine.psm1" }
 )
 
@@ -445,14 +566,26 @@ if (Test-Path $configPath) {
                         Remove-Item -Path $destinationToolPath -Recurse -Force -ErrorAction Stop
                     }
                     
-                    # Copy only needed folders and files (exclude prereq)
+                    # Copy only needed folders and files.
                     $srcPath = Join-Path $script:ToolRoot "src"
-                    $configPath = Join-Path $script:ToolRoot "config"
+                    $configDir = Join-Path $script:ToolRoot "config"
                     $mainScript = Join-Path $script:ToolRoot "FRB-Packaging-Tool.ps1"
+                    $sourceMasterTemplatePath = Join-Path $script:ToolRoot "Master Template"
+                    $destinationMasterTemplatePath = Join-Path $folderResult.Path "Master Template"
                     
                     Copy-Item -Path $srcPath -Destination (Join-Path $destinationToolPath "src") -Recurse -Force -ErrorAction Stop
-                    Copy-Item -Path $configPath -Destination (Join-Path $destinationToolPath "config") -Recurse -Force -ErrorAction Stop
+                    Copy-Item -Path $configDir -Destination (Join-Path $destinationToolPath "config") -Recurse -Force -ErrorAction Stop
                     Copy-Item -Path $mainScript -Destination (Join-Path $destinationToolPath "FRB-Packaging-Tool.ps1") -Force -ErrorAction Stop
+
+                    if (-not (Test-Path $sourceMasterTemplatePath)) {
+                        throw "Master Template not found at source path: $sourceMasterTemplatePath"
+                    }
+
+                    if (Test-Path $destinationMasterTemplatePath) {
+                        Remove-Item -Path $destinationMasterTemplatePath -Recurse -Force -ErrorAction Stop
+                    }
+
+                    Copy-Item -Path $sourceMasterTemplatePath -Destination $destinationMasterTemplatePath -Recurse -Force -ErrorAction Stop
                     
                     $newConfigPath = Join-Path $destinationToolPath "config\app.config.json"
                     
@@ -469,11 +602,18 @@ if (Test-Path $configPath) {
                                 
                                 if ($markCompleteResult.Success) {
                                     $newToolScriptPath = Join-Path $destinationToolPath "FRB-Packaging-Tool.ps1"
-                                    
-                                    # Update internal paths to point to new location
-                                    $script:ToolRoot = $destinationToolPath
-                                    $script:ConfigPath = $newConfigPath
-                                    $script:BasePackagingPath = $folderResult.Path
+
+                                    # Persist local runtime settings for this technician.
+                                    $updateConfigResult = Update-PrerequisiteStatusInConfig -ConfigPath $newConfigPath -TechnicianPackagingFolder $folderResult.Path
+                                    if (-not $updateConfigResult.Success) {
+                                        Write-Warning "Config update warning: $($updateConfigResult.Message)"
+                                    }
+
+                                    $newConfig = Get-Content $newConfigPath -Raw | ConvertFrom-Json
+                                    $newConfig.paths.masterTemplatePath = $destinationMasterTemplatePath
+                                    $newConfig.paths.basePackagingPath = $folderResult.Path
+                                    $newConfig.paths.basePackagingPathConfigured = $true
+                                    $newConfig | ConvertTo-Json -Depth 12 | Set-Content $newConfigPath -Encoding UTF8 -Force
                                     
                                     # Create Start Menu shortcut to local copy
                                     try {
@@ -484,7 +624,7 @@ if (Test-Path $configPath) {
                                         $Shortcut.TargetPath = "powershell.exe"
                                         $Shortcut.Arguments = "-ExecutionPolicy Bypass -File `"$newToolScriptPath`""
                                         $Shortcut.WorkingDirectory = $destinationToolPath
-                                        $Shortcut.IconLocation = Join-Path $destinationToolPath "config\pf_logo.ico"
+                                        $Shortcut.IconLocation = ".\\config\\pf_logo.ico"
                                         $Shortcut.Description = "FRB Packaging Tool"
                                         $Shortcut.Save()
                                         Write-Verbose "Start Menu shortcut created: $ShortcutPath"
@@ -499,6 +639,8 @@ if (Test-Path $configPath) {
                                         [System.Windows.Forms.MessageBoxIcon]::Information
                                     )
                                     
+                                    Start-Process -FilePath "powershell.exe" -ArgumentList "-ExecutionPolicy Bypass -File `"$newToolScriptPath`""
+                                    exit 0
                                     
                                 }
                             }
@@ -525,82 +667,28 @@ if (Test-Path $configPath) {
 }
 #endregion Step 1: First-Run Packaging Folder Initialization
 
-#region Step 1.5: Python/Playwright Authentication Prerequisites
-# CRITICAL: Runs on EVERY launch BEFORE template download
-if (-not [string]::IsNullOrWhiteSpace($script:BasePackagingPath)) {
-    $authResult = Initialize-PlaywrightAuthentication -ConfigPath $configPath -PackagingPath $script:BasePackagingPath
-    if (-not $authResult.Success) {
-        Write-Warning "Authentication setup warning: $($authResult.Message)"
+#region Step 1.5: Prerequisite Detection and Local Template Validation
+if (Test-Path $configPath) {
+    $prereqUpdateResult = Update-PrerequisiteStatusInConfig -ConfigPath $configPath -TechnicianPackagingFolder $script:BasePackagingPath
+    if (-not $prereqUpdateResult.Success) {
+        Write-Warning "Prerequisite detection warning: $($prereqUpdateResult.Message)"
     }
 }
-    
-        # Step 1.5b: Download Master Template via GitLab Okta (after Python installed)
-    if (-not [string]::IsNullOrWhiteSpace($script:BasePackagingPath)) {
-        $masterTemplatePath = Join-Path $script:BasePackagingPath "Master Template"
-        
-        # Check if Master Template already exists
-        if (-not (Test-Path $masterTemplatePath)) {
-            try {
-                $appConfig = Get-Content $configPath -Raw | ConvertFrom-Json
-                if ($appConfig.PSObject.Properties.Name -contains 'gitlab') {
-                    $gitlabUrl = $appConfig.gitlab.url
-                    
-                    Write-Host "Master Template not found - downloading from GitLab with Okta authentication..." -ForegroundColor Yellow
-                    $downloadResult = Invoke-GitLabOktaAuthentication -GitLabUrl $gitlabUrl -PackagingPath $script:BasePackagingPath
-                    
-                    if ($downloadResult.Success) {
-                        Write-Host "Master Template downloaded and extracted successfully!" -ForegroundColor Green
-                    } else {
-                        Write-Warning "Template download warning: $($downloadResult.Message)"
-                    }
-                }
-            } catch {
-                Write-Warning "Could not download Master Template: $($_.Exception.Message)"
-            }
-        } else {
-            Write-Host "Using existing Master Template" -ForegroundColor Green
-        }
-    }
-#endregion Step 1.5: Python/Playwright Authentication Prerequisites
 
-#region Step 2: Master Template Check/Download
 if (-not [string]::IsNullOrWhiteSpace($script:BasePackagingPath)) {
     $script:MasterTemplatePath = Join-Path $script:BasePackagingPath "Master Template"
-    
-    try {
-        $appConfig = Get-Content $configPath -Raw | ConvertFrom-Json
-        if ($appConfig.PSObject.Properties.Name -contains 'gitlab') {
-            $gitlabUrl = $appConfig.gitlab.url
-            $gitlabBranch = $appConfig.gitlab.branch
-            
-            $templateCheck = Test-TemplateAge -TemplatePath $script:MasterTemplatePath
-            if ($templateCheck.NeedsUpdate) {
-                                # Call Update-MasterTemplate (now uses Playwright + Okta)
-                $updateResult = Update-MasterTemplate -GitLabUrl $gitlabUrl -TemplatePath $script:MasterTemplatePath -Branch $gitlabBranch
-                
-                if ($updateResult.Success) {
-                    if ($updateResult.Action -eq "Updated") {
-                        [System.Windows.Forms.MessageBox]::Show(
-                            "Master Template updated successfully!",
-                            "Template Updated",
-                            [System.Windows.Forms.MessageBoxButtons]::OK,
-                            [System.Windows.Forms.MessageBoxIcon]::Information
-                        )
-                    }
-                } else {
-                    [System.Windows.Forms.MessageBox]::Show(
-                        "Failed to download Master Template!`n`nError: $($updateResult.Message)",
-                        "Download Failed",
-                        [System.Windows.Forms.MessageBoxButtons]::OK,
-                        [System.Windows.Forms.MessageBoxIcon]::Error
-                    )
-                }
-            }
-        }
-    } catch { 
-    }
 }
-#endregion Step 2: Master Template Check/Download
+
+if ([string]::IsNullOrWhiteSpace($script:MasterTemplatePath) -or -not (Test-Path $script:MasterTemplatePath)) {
+    [System.Windows.Forms.MessageBox]::Show(
+        "Master Template was not found in the technician packaging folder.`n`nExpected path:`n$script:MasterTemplatePath`n`nPlease rerun first-time setup or copy Master Template to the packaging folder.",
+        "Master Template Missing",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Error
+    ) | Out-Null
+    exit 1
+}
+#endregion Step 1.5: Prerequisite Detection and Local Template Validation
 
 #endregion First-Time Setup and Master Template Check
 
@@ -1609,7 +1697,7 @@ $tabControl.Controls.Add($tabMain)
 $grpMetadata = New-Object System.Windows.Forms.GroupBox
 $grpMetadata.Text = "Package Metadata"
 $grpMetadata.Location = New-Object System.Drawing.Point(20, 20)
-$grpMetadata.Size = New-Object System.Drawing.Size(800, 320)
+$grpMetadata.Size = New-Object System.Drawing.Size(800, 350)
 $grpMetadata.BackColor = $Colors.GroupBackground
 $tabMain.Controls.Add($grpMetadata)
 
@@ -1718,7 +1806,7 @@ $grpMetadata.Controls.Add($chkUserContext)
 # Folder Exists Flag
 $lblFolderExistsFlag = New-Object System.Windows.Forms.Label
 $lblFolderExistsFlag.Text = "Folder exists - will update"
-$lblFolderExistsFlag.Location = New-Object System.Drawing.Point(180, 290)
+$lblFolderExistsFlag.Location = New-Object System.Drawing.Point(180, 315)
 $lblFolderExistsFlag.Size = New-Object System.Drawing.Size(600, 25)
 $lblFolderExistsFlag.BackColor = $Colors.WarningYellow
 $lblFolderExistsFlag.ForeColor = $Colors.TextDark
