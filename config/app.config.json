@@ -1,0 +1,49 @@
+﻿{
+    "version":  "5.0.0",
+    "paths":  {
+                  "masterTemplatePath":  "",
+                  "basePackagingPath":  "",
+                  "basePackagingPathConfigured":  false,
+                  "projectFileName":  "Startup.pss",
+                  "powerShellStudioExe":  "C:\\Program Files\\SAPIEN Technologies, Inc\\PowerShell Studio 2026\\PowerShell Studio.exe"
+              },
+    "settings":  {
+                     "openInPowerShellStudio":  false,
+                     "defaultInstallerTimeout":  600,
+                     "enableLogging":  true,
+                     "logLevel":  "Verbose",
+                     "firstRunCompleted":  false,
+                     "setupCompletedDate":  "",
+                     "pythonPlaywrightInstalled":  false
+                 },
+    "testing":  {
+                    "maxRetryAttempts":  10,
+                    "postInstallWaitSeconds":  5,
+                    "postUninstallWaitSeconds":  5
+                },
+    "reports":  {
+                    "outputFolder":  "ValidationReports",
+                    "autoOpenReports":  true
+                },
+    "deployment":  {
+                       "networkSharePath":  "\\\\rb\\k1\\shared\\DSC_Pkgs\\PkgMedia\\LSS Packages",
+                       "autoCopyEnabled":  true,
+                       "createBackupBeforeCopy":  true,
+                       "overwriteExisting":  false,
+                       "verifyAfterCopy":  true,
+                       "showProgressDialog":  true
+                   },
+    "gitlab":  {
+                   "branch":  "master",
+                   "url":  "https://gitlab.prod.nit-cicd.awscfs.frb.pvt/nit-eus-endpoint/eaas-packaging/lss/psadt-wrapper-template/PSADTWrapper"
+               },
+    "launcher":  {
+                     "networkSourceFolder":  ".source",
+                     "createDesktopShortcut":  true,
+                     "checkForUpdatesOnLaunch":  true,
+                     "autoUpdateIfNewer":  true,
+                     "shortcutName":  "FRB Packaging Tool",
+                     "hideSourceFolder":  true,
+                     "defaultInstallFolderName":  "FRB-Packaging-Tool"
+                 }
+}

@@ -1,0 +1,195 @@
+#Requires -Version 5.1
+
+<#
+.SYNOPSIS
+    ReportEngine - Generates HTML validation reports
+.DESCRIPTION
+    This engine is responsible for generating professional HTML reports
+    displaying software validation results with styling and formatting.
+.NOTES
+    Author: IT Automation Team
+    Created: June 4, 2026
+    Version: 1.0.0
+    PowerShell Version: 5.1
+    Part of: Install Validation Tool Modular Architecture
+#>
+
+function New-HTMLValidationReport {
+    <#
+    .SYNOPSIS
+        Generates an HTML validation report
+    .DESCRIPTION
+        Creates a styled HTML report showing software installation validation results
+        including instances found, registry keys, and system information.
+    .PARAMETER InstallData
+        PSCustomObject containing installation data from ScanEngine
+    .PARAMETER OutputPath
+        Full path where the HTML report should be saved
+    .EXAMPLE
+        New-HTMLValidationReport -InstallData $data -OutputPath "C:\Reports\validation.html"
+    .OUTPUTS
+        String path to the generated report file
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject]$InstallData,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$OutputPath
+    )
+    
+    Write-Verbose "ReportEngine: Generating HTML report with $($InstallData.AllInstances.Count) instance(s)"
+    
+    # Determine status styling
+    $statusColor = switch ($InstallData.ValidationStatus) {
+        "Success" { "#28a745" }
+        "Warning" { "#ffc107" }
+        "Failed" { "#dc3545" }
+        default { "#6c757d" }
+    }
+    
+    $statusIcon = switch ($InstallData.ValidationStatus) {
+        "Success" { "✓" }
+        "Warning" { "⚠" }
+        "Failed" { "✗" }
+        default { "?" }
+    }
+    
+    # Build instances HTML
+    $instancesHTML = ""
+    if ($InstallData.AllInstances.Count -gt 0) {
+        $num = 1
+        foreach ($inst in $InstallData.AllInstances) {
+            if ($InstallData.AllInstances.Count -gt 1) {
+                $instancesHTML += "<div class='instance-header'>📦 Instance $num of $($InstallData.AllInstances.Count)</div>"
+            }
+            $instancesHTML += "<div class='info-grid'>"
+            $instancesHTML += "<div class='info-card'><div class='info-label'>Display Name</div><div class='info-value'>$($inst.DisplayName)</div></div>"
+            $instancesHTML += "<div class='info-card'><div class='info-label'>Version</div><div class='info-value'>$($inst.Version)</div></div>"
+            $instancesHTML += "<div class='info-card'><div class='info-label'>Publisher</div><div class='info-value'>$($inst.Publisher)</div></div>"
+            $instancesHTML += "<div class='info-card'><div class='info-label'>Install Locations</div><div class='info-value'>$($inst.InstallLocations)</div></div>"
+            $instancesHTML += "<div class='info-card'><div class='info-label'>Install Date</div><div class='info-value'>$($inst.InstallDate)</div></div>"
+            $instancesHTML += "<div class='info-card'><div class='info-label'>Install Size</div><div class='info-value'>$($inst.InstallSize)</div></div>"
+            $instancesHTML += "<div class='info-card' style='grid-column: span 2;'><div class='info-label'>Registry Key (Uninstall)</div><div class='info-value' style='font-size:0.85em;'>$($inst.RegistryKey)</div></div>"
+            $instancesHTML += "</div>"
+            $num++
+        }
+    } else {
+        $instancesHTML = "<p style='color:#999;font-style:italic;'>No instances found</p>"
+    }
+    
+    # Build registry keys HTML
+    $registryHTML = ""
+    if ($InstallData.RegistryKeys.Count -gt 0) {
+        $registryHTML = "<div class='registry-list'>"
+        foreach ($regKey in $InstallData.RegistryKeys) {
+            $registryHTML += "<div class='registry-key'><span class='key-type'>$($regKey.Type)</span><span class='key-path'>$($regKey.Path)</span></div>"
+        }
+        $registryHTML += "</div>"
+    } else {
+        $registryHTML = "<p style='color:#999;font-style:italic;'>No registry keys found</p>"
+    }
+    
+    # Get OS info using CIM (PowerShell 5.1 compatible)
+    $os = Get-CimInstance -ClassName Win32_OperatingSystem
+    
+    # Build complete HTML
+    $html = @"
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Validation Report - $($InstallData.SoftwareName)</title>
+    <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; margin: 0; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); overflow: hidden; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 40px; text-align: center; }
+        .header h1 { font-size: 2.5em; margin: 0 0 10px 0; font-weight: 300; }
+        .status-banner { background-color: $statusColor; color: white; padding: 20px; text-align: center; font-size: 1.5em; font-weight: bold; }
+        .status-icon { font-size: 2em; margin-right: 10px; }
+        .content { padding: 40px; }
+        .section { margin-bottom: 40px; }
+        .section-title { color: #667eea; font-size: 1.8em; margin-bottom: 20px; padding-bottom: 10px; border-bottom: 3px solid #667eea; }
+        .info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-bottom: 20px; }
+        .info-card { background: #f8f9fa; border-left: 4px solid #667eea; padding: 20px; border-radius: 8px; }
+        .info-label { color: #6c757d; font-size: 0.9em; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+        .info-value { font-size: 1.1em; color: #212529; word-break: break-all; white-space: pre-wrap; }
+        .instance-header { color: #667eea; margin: 30px 0 20px 0; padding: 15px; background: linear-gradient(to right, #f0f0f0, #fff); border-left: 5px solid #667eea; font-size: 1.3em; }
+        .registry-list { background: #f8f9fa; padding: 20px; border-radius: 8px; max-height: 400px; overflow-y: auto; border: 1px solid #dee2e6; }
+        .registry-key { background: white; margin-bottom: 8px; padding: 12px 15px; border-left: 3px solid #667eea; border-radius: 4px; font-family: 'Consolas', 'Courier New', monospace; font-size: 0.85em; word-break: break-all; }
+        .registry-key .key-type { display: inline-block; padding: 2px 8px; background: #667eea; color: white; border-radius: 3px; font-size: 0.75em; margin-right: 8px; }
+        .registry-key .key-path { color: #495057; }
+        .footer { background: #f8f9fa; padding: 30px; text-align: center; color: #6c757d; border-top: 1px solid #dee2e6; }
+        .badge { display: inline-block; padding: 5px 12px; background: #667eea; color: white; border-radius: 15px; font-size: 0.9em; margin-left: 10px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Software Installation Validation Report</h1>
+            <div>$($InstallData.SoftwareName) $($InstallData.ExpectedVersion)</div>
+        </div>
+        
+        <div class="status-banner">
+            <span class="status-icon">$statusIcon</span>
+            Validation Status: $($InstallData.ValidationStatus)
+        </div>
+        
+        <div class="content">
+            <div class="section">
+                <h2 class="section-title">Software Information</h2>
+                <div class="info-grid">
+                    <div class="info-card"><div class="info-label">Software Name</div><div class="info-value">$($InstallData.SoftwareName)</div></div>
+                    <div class="info-card"><div class="info-label">Expected Version</div><div class="info-value">$($InstallData.ExpectedVersion)</div></div>
+                    <div class="info-card"><div class="info-label">Vendor</div><div class="info-value">$($InstallData.Vendor)</div></div>
+                    <div class="info-card"><div class="info-label">Scan Date</div><div class="info-value">$($InstallData.ScanTimestamp.ToString("MMMM dd, yyyy HH:mm:ss"))</div></div>
+                </div>
+            </div>
+            
+            <div class="section">
+                <h2 class="section-title">Installation Details</h2>
+                $instancesHTML
+            </div>
+            
+            <div class="section">
+                <h2 class="section-title">
+                    Key Registry Locations
+                    <span class="badge">$($InstallData.RegistryKeys.Count) Keys Found</span>
+                </h2>
+                $registryHTML
+            </div>
+            
+            <div class="section">
+                <h2 class="section-title">System Information</h2>
+                <div class="info-grid">
+                    <div class="info-card"><div class="info-label">Computer Name</div><div class="info-value">$env:COMPUTERNAME</div></div>
+                    <div class="info-card"><div class="info-label">User Name</div><div class="info-value">$env:USERNAME</div></div>
+                    <div class="info-card"><div class="info-label">Operating System</div><div class="info-value">$($os.Caption)</div></div>
+                    <div class="info-card"><div class="info-label">OS Architecture</div><div class="info-value">$($os.OSArchitecture)</div></div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p><strong>Software Installation & Validation Tool v2.0</strong></p>
+            <p>Modular Engine-Based Architecture</p>
+            <p>Report Generated: $((Get-Date).ToString("MMMM dd, yyyy HH:mm:ss"))</p>
+        </div>
+    </div>
+</body>
+</html>
+"@
+    
+    try {
+        $html | Out-File -FilePath $OutputPath -Encoding UTF8 -Force
+        Write-Verbose "ReportEngine: Report saved to $OutputPath"
+        return $OutputPath
+    } catch {
+        Write-Error "ReportEngine: Failed to save report - $($_.Exception.Message)"
+        throw
+    }
+}
+
+# Export public functions
+Export-ModuleMember -Function New-HTMLValidationReport
