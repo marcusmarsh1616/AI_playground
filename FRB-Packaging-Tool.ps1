@@ -1635,11 +1635,17 @@ function Start-BuildTestDeployWorkflow {
         }
     }
     
-    # Reset all other control positions to original
-    $lblStatus.Top = 590
-    $progressBar.Top = 720
-    $btnCreate.Top = 755
-    $btnCancel.Top = 755
+    # Reset status area controls to initial startup positions.
+    $lblStatus.Top = 10
+    $progressBar.Top = 50
+    $btnCreate.Top = 65
+    $btnCancel.Top = 65
+
+    # Restore initial launch behavior: Cancel visible, Start Packaging hidden until media is selected.
+    $btnCreate.Visible = $false
+    $btnCreate.Enabled = $true
+    $btnCancel.Visible = $true
+    $btnCancel.Enabled = $true
     
     $script:InstallationMediaPath = ""
     $script:DetectedInstallerType = ""
