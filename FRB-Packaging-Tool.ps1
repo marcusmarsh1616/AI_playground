@@ -142,6 +142,7 @@ $script:ProcessTab = $null
 $script:ProcessLogPath = ""
 $script:ProcessErrorLogPath = ""
 $script:ProcessLogBuffer = New-Object System.Collections.Generic.List[string]
+$script:IsLoadingExistingPackageData = $false
 
 #region Configuration
 
@@ -3500,16 +3501,26 @@ function Load-ExistingPackageDataIfPresent {
         $script:LastLoadedStartupPath = ""
     }
 
+    if ($script:IsLoadingExistingPackageData) {
+        return
+    }
+
     # Avoid reloading the same Startup.pss repeatedly while fields are unchanged.
     if ($script:LastLoadedStartupPath -eq $existingStartupPath) {
         return
     }
+
+    $script:IsLoadingExistingPackageData = $true
+    $previousStartupPath = $script:LastLoadedStartupPath
+    $script:LastLoadedStartupPath = $existingStartupPath
 
     Update-Status "Loading custom commands from existing package..." "Blue"
     $form.Refresh()
 
     try {
         $loadResult = Get-CustomCommandsFromStartupPss -StartupPssPath $existingStartupPath
+        Write-ProcessOutputLine -Message ("Existing package load from {0}" -f $existingStartupPath) -Level "INFO"
+        Write-ProcessOutputLine -Message ("Loaded command lengths | PreInstall={0} CustomInstall={1} PostInstall={2} PreUninstall={3} CustomUninstall={4} PostUninstall={5}" -f $loadResult.PreInstall.Length, $loadResult.CustomInstall.Length, $loadResult.PostInstall.Length, $loadResult.PreUninstall.Length, $loadResult.CustomUninstall.Length, $loadResult.PostUninstall.Length) -Level "INFO"
 
         Set-CommandSectionState -HeaderLabel $script:lblPreInstallHeader -Editor $script:txtPreInstall -Text $loadResult.PreInstall
         Set-CommandSectionState -HeaderLabel $script:lblCustomInstallHeader -Editor $script:txtCustomInstall -Text $loadResult.CustomInstall
@@ -3517,6 +3528,8 @@ function Load-ExistingPackageDataIfPresent {
         Set-CommandSectionState -HeaderLabel $script:lblPreUninstallHeader -Editor $script:txtPreUninstall -Text $loadResult.PreUninstall
         Set-CommandSectionState -HeaderLabel $script:lblCustomUninstallHeader -Editor $script:txtCustomUninstall -Text $loadResult.CustomUninstall
         Set-CommandSectionState -HeaderLabel $script:lblPostUninstallHeader -Editor $script:txtPostUninstall -Text $loadResult.PostUninstall
+
+        Write-ProcessOutputLine -Message ("Textbox lengths after bind | PreInstall={0} CustomInstall={1} PostInstall={2} PreUninstall={3} CustomUninstall={4} PostUninstall={5}" -f $script:txtPreInstall.TextLength, $script:txtCustomInstall.TextLength, $script:txtPostInstall.TextLength, $script:txtPreUninstall.TextLength, $script:txtCustomUninstall.TextLength, $script:txtPostUninstall.TextLength) -Level "INFO"
 
         if ($script:txtUninstallExecutable) {
             $script:txtUninstallExecutable.Text = $loadResult.AppUninstallExeName
@@ -3537,11 +3550,14 @@ function Load-ExistingPackageDataIfPresent {
         if ($script:lblUninstallSwitch) { $script:lblUninstallSwitch.Visible = $true }
 
         Sync-CommandSectionExpansionState
-        $script:LastLoadedStartupPath = $existingStartupPath
         Update-Status "Custom commands and metadata loaded from existing package!" "Green"
     }
     catch {
+        $script:LastLoadedStartupPath = $previousStartupPath
         Write-Warning "Failed to load existing package data from Startup.pss: $($_.Exception.Message)"
+    }
+    finally {
+        $script:IsLoadingExistingPackageData = $false
     }
 }
 

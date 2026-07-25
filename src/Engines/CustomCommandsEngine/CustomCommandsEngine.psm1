@@ -372,7 +372,9 @@ function Get-CustomCommandsFromStartupPss {
         $extractionPoints = @(
             @{
                 Marker = "## <Perform Pre-Installation tasks here>"
+                MarkerPattern = '^##\s*<Perform Pre-Installation tasks here>$'
                 FallbackMarker = "##* PRE-INSTALL"
+                FallbackMarkerPattern = '^##\*\s*PRE-INSTALL'
                 EndMarker = "##*==============================================="
                 FallbackEndMarker = "##* INSTALL"
                 CommandKey = "PreInstall"
@@ -380,16 +382,21 @@ function Get-CustomCommandsFromStartupPss {
             },
             @{
                 Marker = "#region <Perform Installation tasks here>"
+                MarkerPattern = '^#region\s*<Perform Installation tasks here>$'
                 FallbackMarker = "##* INSTALL"
+                FallbackMarkerPattern = '^##\*\s*INSTALL$'
                 EndMarker = "#endregion"
                 FallbackEndMarker = "##* END-INSTALL"
                 CommandKey = "CustomInstall"
                 HasTemplateCode = $true
                 TemplateStartMarker = "## Installer is MSI"
+                TemplateStartPattern = 'Installer\s+is\s+MSI'
             },
             @{
                 Marker = "## <Perform Post-Installation tasks here>"
+                MarkerPattern = '^##\s*<Perform Post-Installation tasks here>$'
                 FallbackMarker = "##* POST-INSTALL"
+                FallbackMarkerPattern = '^##\*\s*POST-INSTALL'
                 EndMarker = "##*==============================================="
                 FallbackEndMarker = "##* PRE-UNINSTALL"
                 CommandKey = "PostInstall"
@@ -397,7 +404,9 @@ function Get-CustomCommandsFromStartupPss {
             },
             @{
                 Marker = "## <Perform Pre-Uninstallation tasks here>"
+                MarkerPattern = '^##\s*<Perform Pre-Uninstallation tasks here>$'
                 FallbackMarker = "##* PRE-UNINSTALL"
+                FallbackMarkerPattern = '^##\*\s*PRE-UNINSTALL'
                 EndMarker = "##*==============================================="
                 FallbackEndMarker = "##* UNINSTALL"
                 CommandKey = "PreUninstall"
@@ -405,16 +414,21 @@ function Get-CustomCommandsFromStartupPss {
             },
             @{
                 Marker = "#region <Perform Uninstallation tasks here>"
+                MarkerPattern = '^#region\s*<Perform Uninstallation tasks here>$'
                 FallbackMarker = "##* UNINSTALL"
+                FallbackMarkerPattern = '^##\*\s*UNINSTALL$'
                 EndMarker = "#endregion"
                 FallbackEndMarker = "##* END-UNINSTALL"
                 CommandKey = "CustomUninstall"
                 HasTemplateCode = $true
                 TemplateStartMarker = "## Uninstaller is Setup"
+                TemplateStartPattern = 'Uninstaller\s+is\s+Setup'
             },
             @{
                 Marker = "## <Perform Post-Uninstallation tasks here>"
+                MarkerPattern = '^##\s*<Perform Post-Uninstallation tasks here>$'
                 FallbackMarker = "##* POST-UNINSTALL"
+                FallbackMarkerPattern = '^##\*\s*POST-UNINSTALL'
                 EndMarker = "##*==============================================="
                 FallbackEndMarker = "##* END-UNINSTALL"
                 CommandKey = "PostUninstall"
@@ -428,7 +442,7 @@ function Get-CustomCommandsFromStartupPss {
             $startLineIndex = -1
 
             for ($i = 0; $i -lt $lines.Count; $i++) {
-                if ($lines[$i].Trim() -eq $point.Marker) {
+                if ($lines[$i].Trim() -match $point.MarkerPattern) {
                     $startLineIndex = $i
                     break
                 }
@@ -436,7 +450,7 @@ function Get-CustomCommandsFromStartupPss {
 
             if ($startLineIndex -lt 0 -and $point.ContainsKey('FallbackMarker')) {
                 for ($i = 0; $i -lt $lines.Count; $i++) {
-                    if ($lines[$i].Trim() -eq $point.FallbackMarker) {
+                    if ($lines[$i].Trim() -match $point.FallbackMarkerPattern) {
                         $startLineIndex = $i
                         $markerUsed = $point.FallbackMarker
                         $endMarkerToUse = $point.FallbackEndMarker
@@ -457,7 +471,7 @@ function Get-CustomCommandsFromStartupPss {
                     break
                 }
 
-                if ($point.HasTemplateCode -and $point.TemplateStartMarker -and $trimmed -eq $point.TemplateStartMarker) {
+                if ($point.HasTemplateCode -and $point.TemplateStartPattern -and $trimmed -match $point.TemplateStartPattern) {
                     break
                 }
 
