@@ -21,6 +21,20 @@
 
 Add-Type -AssemblyName System.Windows.Forms
 
+function Test-IsAdministrator {
+    [CmdletBinding()]
+    param()
+
+    try {
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+        return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    }
+    catch {
+        return $false
+    }
+}
+
 function Start-InstallationTest {
     <#
     .SYNOPSIS
@@ -206,12 +220,17 @@ function Start-UninstallationTest {
             Write-Verbose "InstallTestEngine: Waiting for system to settle and release file locks..."
             Start-Sleep -Seconds 5
             
-            # Scan for leftovers (for reporting only - technician will handle via Custom Post-Uninstall commands if needed)
+            # Scan for leftovers and run automated cleanup for machine-level items only.
             Write-Verbose "InstallTestEngine: Scanning for leftover files and registry entries..."
             $leftovers = Get-UninstallLeftovers -AppName $AppName -Vendor $Vendor
             
             $result.LeftoversFound = $leftovers.Found
             $result.LeftoverDetails = $leftovers.Details
+
+            Write-Verbose "InstallTestEngine: Running automated cleanup (machine-level leftovers only; user-level preserved)..."
+            $cleanupResults = Remove-UninstallLeftovers -LeftoverData $leftovers -PreserveUserLevel $true
+            $result.CleanupPerformed = $cleanupResults.Attempted
+            $result.CleanupResults = $cleanupResults
             
             # Prompt technician for verification (leftovers should be handled in Custom Post-Uninstall commands)
             $userResponse = [System.Windows.Forms.MessageBox]::Show(
@@ -265,14 +284,16 @@ function Start-UninstallationTest {
                     }
                 }
                 
-                if ($finalScan.Found) {
-                    # Still have leftovers after confirmation
+                $remainingMachineItems = @($finalScan.Details | Where-Object { $_.Scope -eq "Machine" })
+
+                if ($remainingMachineItems.Count -gt 0) {
+                    # Still have machine-level leftovers after confirmation
                     $finalParts = @(
-                        "Warning: Final verification scan detected remaining leftover items:",
+                        "Warning: Final verification scan detected remaining machine-level leftover items:",
                         "",
-                        ($finalScan.Summary -join [Environment]::NewLine),
+                        (($remainingMachineItems | ForEach-Object { "--- $($_.Type): $($_.Location)" }) -join [Environment]::NewLine),
                         "",
-                        "Packaging will proceed. Review these items and consider manual cleanup."
+                        "Packaging will proceed. Review these items and consider manual cleanup. User-level items are preserved by policy."
                     )
                     $finalMsg = $finalParts -join [Environment]::NewLine
                     [System.Windows.Forms.MessageBox]::Show(
@@ -281,15 +302,15 @@ function Start-UninstallationTest {
                         [System.Windows.Forms.MessageBoxButtons]::OK,
                         [System.Windows.Forms.MessageBoxIcon]::Warning
                     )
-                    Write-Warning "InstallTestEngine: Leftovers remain after uninstallation"
+                    Write-Warning "InstallTestEngine: Machine-level leftovers remain after uninstallation"
                 } else {
-                    # Clean uninstall verified
-                    Write-Verbose "InstallTestEngine: Final verification scan clean - No leftovers detected"
+                    # Clean uninstall verified for machine scope. User scope may intentionally remain.
+                    Write-Verbose "InstallTestEngine: Final verification scan clean for machine-level leftovers"
                 }
                 
                 $result.Success = $true
                 $result.UserConfirmed = $true
-                $result.LeftoversFound = $finalScan.Found
+                $result.LeftoversFound = ($remainingMachineItems.Count -gt 0)
                 $result.LeftoverDetails = $finalScan.Details
                 Write-Verbose "InstallTestEngine: Uninstallation confirmed by technician"
             } else {
@@ -323,31 +344,73 @@ function Remove-UninstallLeftovers {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [hashtable]$LeftoverData
+        [hashtable]$LeftoverData,
+
+        [Parameter(Mandatory = $false)]
+        [bool]$PreserveUserLevel = $true
     )
     
     Write-Verbose "InstallTestEngine: Starting cleanup of leftovers..."
     
     $result = @{
         Success = $true
+        Attempted = $false
+        TotalCandidates = 0
         TotalCleaned = 0
         TotalFailed = 0
+        PreservedCount = 0
+        CleanedItems = @()
+        FailedItems = @()
+        PreservedItems = @()
         ErrorMessage = ""
+        Message = ""
     }
-    
-    # Check if there's anything to clean
-    if (-not $LeftoverData.Found -or $LeftoverData.Details.Count -eq 0) {
-        Write-Verbose "InstallTestEngine: No leftovers found to clean"
+
+    $preservedItems = @()
+    if ($PreserveUserLevel -and $LeftoverData.ContainsKey('PreservedItems') -and $LeftoverData.PreservedItems) {
+        $preservedItems = @($LeftoverData.PreservedItems)
+    }
+    $result.PreservedItems = $preservedItems
+    $result.PreservedCount = $preservedItems.Count
+
+    $cleanupCandidates = @()
+    if ($LeftoverData.ContainsKey('CleanupCandidates') -and $LeftoverData.CleanupCandidates) {
+        $cleanupCandidates = @($LeftoverData.CleanupCandidates)
+    }
+    else {
+        $cleanupCandidates = @($LeftoverData.Details | Where-Object { $_.Scope -eq "Machine" })
+    }
+
+    if ($cleanupCandidates.Count -eq 0) {
+        Write-Verbose "InstallTestEngine: No machine-level leftovers found to clean"
+        $result.Message = "No machine-level leftovers required cleanup."
         return $result
     }
+
+    $result.TotalCandidates = $cleanupCandidates.Count
+
+    if (-not (Test-IsAdministrator)) {
+        $result.Success = $false
+        $result.Message = "Cleanup skipped: administrative rights are required to remove machine-level leftovers."
+        Write-Warning $result.Message
+        return $result
+    }
+
+    $result.Attempted = $true
+
+    # Remove deeper paths first to avoid parent/child ordering issues.
+    $cleanupCandidates = $cleanupCandidates |
+        Group-Object -Property Location, Type |
+        ForEach-Object { $_.Group[0] } |
+        Sort-Object { $_.Location.Length } -Descending
     
-    # Loop through all leftover items and delete them
-    foreach ($item in $LeftoverData.Details) {
+    # Loop through machine-level leftover items and delete them.
+    foreach ($item in $cleanupCandidates) {
         try {
             if (Test-Path $item.Location) {
-                # Delete with force and recurse (handles folders and registry keys)
                 Remove-Item -Path $item.Location -Recurse -Force -ErrorAction Stop
                 $result.TotalCleaned++
+                $result.CleanedItems += $item
                 Write-Verbose "InstallTestEngine: Removed $($item.Type) - $($item.Location)"
             } else {
                 Write-Verbose "InstallTestEngine: Item already removed - $($item.Location)"
@@ -355,6 +418,12 @@ function Remove-UninstallLeftovers {
         }
         catch {
             $result.TotalFailed++
+            $result.FailedItems += [PSCustomObject]@{
+                Type = $item.Type
+                Location = $item.Location
+                Scope = $item.Scope
+                Error = $_.Exception.Message
+            }
             Write-Warning "InstallTestEngine: Failed to remove $($item.Type) - $($item.Location): $($_.Exception.Message)"
         }
     }
@@ -390,45 +459,114 @@ function Get-UninstallLeftovers {
         Found = $false
         Details = @()
         Summary = @()
+        CleanupCandidates = @()
+        PreservedItems = @()
+        MachineLeftoverCount = 0
+        UserLeftoverCount = 0
+    }
+
+    $searchTokens = @()
+    if (-not [string]::IsNullOrWhiteSpace($AppName)) { $searchTokens += $AppName }
+    if (-not [string]::IsNullOrWhiteSpace($Vendor)) { $searchTokens += $Vendor }
+    $searchTokens = $searchTokens | Sort-Object -Unique
+
+    if ($searchTokens.Count -eq 0) {
+        return $leftovers
+    }
+
+    $collected = New-Object System.Collections.ArrayList
+
+    function Add-LeftoverItem {
+        param(
+            [string]$Type,
+            [string]$Location,
+            [string]$Scope,
+            [string]$DisplayName = ""
+        )
+
+        if ([string]::IsNullOrWhiteSpace($Location)) {
+            return
+        }
+
+        $item = [PSCustomObject]@{
+            Type = $Type
+            Location = $Location
+            Scope = $Scope
+            DisplayName = $DisplayName
+        }
+
+        [void]$collected.Add($item)
     }
     
-    # Check common installation folders
-    $foldersToCheck = @(
-        "C:\Program Files\$Vendor",
-        "C:\Program Files (x86)\$Vendor",
-        "C:\ProgramData\$Vendor",
-        "$env:APPDATA\$Vendor",
-        "$env:LOCALAPPDATA\$Vendor"
+    # Machine-level folders (eligible for cleanup).
+    $machineRoots = @(
+        $env:ProgramFiles,
+        ${env:ProgramFiles(x86)},
+        $env:ProgramData
     )
-    
-    foreach ($folder in $foldersToCheck) {
-        if (Test-Path $folder) {
-            $leftovers.Found = $true
-            $leftovers.Details += [PSCustomObject]@{
-                Type = "Folder"
-                Location = $folder
+
+    foreach ($root in $machineRoots) {
+        if ([string]::IsNullOrWhiteSpace($root) -or -not (Test-Path $root)) {
+            continue
+        }
+
+        foreach ($token in $searchTokens) {
+            $candidate = Join-Path $root $token
+            if (Test-Path $candidate) {
+                Add-LeftoverItem -Type "Folder" -Location $candidate -Scope "Machine"
+                Write-Verbose "InstallTestEngine: Found machine-level leftover folder - $candidate"
             }
-            $leftovers.Summary += "--- Folder: $folder"
-            Write-Verbose "InstallTestEngine: Found leftover folder - $folder"
+        }
+    }
+
+    # User-level folders (preserved by policy).
+    $userRoots = @(
+        $env:APPDATA,
+        $env:LOCALAPPDATA
+    )
+
+    foreach ($root in $userRoots) {
+        if ([string]::IsNullOrWhiteSpace($root) -or -not (Test-Path $root)) {
+            continue
+        }
+
+        foreach ($token in $searchTokens) {
+            $candidate = Join-Path $root $token
+            if (Test-Path $candidate) {
+                Add-LeftoverItem -Type "User Folder" -Location $candidate -Scope "User"
+                Write-Verbose "InstallTestEngine: Found user-level leftover folder (preserved) - $candidate"
+            }
         }
     }
     
-    # Check registry keys
-    $registryPaths = @(
-        "HKLM:\Software\$Vendor",
-        "HKLM:\Software\Wow6432Node\$Vendor",
-        "HKCU:\Software\$Vendor"
+    # Machine-level registry keys (eligible for cleanup).
+    $machineRegistryRoots = @(
+        "HKLM:\Software",
+        "HKLM:\Software\Wow6432Node"
     )
-    
-    foreach ($regPath in $registryPaths) {
-        if (Test-Path $regPath) {
-            $leftovers.Found = $true
-            $leftovers.Details += [PSCustomObject]@{
-                Type = "Registry"
-                Location = $regPath
+
+    foreach ($root in $machineRegistryRoots) {
+        if (-not (Test-Path $root)) {
+            continue
+        }
+
+        foreach ($token in $searchTokens) {
+            $candidate = Join-Path $root $token
+            if (Test-Path $candidate) {
+                Add-LeftoverItem -Type "Registry" -Location $candidate -Scope "Machine"
+                Write-Verbose "InstallTestEngine: Found machine-level leftover registry key - $candidate"
             }
-            $leftovers.Summary += "--- Registry: $regPath"
-            Write-Verbose "InstallTestEngine: Found leftover registry key - $regPath"
+        }
+    }
+
+    # User-level registry keys (preserved by policy).
+    if (Test-Path "HKCU:\Software") {
+        foreach ($token in $searchTokens) {
+            $candidate = Join-Path "HKCU:\Software" $token
+            if (Test-Path $candidate) {
+                Add-LeftoverItem -Type "User Registry" -Location $candidate -Scope "User"
+                Write-Verbose "InstallTestEngine: Found user-level registry key (preserved) - $candidate"
+            }
         }
     }
     
@@ -447,13 +585,8 @@ function Get-UninstallLeftovers {
                     $app = Get-ItemProperty -Path $subKey.PSPath -ErrorAction SilentlyContinue
                     if ($app -and $app.DisplayName) {
                         if (($app.DisplayName -like "*$AppName*") -or ($app.Publisher -like "*$Vendor*")) {
-                            $leftovers.Found = $true
-                            $leftovers.Details += [PSCustomObject]@{
-                                Type = "Uninstall Entry"
-                                Location = $subKey.PSPath
-                                DisplayName = $app.DisplayName
-                            }
-                            $leftovers.Summary += "--- Uninstall Entry: $($app.DisplayName)"
+                            $scope = if ($uninstallPath -like "HKCU:*") { "User" } else { "Machine" }
+                            Add-LeftoverItem -Type "Uninstall Entry" -Location $subKey.PSPath -Scope $scope -DisplayName $app.DisplayName
                             Write-Verbose "InstallTestEngine: Found leftover uninstall entry - $($app.DisplayName)"
                         }
                     }
@@ -464,14 +597,38 @@ function Get-UninstallLeftovers {
         }
     }
     
-    # Check Start Menu shortcuts (All Users and Current User)
+    # Check Desktop shortcuts (machine + user scope).
+    $desktopScopes = @(
+        @{ Path = "$env:PUBLIC\Desktop"; Scope = "Machine" },
+        @{ Path = "$env:USERPROFILE\Desktop"; Scope = "User" }
+    )
+
+    foreach ($desktopScope in $desktopScopes) {
+        if ([string]::IsNullOrWhiteSpace($desktopScope.Path) -or -not (Test-Path $desktopScope.Path)) {
+            continue
+        }
+
+        $shortcuts = Get-ChildItem -Path $desktopScope.Path -Filter "*.lnk" -File -ErrorAction SilentlyContinue
+        foreach ($shortcut in $shortcuts) {
+            foreach ($token in $searchTokens) {
+                if ($shortcut.Name -like "*$token*") {
+                    Add-LeftoverItem -Type "Desktop Shortcut" -Location $shortcut.FullName -Scope $desktopScope.Scope -DisplayName $shortcut.Name
+                    Write-Verbose "InstallTestEngine: Found desktop shortcut leftover - $($shortcut.FullName)"
+                    break
+                }
+            }
+        }
+    }
+
+    # Check Start Menu shortcuts/folders (machine + user scope).
     $startMenuPaths = @(
-        "$env:ProgramData\Microsoft\Windows\Start Menu\Programs",
-        "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
+        @{ Path = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs"; Scope = "Machine" },
+        @{ Path = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"; Scope = "User" }
     )
     
-    foreach ($startMenuPath in $startMenuPaths) {
+    foreach ($startMenuScope in $startMenuPaths) {
         try {
+            $startMenuPath = $startMenuScope.Path
             if (Test-Path $startMenuPath) {
                 # Search for shortcuts containing vendor or app name
                 $shortcuts = Get-ChildItem -Path $startMenuPath -Filter "*.lnk" -Recurse -ErrorAction SilentlyContinue
@@ -483,13 +640,7 @@ function Get-UninstallLeftovers {
                     # Check if shortcut name or parent folder contains vendor/app name
                     if (($shortcutName -like "*$Vendor*") -or ($shortcutName -like "*$AppName*") -or 
                         ($folderName -like "*$Vendor*") -or ($folderName -like "*$AppName*")) {
-                        $leftovers.Found = $true
-                        $leftovers.Details += [PSCustomObject]@{
-                            Type = "Start Menu Shortcut"
-                            Location = $shortcut.FullName
-                            ShortcutName = $shortcutName
-                        }
-                        $leftovers.Summary += "--- Start Menu: $($shortcut.FullName)"
+                        Add-LeftoverItem -Type "Start Menu Shortcut" -Location $shortcut.FullName -Scope $startMenuScope.Scope -DisplayName $shortcutName
                         Write-Verbose "InstallTestEngine: Found leftover Start Menu shortcut - $($shortcut.FullName)"
                     }
                 }
@@ -502,13 +653,7 @@ function Get-UninstallLeftovers {
                     # Only add if folder is empty or only contains shortcuts we already found
                     $folderContents = Get-ChildItem -Path $folder.FullName -Recurse -ErrorAction SilentlyContinue
                     if ($folderContents.Count -eq 0 -or ($folderContents | Where-Object { $_.Extension -ne '.lnk' }).Count -eq 0) {
-                        $leftovers.Found = $true
-                        $leftovers.Details += [PSCustomObject]@{
-                            Type = "Start Menu Folder"
-                            Location = $folder.FullName
-                            FolderName = $folder.Name
-                        }
-                        $leftovers.Summary += "--- Start Menu Folder: $($folder.FullName)"
+                        Add-LeftoverItem -Type "Start Menu Folder" -Location $folder.FullName -Scope $startMenuScope.Scope -DisplayName $folder.Name
                         Write-Verbose "InstallTestEngine: Found leftover Start Menu folder - $($folder.FullName)"
                     }
                 }
@@ -517,6 +662,23 @@ function Get-UninstallLeftovers {
             Write-Verbose "InstallTestEngine: Error scanning Start Menu at $startMenuPath"
         }
     }
+
+    # Deduplicate and categorize items.
+    $leftovers.Details = @($collected |
+        Group-Object -Property Type, Location |
+        ForEach-Object { $_.Group[0] })
+
+    $leftovers.CleanupCandidates = @($leftovers.Details | Where-Object { $_.Scope -eq "Machine" })
+    $leftovers.PreservedItems = @($leftovers.Details | Where-Object { $_.Scope -eq "User" })
+    $leftovers.MachineLeftoverCount = $leftovers.CleanupCandidates.Count
+    $leftovers.UserLeftoverCount = $leftovers.PreservedItems.Count
+
+    foreach ($item in $leftovers.Details) {
+        $scopeTag = if ($item.Scope -eq "User") { "[PRESERVED]" } else { "[CLEANUP]" }
+        $leftovers.Summary += "--- $scopeTag $($item.Type): $($item.Location)"
+    }
+
+    $leftovers.Found = ($leftovers.Details.Count -gt 0)
     
     if (-not $leftovers.Found) {
         Write-Verbose "InstallTestEngine: No leftovers found - Clean uninstall"

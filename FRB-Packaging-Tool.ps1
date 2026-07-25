@@ -132,6 +132,11 @@ $script:SavedVersion = ""
 $script:SavedInstallSwitch = ""
 $script:SavedUninstallSwitch = ""
 $script:SavedUninstallExecutable = ""
+$script:SelectedInstallContext = "System"
+$script:ContextRecommendation = @{}
+$script:PackageHelperControls = @{}
+$script:PackageHelperData = $null
+$script:CodeEditorToolTip = $null
 
 #region Configuration
 
@@ -376,6 +381,7 @@ $enginesToLoad = @(
     @{ Name = "ScanEngine"; Path = "ScanEngine\ScanEngine.psm1" },
     @{ Name = "ReportEngine"; Path = "ReportEngine\ReportEngine.psm1" },
     @{ Name = "InstallTestEngine"; Path = "InstallTestEngine\InstallTestEngine.psm1" },
+    @{ Name = "ValidationReportEngine"; Path = "ValidationReportEngine\ValidationReportEngine.psm1" },
     @{ Name = "PathEngine"; Path = "PathEngine\PathEngine.psm1" },
     @{ Name = "DeploymentEngine"; Path = "DeploymentEngine\DeploymentEngine.psm1" },
     @{ Name = "CustomCommandsEngine"; Path = "CustomCommandsEngine\CustomCommandsEngine.psm1" }
@@ -1656,83 +1662,558 @@ function Start-IntegratedValidationDocumentation {
         Message = ""
     }
 
-    $validationToolRoot = Join-Path $script:ToolRoot "Validation Report"
-    $validationLauncher = Join-Path $validationToolRoot "Start-DocumentationCaptureTool.ps1"
-    $validationOutputFolder = Join-Path $validationToolRoot "documentation"
-
-    if (-not (Test-Path $validationLauncher)) {
-        $result.Message = "Validation documentation launcher not found: $validationLauncher"
-        return $result
-    }
-
     try {
-        Update-Status "Launching Validation Documentation Tool..." "Blue"
-        $form.Refresh()
-
-        $startTime = Get-Date
-
-        $argList = @(
-            "-NoProfile",
-            "-ExecutionPolicy", "Bypass",
-            "-File", $validationLauncher,
-            "-AppName", $AppName,
-            "-AppVersion", $AppVersion
-        )
-
-        $docProcess = Start-Process -FilePath "powershell.exe" -ArgumentList $argList -WorkingDirectory $validationToolRoot -PassThru
-        $result.Launched = $true
-
-        # Wait for the documentation tool to complete before continuing workflow.
-        $null = $docProcess.WaitForExit()
-
-        # Pull the newest generated report into package Docs if one was created.
-        if (Test-Path $validationOutputFolder) {
-            $latestReport = Get-ChildItem -Path $validationOutputFolder -Filter "*.html" -File -ErrorAction SilentlyContinue |
-                Where-Object { $_.LastWriteTime -ge $startTime } |
-                Sort-Object LastWriteTime -Descending |
-                Select-Object -First 1
-
-            if (-not $latestReport) {
-                $latestReport = Get-ChildItem -Path $validationOutputFolder -Filter "*.html" -File -ErrorAction SilentlyContinue |
-                    Sort-Object LastWriteTime -Descending |
-                    Select-Object -First 1
-            }
-
-            if ($latestReport) {
-                $docsFolder = Join-Path $PackagePath "docs"
-                if (-not (Test-Path $docsFolder)) {
-                    New-Item -Path $docsFolder -ItemType Directory -Force | Out-Null
-                }
-
-                $nameParts = @($AppVendor, $AppName)
-                if (-not [string]::IsNullOrWhiteSpace($AppEdition)) {
-                    $nameParts += $AppEdition
-                }
-                $nameParts += $AppVersion
-
-                $reportFileName = (($nameParts -join " ") + " Validation report.html")
-                $reportFileName = $reportFileName -replace '[<>:"/\\|?*]', '_'
-
-                $targetReportPath = Join-Path $docsFolder $reportFileName
-                Copy-Item -Path $latestReport.FullName -Destination $targetReportPath -Force
-
-                $result.ReportCopied = $true
-                $result.CopiedReportPath = $targetReportPath
-                $result.Message = "Validation report saved to package docs: $reportFileName"
-            } else {
-                $result.Message = "Validation tool closed. No report file was found to copy."
-            }
-        } else {
-            $result.Message = "Validation tool closed. Documentation output folder was not found."
-        }
-
-        $result.Success = $true
+        $result = Start-ValidationReportCapture -PackagePath $PackagePath -AppVendor $AppVendor -AppName $AppName -AppEdition $AppEdition -AppVersion $AppVersion
     }
     catch {
         $result.Message = "Validation documentation integration error: $($_.Exception.Message)"
     }
 
     return $result
+}
+
+function Set-PackageHelperSectionSuggestion {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SectionKey,
+
+        [Parameter(Mandatory = $true)]
+        [int]$SuggestionIndex,
+
+        [string]$FeedbackText = ""
+    )
+
+    if (-not $script:PackageHelperControls.ContainsKey($SectionKey)) {
+        return
+    }
+
+    $sectionState = $script:PackageHelperControls[$SectionKey]
+    if (-not $sectionState -or -not $sectionState.Suggestions -or $sectionState.Suggestions.Count -eq 0) {
+        return
+    }
+
+    $maxIndex = $sectionState.Suggestions.Count - 1
+    if ($SuggestionIndex -lt 0) { $SuggestionIndex = 0 }
+    if ($SuggestionIndex -gt $maxIndex) { $SuggestionIndex = $maxIndex }
+
+    $sectionState.CurrentIndex = $SuggestionIndex
+    $sectionState.OutputTextBox.Text = $sectionState.Suggestions[$SuggestionIndex]
+    $sectionState.IndexLabel.Text = "Suggestion $($SuggestionIndex + 1) of $($sectionState.Suggestions.Count)"
+
+    if (-not [string]::IsNullOrWhiteSpace($FeedbackText)) {
+        $sectionState.FeedbackLabel.Text = $FeedbackText
+    }
+
+    $script:PackageHelperControls[$SectionKey] = $sectionState
+}
+
+function Write-PackageHelperFeedback {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SectionKey,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Response,
+
+        [string]$SuggestionText = "",
+
+        [string]$Note = ""
+    )
+
+    try {
+        $logDir = Join-Path $script:ToolRoot "logs"
+        if (-not (Test-Path $logDir)) {
+            New-Item -Path $logDir -ItemType Directory -Force | Out-Null
+        }
+
+        $feedbackPath = Join-Path $logDir "package_helper_feedback.jsonl"
+        $feedbackRecord = [ordered]@{
+            Timestamp = (Get-Date).ToString("s")
+            SectionKey = $SectionKey
+            Response = $Response
+            Note = $Note
+            InstallerType = $script:DetectedInstallerType
+            Vendor = $txtVendor.Text
+            AppName = $txtName.Text
+            Edition = $txtEdition.Text
+            Version = $txtVersion.Text
+            Suggestion = $SuggestionText
+        }
+
+        ($feedbackRecord | ConvertTo-Json -Compress) | Add-Content -Path $feedbackPath -Encoding UTF8
+    }
+    catch {
+        Write-Verbose "Package helper feedback logging failed: $($_.Exception.Message)"
+    }
+}
+
+function Get-PackageHelperSuggestionValue {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Snippet,
+
+        [Parameter(Mandatory = $true)]
+        [string]$VariableName
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Snippet)) {
+        return ""
+    }
+
+    $escapedVar = [regex]::Escape($VariableName)
+    $singlePattern = "(?s)\$${escapedVar}\s*=\s*'([^']*)'"
+    $doublePattern = "(?s)\$${escapedVar}\s*=\s*\"([^\"]*)\""
+
+    if ($Snippet -match $singlePattern) {
+        return $matches[1]
+    }
+    if ($Snippet -match $doublePattern) {
+        return $matches[1]
+    }
+
+    return ""
+}
+
+function Add-UniqueHelperSnippet {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Windows.Forms.TextBox]$TargetTextBox,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Snippet
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Snippet)) {
+        return $false
+    }
+
+    $existing = $TargetTextBox.Text
+    if (-not [string]::IsNullOrWhiteSpace($existing) -and $existing.Contains($Snippet)) {
+        return $false
+    }
+
+    if ([string]::IsNullOrWhiteSpace($existing)) {
+        $TargetTextBox.Text = Format-CodeEditorText -Text $Snippet.Trim()
+    } else {
+        $TargetTextBox.Text = Format-CodeEditorText -Text ($existing.TrimEnd() + "`r`n`r`n" + $Snippet.Trim())
+    }
+
+    return $true
+}
+
+function Format-CodeEditorText {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Text
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return ""
+    }
+
+    $normalized = $Text -replace "`r`n|`r", "`n"
+    $lines = $normalized -split "`n"
+    $formattedLines = New-Object System.Collections.Generic.List[string]
+    $indentLevel = 0
+    $previousBlank = $false
+
+    foreach ($line in $lines) {
+        $trimmed = $line.Trim()
+
+        if ([string]::IsNullOrWhiteSpace($trimmed)) {
+            if (-not $previousBlank) {
+                [void]$formattedLines.Add("")
+            }
+            $previousBlank = $true
+            continue
+        }
+
+        $previousBlank = $false
+        $leadingClose = $trimmed.StartsWith('}') -or $trimmed.StartsWith(')') -or $trimmed.StartsWith(']')
+        if ($leadingClose) {
+            $indentLevel = [Math]::Max(0, $indentLevel - 1)
+        }
+
+        $indent = ''
+        for ($i = 0; $i -lt $indentLevel; $i++) {
+            $indent += [char]9
+        }
+
+        [void]$formattedLines.Add($indent + $trimmed)
+
+        $openCount = ([regex]::Matches($trimmed, '\{')).Count
+        $closeCount = ([regex]::Matches($trimmed, '\}')).Count
+        if ($openCount -gt $closeCount) {
+            $indentLevel += ($openCount - $closeCount)
+        }
+        elseif (-not $leadingClose -and $closeCount -gt $openCount) {
+            $indentLevel = [Math]::Max(0, $indentLevel - ($closeCount - $openCount))
+        }
+    }
+
+    return (($formattedLines -join "`r`n").TrimEnd())
+}
+
+function Get-CodeEditorActionSummary {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Text
+    )
+
+    $actions = New-Object System.Collections.Generic.List[string]
+    $code = if ([string]::IsNullOrWhiteSpace($Text)) { "" } else { $Text }
+
+    if ($code -match '(?i)Stop-Process|Get-Process') { [void]$actions.Add('Stops or checks running processes to avoid file locks.') }
+    if ($code -match '(?i)Remove-Item|Delete|Clear-Item') { [void]$actions.Add('Removes files, folders, or registry paths.') }
+    if ($code -match '(?i)Copy-Item|Move-Item') { [void]$actions.Add('Copies or moves files/folders.') }
+    if ($code -match '(?i)Set-ItemProperty|New-ItemProperty|Set-Item') { [void]$actions.Add('Writes or updates registry or file-system settings.') }
+    if ($code -match '(?i)Start-Process|Invoke-Command') { [void]$actions.Add('Launches another executable or command.') }
+    if ($code -match '(?i)Get-Service|Start-Service|Stop-Service') { [void]$actions.Add('Checks or controls Windows services.') }
+    if ($code -match '(?i)Test-Path|Get-ChildItem') { [void]$actions.Add('Checks whether files, folders, or keys exist.') }
+    if ($code -match '(?i)Write-Log|Write-Verbose') { [void]$actions.Add('Writes status information for troubleshooting.') }
+    if ($code -match '(?i)Show-InstallationPrompt|Show-InstallationProgress') { [void]$actions.Add('Shows technician-facing prompts or progress UI.') }
+
+    if ($actions.Count -eq 0) {
+        [void]$actions.Add('General PowerShell code block. Review the section description for intent.')
+    }
+
+    return ($actions | Select-Object -Unique) -join [Environment]::NewLine
+}
+
+function Get-CodeEditorHelpText {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SectionTitle,
+
+        [Parameter(Mandatory = $true)]
+        [string]$SectionDescription,
+
+        [Parameter(Mandatory = $true)]
+        [string]$CodeText
+    )
+
+    $summary = Get-CodeEditorActionSummary -Text $CodeText
+    return @(
+        $SectionTitle,
+        "",
+        $SectionDescription,
+        "",
+        "What this code currently appears to do:",
+        $summary,
+        "",
+        "Leave the box to hide this help."
+    ) -join [Environment]::NewLine
+}
+
+function Show-CodeEditorHelp {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Windows.Forms.RichTextBox]$Editor
+    )
+
+    if (-not $script:CodeEditorToolTip) { return }
+    if (-not $Editor.Tag -or -not $Editor.Tag.HelpTitle) { return }
+
+    $helpText = Get-CodeEditorHelpText -SectionTitle $Editor.Tag.HelpTitle -SectionDescription $Editor.Tag.HelpDescription -CodeText $Editor.Text
+    $script:CodeEditorToolTip.Hide($Editor)
+    $script:CodeEditorToolTip.Show($helpText, $Editor, 15, $Editor.Height + 8, 12000)
+}
+
+function Hide-CodeEditorHelp {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Windows.Forms.Control]$Editor
+    )
+
+    if ($script:CodeEditorToolTip) {
+        $script:CodeEditorToolTip.Hide($Editor)
+    }
+}
+
+function Register-CodeEditorBehavior {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Windows.Forms.RichTextBox]$Editor,
+
+        [Parameter(Mandatory = $true)]
+        [string]$HelpTitle,
+
+        [Parameter(Mandatory = $true)]
+        [string]$HelpDescription
+    )
+
+    $Editor.Tag = @{ HelpTitle = $HelpTitle; HelpDescription = $HelpDescription }
+    $Editor.BackColor = [System.Drawing.Color]::FromArgb(30, 30, 30)
+    $Editor.ForeColor = [System.Drawing.Color]::FromArgb(212, 212, 212)
+    $Editor.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+    $Editor.DetectUrls = $false
+    $Editor.ShortcutsEnabled = $true
+    $Editor.HideSelection = $false
+    $Editor.WordWrap = $false
+    $Editor.Font = $FontCode
+
+    $Editor.Add_MouseEnter({ Show-CodeEditorHelp -Editor $this })
+    $Editor.Add_MouseHover({ Show-CodeEditorHelp -Editor $this })
+    $Editor.Add_Leave({
+        Hide-CodeEditorHelp -Editor $this
+        if (-not [string]::IsNullOrWhiteSpace($this.Text)) {
+            $formatted = Format-CodeEditorText -Text $this.Text
+            if ($formatted -ne $this.Text) {
+                $this.Text = $formatted
+                $this.SelectionStart = $this.TextLength
+                $this.ScrollToCaret()
+            }
+        }
+    })
+}
+
+function Apply-PackageHelperSectionToGui {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SectionKey,
+
+        [string]$SnippetOverride = ""
+    )
+
+    if (-not $script:PackageHelperControls.ContainsKey($SectionKey)) {
+        return $false
+    }
+
+    $state = $script:PackageHelperControls[$SectionKey]
+    $snippet = if (-not [string]::IsNullOrWhiteSpace($SnippetOverride)) { $SnippetOverride } else { $state.OutputTextBox.Text }
+    if ([string]::IsNullOrWhiteSpace($snippet)) {
+        return $false
+    }
+
+    $applied = $false
+    switch ($SectionKey) {
+        "InstallCommand" {
+            $value = Get-PackageHelperSuggestionValue -Snippet $snippet -VariableName "appInstallCommandLine"
+            if (-not [string]::IsNullOrWhiteSpace($value)) {
+                $txtInstallSwitch.Text = $value
+                $applied = $true
+            }
+        }
+        "UninstallCommand" {
+            $value = Get-PackageHelperSuggestionValue -Snippet $snippet -VariableName "appUninstallCommandLine"
+            if (-not [string]::IsNullOrWhiteSpace($value)) {
+                $txtUninstallSwitch.Text = $value
+                $applied = $true
+            }
+        }
+        "UninstallExecutable" {
+            $value = Get-PackageHelperSuggestionValue -Snippet $snippet -VariableName "appUninstallExeName"
+            if ($value -ne $null) {
+                $txtUninstallExecutable.Text = $value
+                $applied = $true
+            }
+        }
+        "PreInstallChecks" {
+            $applied = Add-UniqueHelperSnippet -TargetTextBox $txtPreInstall -Snippet $snippet
+        }
+        "Prerequisites" {
+            $applied = Add-UniqueHelperSnippet -TargetTextBox $txtPreInstall -Snippet $snippet
+        }
+    }
+
+    if ($applied) {
+        $state.FeedbackLabel.Text = "Applied to GUI"
+        $script:PackageHelperControls[$SectionKey] = $state
+    }
+
+    return $applied
+}
+
+function Apply-AllPackageHelperSuggestionsToGui {
+    $applyOrder = @("InstallCommand", "UninstallCommand", "UninstallExecutable", "PreInstallChecks", "Prerequisites")
+    $appliedCount = 0
+
+    foreach ($sectionKey in $applyOrder) {
+        if (Apply-PackageHelperSectionToGui -SectionKey $sectionKey) {
+            $appliedCount++
+        }
+    }
+
+    if ($script:lblPackageHelperContext) {
+        $script:lblPackageHelperContext.Text = "Applied $appliedCount section(s) into package fields and command areas."
+        $script:lblPackageHelperContext.ForeColor = [System.Drawing.Color]::FromArgb(0, 110, 0)
+    }
+
+    return $appliedCount
+}
+
+function Set-PackageHelperTabContent {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$HelperData
+    )
+
+    $script:PackageHelperData = $HelperData
+
+    foreach ($sectionKey in $script:PackageHelperControls.Keys) {
+        $sectionState = $script:PackageHelperControls[$sectionKey]
+        if ($HelperData.Sections.ContainsKey($sectionKey)) {
+            $section = $HelperData.Sections[$sectionKey]
+            $sectionState.Group.Text = $section.Title
+            $sectionState.SummaryLabel.Text = $section.Summary
+            $sectionState.Suggestions = @($section.Suggestions)
+            $sectionState.CurrentIndex = 0
+            $sectionState.FeedbackLabel.Text = "Did this help?"
+
+            if ($sectionState.Suggestions.Count -eq 0) {
+                $sectionState.OutputTextBox.Text = "No suggestions available for this section."
+                $sectionState.IndexLabel.Text = "Suggestion 0 of 0"
+            } else {
+                Set-PackageHelperSectionSuggestion -SectionKey $sectionKey -SuggestionIndex 0
+            }
+        } else {
+            $sectionState.Group.Text = $sectionState.DefaultTitle
+            $sectionState.SummaryLabel.Text = "No data generated for this section yet."
+            $sectionState.OutputTextBox.Text = ""
+            $sectionState.IndexLabel.Text = "Suggestion 0 of 0"
+            $sectionState.FeedbackLabel.Text = "Did this help?"
+            $sectionState.Suggestions = @()
+            $sectionState.CurrentIndex = 0
+        }
+
+        $script:PackageHelperControls[$sectionKey] = $sectionState
+    }
+
+    if ($script:lblPackageHelperContext -and $HelperData.Context) {
+        $contextLine = "Package Helper ready for: {0} | Installer: {1} | Context: {2} | Preset: {3}" -f $HelperData.Context.ProductDisplayName, $HelperData.Context.InstallerType, $HelperData.Context.InstallContext, $HelperData.Context.Preset
+        $script:lblPackageHelperContext.Text = $contextLine
+        $script:lblPackageHelperContext.ForeColor = [System.Drawing.Color]::FromArgb(0, 110, 0)
+    }
+}
+
+function Invoke-PackageHelperGeneration {
+    if ([string]::IsNullOrWhiteSpace($txtVendor.Text) -or [string]::IsNullOrWhiteSpace($txtName.Text)) {
+        [System.Windows.Forms.MessageBox]::Show(
+            "Please enter at least App Vendor and App Name first.",
+            "Package Helper",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information
+        )
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($script:DetectedInstallerType)) {
+        $script:DetectedInstallerType = "Generic"
+    }
+
+    try {
+        $helperData = Get-PackageHelpSections -InstallerType $script:DetectedInstallerType `
+                                              -Vendor $txtVendor.Text.Trim() `
+                                              -AppName $txtName.Text.Trim() `
+                                              -Edition $txtEdition.Text.Trim() `
+                                              -Version $txtVersion.Text.Trim() `
+                                              -InstallMediaPath $script:InstallationMediaPath `
+                                              -CurrentInstallSwitch $txtInstallSwitch.Text.Trim() `
+                                              -CurrentUninstallSwitch $txtUninstallSwitch.Text.Trim() `
+                                              -CurrentUninstallExecutable $txtUninstallExecutable.Text.Trim() `
+                                              -InstallContext $script:SelectedInstallContext `
+                                              -ContextRecommendation $script:ContextRecommendation
+
+        Set-PackageHelperTabContent -HelperData $helperData
+        $tabControl.SelectedTab = $tabPackageHelper
+    }
+    catch {
+        [System.Windows.Forms.MessageBox]::Show(
+            "Failed to generate package helper suggestions.`n`n$($_.Exception.Message)",
+            "Package Helper Error",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        )
+    }
+}
+
+function Set-InstallContextState {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Context,
+
+        [string]$Reason = ""
+    )
+
+    $normalized = if ($Context -eq "User") { "User" } else { "System" }
+    $script:SelectedInstallContext = $normalized
+
+    if ($script:chkUserContext) {
+        $script:chkUserContext.Checked = ($normalized -eq "User")
+    }
+
+    if ($script:lblPackageHelperContext) {
+        $suffix = if ([string]::IsNullOrWhiteSpace($Reason)) { "" } else { " | $Reason" }
+        $script:lblPackageHelperContext.Text = "Install context selected: $normalized$suffix"
+        $script:lblPackageHelperContext.ForeColor = [System.Drawing.Color]::FromArgb(0, 110, 0)
+    }
+}
+
+function Invoke-InstallContextDetectionPrompt {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$InstallerType
+    )
+
+    $script:ContextRecommendation = @{}
+
+    try {
+        $contextResult = Get-InstallContextRecommendation -FilePath $FilePath -InstallerType $InstallerType
+        if ($contextResult) {
+            $script:ContextRecommendation = $contextResult
+        }
+
+        if (-not $contextResult -or -not $contextResult.Success) {
+            Set-InstallContextState -Context "System" -Reason "Detection unavailable"
+            return
+        }
+
+        $recommended = if ($contextResult.Recommendation -eq "User") { "User" } else { "System" }
+        $alternate = if ($recommended -eq "User") { "System" } else { "User" }
+        $reasons = if ($contextResult.Reasons -and $contextResult.Reasons.Count -gt 0) {
+            ($contextResult.Reasons | ForEach-Object { "- $_" }) -join [Environment]::NewLine
+        } else {
+            "- No strong signals were detected."
+        }
+
+        $message = @(
+            "Context detection complete for selected install media.",
+            "",
+            "Recommended: $recommended ($($contextResult.Confidence) confidence)",
+            "",
+            "Reasons:",
+            $reasons,
+            "",
+            "Choose context:",
+            "Yes = Use recommended ($recommended)",
+            "No = Use alternate ($alternate)",
+            "Cancel = Keep current context ($script:SelectedInstallContext)"
+        ) -join [Environment]::NewLine
+
+        $response = [System.Windows.Forms.MessageBox]::Show(
+            $message,
+            "Install Context Selection",
+            [System.Windows.Forms.MessageBoxButtons]::YesNoCancel,
+            [System.Windows.Forms.MessageBoxIcon]::Question
+        )
+
+        if ($response -eq [System.Windows.Forms.DialogResult]::Yes) {
+            Set-InstallContextState -Context $recommended -Reason "Recommended by detection"
+        }
+        elseif ($response -eq [System.Windows.Forms.DialogResult]::No) {
+            Set-InstallContextState -Context $alternate -Reason "Technician override"
+        }
+        else {
+            Set-InstallContextState -Context $script:SelectedInstallContext -Reason "Technician kept existing selection"
+        }
+    }
+    catch {
+        Set-InstallContextState -Context "System" -Reason "Detection error"
+        Write-Warning "Install context detection failed: $($_.Exception.Message)"
+    }
 }
 
 
@@ -1766,7 +2247,16 @@ $Colors = @{
     WarningYellow = [System.Drawing.Color]::FromArgb(201, 168, 0)
     TextDark = [System.Drawing.Color]::FromArgb(51, 51, 51)
 }
-$FontCode = New-Object System.Drawing.Font("Consolas", 9)
+$FontCode = New-Object System.Drawing.Font("Consolas", 10)
+$script:CodeEditorToolTip = New-Object System.Windows.Forms.ToolTip
+$script:CodeEditorToolTip.IsBalloon = $true
+$script:CodeEditorToolTip.ShowAlways = $true
+$script:CodeEditorToolTip.AutoPopDelay = 12000
+$script:CodeEditorToolTip.InitialDelay = 250
+$script:CodeEditorToolTip.ReshowDelay = 75
+$script:CodeEditorToolTip.ToolTipTitle = "Code Help"
+$script:CodeEditorToolTip.BackColor = [System.Drawing.Color]::FromArgb(255, 255, 245)
+$script:CodeEditorToolTip.ForeColor = [System.Drawing.Color]::FromArgb(40, 40, 40)
 
 # TabControl creation# TabControl creation
 $tabControl = New-Object System.Windows.Forms.TabControl
@@ -1890,6 +2380,7 @@ $chkUserContext.Location = New-Object System.Drawing.Point(180, 288)
 $chkUserContext.Size = New-Object System.Drawing.Size(600, 20)
 $chkUserContext.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 $grpMetadata.Controls.Add($chkUserContext)
+$script:chkUserContext = $chkUserContext
 
 # Folder Exists Flag
 $lblFolderExistsFlag = New-Object System.Windows.Forms.Label
@@ -1925,7 +2416,7 @@ $txtInstallSwitch.Visible = $false
 $grpSwitches.Controls.Add($txtInstallSwitch)
 
 $btnCopySearchTerms = New-Object System.Windows.Forms.Button
-$btnCopySearchTerms.Text = "Find possible switches"
+$btnCopySearchTerms.Text = "Help package"
 $btnCopySearchTerms.Location = New-Object System.Drawing.Point(600, 31)
 $btnCopySearchTerms.Size = New-Object System.Drawing.Size(190, 30)
 $btnCopySearchTerms.BackColor = $Colors.AccentTeal
@@ -1987,18 +2478,16 @@ $lblPreInstallHeader.Cursor = [System.Windows.Forms.Cursors]::Hand
 $lblPreInstallHeader.Tag = @{ IsExpanded = $false; TargetControl = $null }
 $tabInstall.Controls.Add($lblPreInstallHeader)
 
-$txtPreInstall = New-Object System.Windows.Forms.TextBox
+$txtPreInstall = New-Object System.Windows.Forms.RichTextBox
 $txtPreInstall.Location = New-Object System.Drawing.Point(20, 50)
 $txtPreInstall.Size = New-Object System.Drawing.Size(800, 150)
-$txtPreInstall.Multiline = $true
 $txtPreInstall.ScrollBars = 'Both'
-$txtPreInstall.Font = $FontCode
-$txtPreInstall.WordWrap = $true
-$txtPreInstall.AcceptsReturn = $true
 $txtPreInstall.AcceptsTab = $true
 $txtPreInstall.Visible = $false
+$txtPreInstall.ReadOnly = $false
 $tabInstall.Controls.Add($txtPreInstall)
 $lblPreInstallHeader.Tag.TargetControl = $txtPreInstall
+Register-CodeEditorBehavior -Editor $txtPreInstall -HelpTitle "Pre-Install Commands" -HelpDescription "Runs before the installer starts. Use this section for prerequisite checks, process stops, service checks, and anything that prevents a bad install from starting."
 
 # Custom Install Commands Section
 $lblCustomInstallHeader = New-Object System.Windows.Forms.Label
@@ -2014,18 +2503,16 @@ $lblCustomInstallHeader.Cursor = [System.Windows.Forms.Cursors]::Hand
 $lblCustomInstallHeader.Tag = @{ IsExpanded = $false; TargetControl = $null }
 $tabInstall.Controls.Add($lblCustomInstallHeader)
 
-$txtCustomInstall = New-Object System.Windows.Forms.TextBox
+$txtCustomInstall = New-Object System.Windows.Forms.RichTextBox
 $txtCustomInstall.Location = New-Object System.Drawing.Point(20, 240)
 $txtCustomInstall.Size = New-Object System.Drawing.Size(800, 150)
-$txtCustomInstall.Multiline = $true
 $txtCustomInstall.ScrollBars = 'Both'
-$txtCustomInstall.Font = $FontCode
-$txtCustomInstall.WordWrap = $true
-$txtCustomInstall.AcceptsReturn = $true
 $txtCustomInstall.AcceptsTab = $true
 $txtCustomInstall.Visible = $false
+$txtCustomInstall.ReadOnly = $false
 $tabInstall.Controls.Add($txtCustomInstall)
 $lblCustomInstallHeader.Tag.TargetControl = $txtCustomInstall
+Register-CodeEditorBehavior -Editor $txtCustomInstall -HelpTitle "Custom Install Commands" -HelpDescription "Runs during installation. Use this section for custom install steps, vendor-specific logic, or extra commands that must happen while the app is being installed."
 
 # Post-Install Commands Section
 $lblPostInstallHeader = New-Object System.Windows.Forms.Label
@@ -2041,18 +2528,16 @@ $lblPostInstallHeader.Cursor = [System.Windows.Forms.Cursors]::Hand
 $lblPostInstallHeader.Tag = @{ IsExpanded = $false; TargetControl = $null }
 $tabInstall.Controls.Add($lblPostInstallHeader)
 
-$txtPostInstall = New-Object System.Windows.Forms.TextBox
+$txtPostInstall = New-Object System.Windows.Forms.RichTextBox
 $txtPostInstall.Location = New-Object System.Drawing.Point(20, 430)
 $txtPostInstall.Size = New-Object System.Drawing.Size(800, 150)
-$txtPostInstall.Multiline = $true
 $txtPostInstall.ScrollBars = 'Both'
-$txtPostInstall.Font = $FontCode
-$txtPostInstall.WordWrap = $true
-$txtPostInstall.AcceptsReturn = $true
 $txtPostInstall.AcceptsTab = $true
 $txtPostInstall.Visible = $false
+$txtPostInstall.ReadOnly = $false
 $tabInstall.Controls.Add($txtPostInstall)
 $lblPostInstallHeader.Tag.TargetControl = $txtPostInstall
+Register-CodeEditorBehavior -Editor $txtPostInstall -HelpTitle "Post-Install Commands" -HelpDescription "Runs after installation finishes. Use this section for cleanup, shortcut creation, verification, or any final actions after the install completes."
 
 # Click event handlers for expand/collapse
 $lblPreInstallHeader.Add_Click({
@@ -2148,18 +2633,16 @@ $lblPreUninstallHeader.Cursor = [System.Windows.Forms.Cursors]::Hand
 $lblPreUninstallHeader.Tag = @{ IsExpanded = $false; TargetControl = $null }
 $tabUninstall.Controls.Add($lblPreUninstallHeader)
 
-$txtPreUninstall = New-Object System.Windows.Forms.TextBox
+$txtPreUninstall = New-Object System.Windows.Forms.RichTextBox
 $txtPreUninstall.Location = New-Object System.Drawing.Point(20, 50)
 $txtPreUninstall.Size = New-Object System.Drawing.Size(800, 150)
-$txtPreUninstall.Multiline = $true
 $txtPreUninstall.ScrollBars = 'Both'
-$txtPreUninstall.Font = $FontCode
-$txtPreUninstall.WordWrap = $true
-$txtPreUninstall.AcceptsReturn = $true
 $txtPreUninstall.AcceptsTab = $true
 $txtPreUninstall.Visible = $false
+$txtPreUninstall.ReadOnly = $false
 $tabUninstall.Controls.Add($txtPreUninstall)
 $lblPreUninstallHeader.Tag.TargetControl = $txtPreUninstall
+Register-CodeEditorBehavior -Editor $txtPreUninstall -HelpTitle "Pre-Uninstall Commands" -HelpDescription "Runs before the uninstall starts. Use this section to stop processes, close apps, or prepare the machine so removal can succeed cleanly."
 
 # Custom Uninstall Commands Section
 $lblCustomUninstallHeader = New-Object System.Windows.Forms.Label
@@ -2175,18 +2658,16 @@ $lblCustomUninstallHeader.Cursor = [System.Windows.Forms.Cursors]::Hand
 $lblCustomUninstallHeader.Tag = @{ IsExpanded = $false; TargetControl = $null }
 $tabUninstall.Controls.Add($lblCustomUninstallHeader)
 
-$txtCustomUninstall = New-Object System.Windows.Forms.TextBox
+$txtCustomUninstall = New-Object System.Windows.Forms.RichTextBox
 $txtCustomUninstall.Location = New-Object System.Drawing.Point(20, 240)
 $txtCustomUninstall.Size = New-Object System.Drawing.Size(800, 150)
-$txtCustomUninstall.Multiline = $true
 $txtCustomUninstall.ScrollBars = 'Both'
-$txtCustomUninstall.Font = $FontCode
-$txtCustomUninstall.WordWrap = $true
-$txtCustomUninstall.AcceptsReturn = $true
 $txtCustomUninstall.AcceptsTab = $true
 $txtCustomUninstall.Visible = $false
+$txtCustomUninstall.ReadOnly = $false
 $tabUninstall.Controls.Add($txtCustomUninstall)
 $lblCustomUninstallHeader.Tag.TargetControl = $txtCustomUninstall
+Register-CodeEditorBehavior -Editor $txtCustomUninstall -HelpTitle "Custom Uninstall Commands" -HelpDescription "Runs during uninstall. Use this section for the vendor's uninstall command, machine cleanup steps, or other actions that should happen while removing the app."
 
 # Post-Uninstall Commands Section
 $lblPostUninstallHeader = New-Object System.Windows.Forms.Label
@@ -2202,18 +2683,16 @@ $lblPostUninstallHeader.Cursor = [System.Windows.Forms.Cursors]::Hand
 $lblPostUninstallHeader.Tag = @{ IsExpanded = $false; TargetControl = $null }
 $tabUninstall.Controls.Add($lblPostUninstallHeader)
 
-$txtPostUninstall = New-Object System.Windows.Forms.TextBox
+$txtPostUninstall = New-Object System.Windows.Forms.RichTextBox
 $txtPostUninstall.Location = New-Object System.Drawing.Point(20, 430)
 $txtPostUninstall.Size = New-Object System.Drawing.Size(800, 150)
-$txtPostUninstall.Multiline = $true
 $txtPostUninstall.ScrollBars = 'Both'
-$txtPostUninstall.Font = $FontCode
-$txtPostUninstall.WordWrap = $true
-$txtPostUninstall.AcceptsReturn = $true
 $txtPostUninstall.AcceptsTab = $true
 $txtPostUninstall.Visible = $false
+$txtPostUninstall.ReadOnly = $false
 $tabUninstall.Controls.Add($txtPostUninstall)
 $lblPostUninstallHeader.Tag.TargetControl = $txtPostUninstall
+Register-CodeEditorBehavior -Editor $txtPostUninstall -HelpTitle "Post-Uninstall Commands" -HelpDescription "Runs after uninstall completes. Use this section for leftover cleanup, report-related cleanup, or preserving user-level data while removing machine-level artifacts."
 
 # Click event handlers for expand/collapse
 $lblPreUninstallHeader.Add_Click({
@@ -2287,6 +2766,233 @@ $txtPostUninstall.Add_TextChanged({
 })
 
 #endregion Tab 3
+
+#region Tab 4: Package Helper
+$tabPackageHelper = New-Object System.Windows.Forms.TabPage
+$tabPackageHelper.Text = "Package Helper"
+$tabPackageHelper.BackColor = $Colors.Background
+$tabControl.Controls.Add($tabPackageHelper)
+
+$lblPackageHelperHeader = New-Object System.Windows.Forms.Label
+$lblPackageHelperHeader.Text = "Package Helper - Copy/Paste Ready Suggestions"
+$lblPackageHelperHeader.Location = New-Object System.Drawing.Point(20, 15)
+$lblPackageHelperHeader.Size = New-Object System.Drawing.Size(800, 24)
+$lblPackageHelperHeader.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
+$tabPackageHelper.Controls.Add($lblPackageHelperHeader)
+
+$script:lblPackageHelperContext = New-Object System.Windows.Forms.Label
+$script:lblPackageHelperContext.Text = "Click Help package to generate section guidance for this app."
+$script:lblPackageHelperContext.Location = New-Object System.Drawing.Point(20, 42)
+$script:lblPackageHelperContext.Size = New-Object System.Drawing.Size(620, 20)
+$script:lblPackageHelperContext.ForeColor = [System.Drawing.Color]::Gray
+$tabPackageHelper.Controls.Add($script:lblPackageHelperContext)
+
+$btnRefreshPackageHelper = New-Object System.Windows.Forms.Button
+$btnRefreshPackageHelper.Text = "Refresh Helper"
+$btnRefreshPackageHelper.Location = New-Object System.Drawing.Point(670, 38)
+$btnRefreshPackageHelper.Size = New-Object System.Drawing.Size(130, 28)
+$btnRefreshPackageHelper.BackColor = $Colors.AccentTeal
+$btnRefreshPackageHelper.ForeColor = [System.Drawing.Color]::White
+$btnRefreshPackageHelper.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+$btnRefreshPackageHelper.FlatAppearance.BorderSize = 0
+$tabPackageHelper.Controls.Add($btnRefreshPackageHelper)
+
+$btnApplyAllPackageHelper = New-Object System.Windows.Forms.Button
+$btnApplyAllPackageHelper.Text = "Apply All to GUI"
+$btnApplyAllPackageHelper.Location = New-Object System.Drawing.Point(530, 38)
+$btnApplyAllPackageHelper.Size = New-Object System.Drawing.Size(130, 28)
+$btnApplyAllPackageHelper.BackColor = $Colors.SuccessGreen
+$btnApplyAllPackageHelper.ForeColor = [System.Drawing.Color]::White
+$btnApplyAllPackageHelper.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+$btnApplyAllPackageHelper.FlatAppearance.BorderSize = 0
+$tabPackageHelper.Controls.Add($btnApplyAllPackageHelper)
+
+$panelPackageHelper = New-Object System.Windows.Forms.Panel
+$panelPackageHelper.Location = New-Object System.Drawing.Point(20, 72)
+$panelPackageHelper.Size = New-Object System.Drawing.Size(820, 540)
+$panelPackageHelper.AutoScroll = $true
+$panelPackageHelper.BackColor = $Colors.Background
+$tabPackageHelper.Controls.Add($panelPackageHelper)
+
+$sectionLayout = @(
+    @{ Key = "ContextSelection"; Title = "Context Selection" },
+    @{ Key = "InstallCommand"; Title = "Install Command Line" },
+    @{ Key = "UninstallCommand"; Title = "Uninstall Command Line" },
+    @{ Key = "UninstallExecutable"; Title = "Uninstall Executable" },
+    @{ Key = "PreInstallChecks"; Title = "Pre-Install Checks" },
+    @{ Key = "Prerequisites"; Title = "Prerequisite Checks" }
+)
+
+$helperTop = 0
+foreach ($sectionInfo in $sectionLayout) {
+    $group = New-Object System.Windows.Forms.GroupBox
+    $group.Text = $sectionInfo.Title
+    $group.Location = New-Object System.Drawing.Point(0, $helperTop)
+    $group.Size = New-Object System.Drawing.Size(790, 190)
+    $group.BackColor = $Colors.GroupBackground
+    $panelPackageHelper.Controls.Add($group)
+
+    $lblSummary = New-Object System.Windows.Forms.Label
+    $lblSummary.Text = "Generate helper data to populate this section."
+    $lblSummary.Location = New-Object System.Drawing.Point(15, 25)
+    $lblSummary.Size = New-Object System.Drawing.Size(760, 20)
+    $lblSummary.ForeColor = [System.Drawing.Color]::FromArgb(80, 80, 80)
+    $group.Controls.Add($lblSummary)
+
+    $txtOutput = New-Object System.Windows.Forms.TextBox
+    $txtOutput.Location = New-Object System.Drawing.Point(15, 48)
+    $txtOutput.Size = New-Object System.Drawing.Size(760, 92)
+    $txtOutput.Multiline = $true
+    $txtOutput.ScrollBars = 'Both'
+    $txtOutput.WordWrap = $false
+    $txtOutput.Font = $FontCode
+    $txtOutput.ReadOnly = $true
+    $group.Controls.Add($txtOutput)
+
+    $lblIndex = New-Object System.Windows.Forms.Label
+    $lblIndex.Text = "Suggestion 0 of 0"
+    $lblIndex.Location = New-Object System.Drawing.Point(15, 148)
+    $lblIndex.Size = New-Object System.Drawing.Size(180, 20)
+    $group.Controls.Add($lblIndex)
+
+    $lblFeedback = New-Object System.Windows.Forms.Label
+    $lblFeedback.Text = "Did this help?"
+    $lblFeedback.Location = New-Object System.Drawing.Point(200, 148)
+    $lblFeedback.Size = New-Object System.Drawing.Size(140, 20)
+    $group.Controls.Add($lblFeedback)
+
+    $btnCopy = New-Object System.Windows.Forms.Button
+    $btnCopy.Text = "Copy Snippet"
+    $btnCopy.Location = New-Object System.Drawing.Point(405, 145)
+    $btnCopy.Size = New-Object System.Drawing.Size(85, 28)
+    $btnCopy.BackColor = $Colors.AccentTeal
+    $btnCopy.ForeColor = [System.Drawing.Color]::White
+    $btnCopy.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnCopy.FlatAppearance.BorderSize = 0
+    $btnCopy.Tag = $sectionInfo.Key
+    $group.Controls.Add($btnCopy)
+
+    $btnApply = New-Object System.Windows.Forms.Button
+    $btnApply.Text = "Apply to GUI"
+    $btnApply.Location = New-Object System.Drawing.Point(495, 145)
+    $btnApply.Size = New-Object System.Drawing.Size(95, 28)
+    $btnApply.BackColor = [System.Drawing.Color]::FromArgb(0, 105, 160)
+    $btnApply.ForeColor = [System.Drawing.Color]::White
+    $btnApply.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnApply.FlatAppearance.BorderSize = 0
+    $btnApply.Tag = $sectionInfo.Key
+    $group.Controls.Add($btnApply)
+
+    $btnHelpYes = New-Object System.Windows.Forms.Button
+    $btnHelpYes.Text = "Yes"
+    $btnHelpYes.Location = New-Object System.Drawing.Point(595, 145)
+    $btnHelpYes.Size = New-Object System.Drawing.Size(55, 28)
+    $btnHelpYes.BackColor = $Colors.SuccessGreen
+    $btnHelpYes.ForeColor = [System.Drawing.Color]::White
+    $btnHelpYes.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnHelpYes.FlatAppearance.BorderSize = 0
+    $btnHelpYes.Tag = $sectionInfo.Key
+    $group.Controls.Add($btnHelpYes)
+
+    $btnHelpNo = New-Object System.Windows.Forms.Button
+    $btnHelpNo.Text = "No"
+    $btnHelpNo.Location = New-Object System.Drawing.Point(660, 145)
+    $btnHelpNo.Size = New-Object System.Drawing.Size(115, 28)
+    $btnHelpNo.BackColor = [System.Drawing.Color]::FromArgb(205, 130, 30)
+    $btnHelpNo.ForeColor = [System.Drawing.Color]::White
+    $btnHelpNo.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnHelpNo.FlatAppearance.BorderSize = 0
+    $btnHelpNo.Tag = $sectionInfo.Key
+    $btnHelpNo.Text = "No, try another"
+    $group.Controls.Add($btnHelpNo)
+
+    $script:PackageHelperControls[$sectionInfo.Key] = @{
+        Group = $group
+        DefaultTitle = $sectionInfo.Title
+        SummaryLabel = $lblSummary
+        OutputTextBox = $txtOutput
+        ApplyButton = $btnApply
+        IndexLabel = $lblIndex
+        FeedbackLabel = $lblFeedback
+        Suggestions = @()
+        CurrentIndex = 0
+    }
+
+    $btnCopy.Add_Click({
+        $sectionKey = $this.Tag
+        if (-not $script:PackageHelperControls.ContainsKey($sectionKey)) { return }
+
+        $state = $script:PackageHelperControls[$sectionKey]
+        if ([string]::IsNullOrWhiteSpace($state.OutputTextBox.Text)) {
+            return
+        }
+
+        try {
+            [System.Windows.Forms.Clipboard]::SetText($state.OutputTextBox.Text)
+            $state.FeedbackLabel.Text = "Copied to clipboard"
+            $script:PackageHelperControls[$sectionKey] = $state
+        }
+        catch {
+            $state.FeedbackLabel.Text = "Copy failed"
+            $script:PackageHelperControls[$sectionKey] = $state
+        }
+    })
+
+    $btnApply.Add_Click({
+        $sectionKey = $this.Tag
+        if (-not $script:PackageHelperControls.ContainsKey($sectionKey)) { return }
+
+        $state = $script:PackageHelperControls[$sectionKey]
+        $applied = Apply-PackageHelperSectionToGui -SectionKey $sectionKey
+        if ($applied) {
+            Write-PackageHelperFeedback -SectionKey $sectionKey -Response "Applied" -SuggestionText $state.OutputTextBox.Text -Note "Manual apply from section"
+        }
+    })
+
+    $btnHelpYes.Add_Click({
+        $sectionKey = $this.Tag
+        if (-not $script:PackageHelperControls.ContainsKey($sectionKey)) { return }
+
+        $state = $script:PackageHelperControls[$sectionKey]
+        $state.FeedbackLabel.Text = "Great - kept and applied"
+        $script:PackageHelperControls[$sectionKey] = $state
+
+        Apply-PackageHelperSectionToGui -SectionKey $sectionKey | Out-Null
+        Write-PackageHelperFeedback -SectionKey $sectionKey -Response "Yes" -SuggestionText $state.OutputTextBox.Text -Note "Technician accepted section"
+    })
+
+    $btnHelpNo.Add_Click({
+        $sectionKey = $this.Tag
+        if (-not $script:PackageHelperControls.ContainsKey($sectionKey)) { return }
+
+        $state = $script:PackageHelperControls[$sectionKey]
+        if (-not $state.Suggestions -or $state.Suggestions.Count -eq 0) {
+            $state.FeedbackLabel.Text = "No more suggestions available"
+            $script:PackageHelperControls[$sectionKey] = $state
+            Write-PackageHelperFeedback -SectionKey $sectionKey -Response "No" -SuggestionText $state.OutputTextBox.Text -Note "No suggestions available"
+            return
+        }
+
+        $nextIndex = $state.CurrentIndex + 1
+        if ($nextIndex -ge $state.Suggestions.Count) {
+            $nextIndex = 0
+        }
+
+        Set-PackageHelperSectionSuggestion -SectionKey $sectionKey -SuggestionIndex $nextIndex -FeedbackText "Loaded another suggestion"
+        Write-PackageHelperFeedback -SectionKey $sectionKey -Response "No" -SuggestionText $state.OutputTextBox.Text -Note "Requested alternate suggestion"
+    })
+
+    $helperTop += 200
+}
+
+$panelPackageHelper.AutoScrollMinSize = New-Object System.Drawing.Size(780, $helperTop + 10)
+
+$btnApplyAllPackageHelper.Add_Click({
+    $count = Apply-AllPackageHelperSuggestionsToGui
+    Write-PackageHelperFeedback -SectionKey "ALL" -Response "Applied" -SuggestionText "" -Note "Applied $count section(s) using Apply All"
+})
+
+#endregion Tab 4
 
 #region Status Area
 $statusBar = New-Object System.Windows.Forms.Panel
@@ -2365,12 +3071,12 @@ function Load-ExistingPackageDataIfPresent {
     try {
         $loadResult = Get-CustomCommandsFromStartupPss -StartupPssPath $existingStartupPath
 
-        if ($script:txtPreInstall) { $script:txtPreInstall.Text = $loadResult.PreInstall }
-        if ($script:txtCustomInstall) { $script:txtCustomInstall.Text = $loadResult.CustomInstall }
-        if ($script:txtPostInstall) { $script:txtPostInstall.Text = $loadResult.PostInstall }
-        if ($script:txtPreUninstall) { $script:txtPreUninstall.Text = $loadResult.PreUninstall }
-        if ($script:txtCustomUninstall) { $script:txtCustomUninstall.Text = $loadResult.CustomUninstall }
-        if ($script:txtPostUninstall) { $script:txtPostUninstall.Text = $loadResult.PostUninstall }
+        if ($script:txtPreInstall) { $script:txtPreInstall.Text = Format-CodeEditorText -Text $loadResult.PreInstall }
+        if ($script:txtCustomInstall) { $script:txtCustomInstall.Text = Format-CodeEditorText -Text $loadResult.CustomInstall }
+        if ($script:txtPostInstall) { $script:txtPostInstall.Text = Format-CodeEditorText -Text $loadResult.PostInstall }
+        if ($script:txtPreUninstall) { $script:txtPreUninstall.Text = Format-CodeEditorText -Text $loadResult.PreUninstall }
+        if ($script:txtCustomUninstall) { $script:txtCustomUninstall.Text = Format-CodeEditorText -Text $loadResult.CustomUninstall }
+        if ($script:txtPostUninstall) { $script:txtPostUninstall.Text = Format-CodeEditorText -Text $loadResult.PostUninstall }
 
         if ($script:txtUninstallExecutable) {
             $script:txtUninstallExecutable.Text = $loadResult.AppUninstallExeName
@@ -2430,6 +3136,17 @@ $txtName.Add_TextChanged({ Check-PackageFolderExists })
 $txtEdition.Add_TextChanged({ Check-PackageFolderExists })
 $txtVersion.Add_TextChanged({ Check-PackageFolderExists })
 
+$chkUserContext.Add_CheckedChanged({
+    $script:SelectedInstallContext = if ($chkUserContext.Checked) { "User" } else { "System" }
+    if (-not [string]::IsNullOrWhiteSpace($script:InstallationMediaPath) -and -not [string]::IsNullOrWhiteSpace($txtVendor.Text) -and -not [string]::IsNullOrWhiteSpace($txtName.Text)) {
+        Invoke-PackageHelperGeneration
+    }
+})
+
+$btnRefreshPackageHelper.Add_Click({
+    Invoke-PackageHelperGeneration
+})
+
 # Browse Button Click Event
 $btnBrowse.Add_Click({
     $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
@@ -2480,6 +3197,10 @@ $btnBrowse.Add_Click({
                 Write-Warning "DetectionEngine failed: $($_.Exception.Message)"
                 $script:DetectedInstallerType = "Generic"
             }
+
+            Invoke-InstallContextDetectionPrompt -FilePath $script:InstallationMediaPath -InstallerType $script:DetectedInstallerType
+            $lblMediaType.Text = "Type: EXE ($($script:DetectedInstallerType) detected) | Context: $($script:SelectedInstallContext)"
+            $lblMediaType.ForeColor = [System.Drawing.Color]::Green
             
             # Show EXE-specific controls
             $lblUninstallExecutable.Visible = $true
@@ -2504,6 +3225,8 @@ $btnBrowse.Add_Click({
                 Write-Warning "DetectionEngine failed: $($_.Exception.Message)"
                 $script:DetectedInstallerType = "Generic"
             }
+
+            Invoke-InstallContextDetectionPrompt -FilePath $script:InstallationMediaPath -InstallerType $script:DetectedInstallerType
             
             # Show MSI-specific controls (same as EXE)
             $lblUninstallExecutable.Visible = $true
@@ -2527,52 +3250,17 @@ $btnBrowse.Add_Click({
             $txtUninstallSwitch.Visible = $false
             $btnCopySearchTerms.Visible = $false
         }
+
+        if (-not [string]::IsNullOrWhiteSpace($txtVendor.Text) -and -not [string]::IsNullOrWhiteSpace($txtName.Text)) {
+            Invoke-PackageHelperGeneration
+        }
     }
 
 })
 
-# Find Switches Button Click Event
+# Help package Button Click Event
 $btnCopySearchTerms.Add_Click({
-    if ([string]::IsNullOrWhiteSpace($txtVendor.Text) -or [string]::IsNullOrWhiteSpace($txtName.Text)) {
-        [System.Windows.Forms.MessageBox]::Show(
-            "Please enter Vendor and App Name first before copying search terms.",
-            "Information Required",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Information
-        )
-        return
-    }
-    
-    # Create search terms
-    $vendor = $txtVendor.Text.Trim()
-    $appName = $txtName.Text.Trim()
-    $edition = $txtEdition.Text.Trim()
-    $editionPart = if ($edition) { " $edition" } else { "" }
-    
-    # Build search string
-    $searchTerms = "What are some recommended $vendor $appName$editionPart silent install switches, silent uninstall switches, and uninstall executables that work"
-    
-    # Copy to clipboard
-    try {
-        [System.Windows.Forms.Clipboard]::SetText($searchTerms)
-        
-        [System.Windows.Forms.MessageBox]::Show(
-            "Search terms copied to clipboard!`n`n`"$searchTerms`"`n`nTry searching on:`n- https://google.com`n- https://silentinstallhq.com`n- https://itninja.com`n- Vendor documentation",
-            "Search Terms Copied",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Information
-        )
-        
-        # Open default browser to Google
-        Start-Process "https://google.com"
-    } catch {
-        [System.Windows.Forms.MessageBox]::Show(
-            "Failed to copy to clipboard!`n`nSearch terms: $searchTerms",
-            "Clipboard Error",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Error
-        )
-    }
+    Invoke-PackageHelperGeneration
 })
 
 # Start Packaging Button Click Event (validation only - workflow in New-PackagingFolder)
