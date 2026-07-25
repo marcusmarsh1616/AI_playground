@@ -321,7 +321,6 @@ function Get-CustomCommandsFromStartupPss {
             return $result
         }
         
-        $content = Get-Content $StartupPssPath -Raw
         $lines = Get-Content $StartupPssPath
         
         # STEP 1: Extract metadata variables from VARIABLE DECLARATION section ONLY
@@ -424,53 +423,51 @@ function Get-CustomCommandsFromStartupPss {
         )
         
         foreach ($point in $extractionPoints) {
-            # Try new marker first, fallback to old PSADTv3 marker for backward compatibility
-            $startIndex = $content.IndexOf($point.Marker)
             $markerUsed = $point.Marker
             $endMarkerToUse = $point.EndMarker
-            
-            # Fallback to old markers if new ones not found
-            if ($startIndex -lt 0 -and $point.ContainsKey('FallbackMarker')) {
-                $startIndex = $content.IndexOf($point.FallbackMarker)
-                if ($startIndex -ge 0) {
-                    $markerUsed = $point.FallbackMarker
-                    $endMarkerToUse = $point.FallbackEndMarker
+            $startLineIndex = -1
+
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+                if ($lines[$i].Trim() -eq $point.Marker) {
+                    $startLineIndex = $i
+                    break
                 }
             }
-            
-            if ($startIndex -ge 0) {
-                $startIndex += $markerUsed.Length
-                $endIndex = $content.IndexOf($endMarkerToUse, $startIndex)
-                if ($endIndex -gt $startIndex) {
-                    $sectionContent = $content.Substring($startIndex, $endIndex - $startIndex)
-                    
-                    # If this section has template code, find where it starts
-                    if ($point.HasTemplateCode -and $point.TemplateStartMarker) {
-                        $templateStartIndex = $sectionContent.IndexOf($point.TemplateStartMarker)
-                        if ($templateStartIndex -gt 0) {
-                            # Extract only the user code (before template marker)
-                            $sectionContent = $sectionContent.Substring(0, $templateStartIndex)
-                        }
-                    }
-                    
-                    $sectionContent = $sectionContent.Trim()
-                    
-                    if (-not [string]::IsNullOrWhiteSpace($sectionContent)) {
-                        $sectionLines = $sectionContent -split [Environment]::NewLine
-                        $cleanedLines = @()
-                        
-                        foreach ($line in $sectionLines) {
-                            $trimmed = $line.TrimStart()
-                            if (-not [string]::IsNullOrWhiteSpace($trimmed)) {
-                                $cleanedLines += $trimmed
-                            }
-                        }
-                        
-                        if ($cleanedLines.Count -gt 0) {
-                            $result[$point.CommandKey] = ($cleanedLines -join [Environment]::NewLine)
-                        }
+
+            if ($startLineIndex -lt 0 -and $point.ContainsKey('FallbackMarker')) {
+                for ($i = 0; $i -lt $lines.Count; $i++) {
+                    if ($lines[$i].Trim() -eq $point.FallbackMarker) {
+                        $startLineIndex = $i
+                        $markerUsed = $point.FallbackMarker
+                        $endMarkerToUse = $point.FallbackEndMarker
+                        break
                     }
                 }
+            }
+
+            if ($startLineIndex -lt 0) {
+                continue
+            }
+
+            $sectionLines = New-Object System.Collections.Generic.List[string]
+            for ($i = ($startLineIndex + 1); $i -lt $lines.Count; $i++) {
+                $trimmed = $lines[$i].Trim()
+
+                if ($trimmed -eq $endMarkerToUse) {
+                    break
+                }
+
+                if ($point.HasTemplateCode -and $point.TemplateStartMarker -and $trimmed -eq $point.TemplateStartMarker) {
+                    break
+                }
+
+                if (-not [string]::IsNullOrWhiteSpace($trimmed)) {
+                    [void]$sectionLines.Add($lines[$i].TrimStart())
+                }
+            }
+
+            if ($sectionLines.Count -gt 0) {
+                $result[$point.CommandKey] = ($sectionLines -join [Environment]::NewLine).Trim()
             }
         }
     }
