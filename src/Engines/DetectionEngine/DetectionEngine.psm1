@@ -152,6 +152,7 @@ function Get-InstallContextRecommendation {
         $supportsSystem = $true
         $confidence = "Medium"
         $reasons = @()
+        $explicitUserSignals = 0
 
         if ($extension -eq ".msi") {
             $recommended = "System"
@@ -161,9 +162,9 @@ function Get-InstallContextRecommendation {
             $reasons += "MSI supports enterprise system deployment patterns and can often run per-user depending on package authoring."
 
             if ($fileName -match "peruser|per-user|user") {
-                $recommended = "User"
+                $explicitUserSignals++
                 $confidence = "Medium"
-                $reasons += "Filename suggests per-user install intent."
+                $reasons += "Filename suggests per-user install intent, but system remains the safer default for packaging."
             }
         }
         else {
@@ -195,11 +196,11 @@ function Get-InstallContextRecommendation {
                 $reasons += "Manifest indicates requireAdministrator, which requires elevated/system-style install context."
             }
             elseif ($manifestHint -eq "asInvoker") {
-                $recommended = "User"
+                $recommended = "System"
                 $supportsUser = $true
                 $supportsSystem = $true
                 $confidence = "Medium"
-                $reasons += "Manifest indicates asInvoker, which often supports user-context execution."
+                $reasons += "Manifest indicates asInvoker, so user context may be possible when explicitly required."
             }
 
             if ($detailsBlob -match "machine-wide|all users|allusers") {
@@ -208,9 +209,24 @@ function Get-InstallContextRecommendation {
                 $reasons += "Installer metadata suggests machine-wide deployment."
             }
             elseif ($detailsBlob -match "per-user|current user|for me only") {
+                $explicitUserSignals++
+                $reasons += "Installer metadata suggests per-user deployment."
+            }
+
+            if ($fileName -match "peruser|per-user|currentuser|formeonly|user-only") {
+                $explicitUserSignals++
+                $reasons += "Filename contains per-user indicators."
+            }
+
+            if ($supportsUser -and $supportsSystem -and $explicitUserSignals -ge 2 -and $manifestHint -ne "requireAdministrator") {
                 $recommended = "User"
                 $confidence = "High"
-                $reasons += "Installer metadata suggests per-user deployment."
+                $reasons += "Multiple per-user indicators detected; recommending user context for this installer."
+            }
+            elseif ($supportsUser -and $supportsSystem -and $explicitUserSignals -eq 1 -and $manifestHint -ne "requireAdministrator") {
+                $recommended = "System"
+                if ($confidence -eq "Low") { $confidence = "Medium" }
+                $reasons += "Some per-user indicators detected; keeping system as the default recommendation unless user context is specifically requested."
             }
 
             if ($reasons.Count -eq 0) {
