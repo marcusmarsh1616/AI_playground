@@ -23,6 +23,7 @@ Import-Module ".\src\DocumentGeneratorEngine.psm1" -Force -ErrorAction Stop
 $script:CurrentSession = $null
 $script:Form = $null
 $script:Controls = @{}
+$script:UiRunResult = $null
 
 #endregion
 
@@ -343,7 +344,15 @@ function Show-DocumentationCaptureUI {
         Displays the simplified automated documentation GUI
     #>
     [CmdletBinding()]
-    param()
+    param(
+        [Parameter(Mandatory = $false)]
+        [string]$AppName = "",
+
+        [Parameter(Mandatory = $false)]
+        [string]$AppVersion = ""
+    )
+
+    $script:UiRunResult = $null
     
     # Create form
     $script:Form = New-Object System.Windows.Forms.Form
@@ -387,6 +396,10 @@ function Show-DocumentationCaptureUI {
     $Controls.txtAppName.Size = New-Object System.Drawing.Size(300, 25)
     $Controls.txtAppName.Font = New-Object System.Drawing.Font("Segoe UI", 12)
     $Form.Controls.Add($Controls.txtAppName)
+
+    if (-not [string]::IsNullOrWhiteSpace($AppName)) {
+        $script:Controls.txtAppName.Text = $AppName
+    }
     
     # Version
     $lblVer = New-Object System.Windows.Forms.Label
@@ -401,6 +414,10 @@ function Show-DocumentationCaptureUI {
     $Controls.txtAppVersion.Size = New-Object System.Drawing.Size(300, 25)
     $Controls.txtAppVersion.Font = New-Object System.Drawing.Font("Segoe UI", 12)
     $Form.Controls.Add($Controls.txtAppVersion)
+
+    if (-not [string]::IsNullOrWhiteSpace($AppVersion)) {
+        $script:Controls.txtAppVersion.Text = $AppVersion
+    }
     
     # Start Button
     $script:Controls.btnStart = New-Object System.Windows.Forms.Button
@@ -411,7 +428,16 @@ function Show-DocumentationCaptureUI {
     $Controls.btnStart.BackColor = [System.Drawing.Color]::FromArgb(0, 176, 80)
     $Controls.btnStart.ForeColor = [System.Drawing.Color]::White
     $Controls.btnStart.FlatStyle = "Flat"
-    $Controls.btnStart.Add_Click({ Start-AutomatedDocumentation })
+    $Controls.btnStart.Add_Click({
+        $runResult = Start-AutomatedDocumentation
+        if ($runResult) {
+            $script:UiRunResult = $runResult
+            if ($runResult.Success) {
+                $script:Form.DialogResult = [System.Windows.Forms.DialogResult]::OK
+                $script:Form.Close()
+            }
+        }
+    })
     $Form.Controls.Add($Controls.btnStart)
     
     # Status
@@ -435,6 +461,16 @@ function Show-DocumentationCaptureUI {
     
     # Show form
     [void]$Form.ShowDialog()
+
+    if ($script:UiRunResult) {
+        return $script:UiRunResult
+    }
+
+    return @{
+        Success = $false
+        Message = "Validation documentation was closed before completion."
+        OutputPath = ""
+    }
 }
 
 #endregion

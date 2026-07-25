@@ -53,6 +53,7 @@ function Start-ValidationReportCapture {
             "-File", $launcherPath,
             "-AppName", $AppName,
             "-AppVersion", $AppVersion,
+            "-Interactive",
             "-ResultFilePath", $resultFilePath
         )
 
@@ -74,13 +75,37 @@ function Start-ValidationReportCapture {
         $sourceReportPath = ""
         if ($launcherResult -and $launcherResult.PSObject.Properties.Name -contains 'OutputPath' -and -not [string]::IsNullOrWhiteSpace([string]$launcherResult.OutputPath)) {
             $candidateOutputPath = [string]$launcherResult.OutputPath
-            if (Test-Path $candidateOutputPath) {
-                $sourceReportPath = $candidateOutputPath
+            $candidatePaths = @($candidateOutputPath)
+
+            if (-not [System.IO.Path]::IsPathRooted($candidateOutputPath)) {
+                $candidatePaths += (Join-Path $engineRoot $candidateOutputPath)
+                $candidatePaths += (Join-Path (Split-Path $launcherPath -Parent) $candidateOutputPath)
+            }
+
+            foreach ($candidatePath in ($candidatePaths | Select-Object -Unique)) {
+                if (Test-Path $candidatePath) {
+                    $sourceReportPath = (Resolve-Path $candidatePath).Path
+                    break
+                }
             }
         }
 
         if ([string]::IsNullOrWhiteSpace($sourceReportPath)) {
-            if (-not (Test-Path $outputFolder)) {
+            $outputFoldersToProbe = @(
+                $outputFolder,
+                (Join-Path (Split-Path $launcherPath -Parent) "documentation"),
+                (Join-Path (Get-Location).Path "documentation")
+            ) | Select-Object -Unique
+
+            $resolvedOutputFolder = ""
+            foreach ($candidateFolder in $outputFoldersToProbe) {
+                if (Test-Path $candidateFolder) {
+                    $resolvedOutputFolder = (Resolve-Path $candidateFolder).Path
+                    break
+                }
+            }
+
+            if ([string]::IsNullOrWhiteSpace($resolvedOutputFolder)) {
                 $result.Success = $true
                 if ($launcherResult -and $launcherResult.Message) {
                     $result.Message = "Validation tool completed: $($launcherResult.Message)"
@@ -91,13 +116,13 @@ function Start-ValidationReportCapture {
                 return $result
             }
 
-            $latestReport = Get-ChildItem -Path $outputFolder -Filter "*.html" -File -ErrorAction SilentlyContinue |
+            $latestReport = Get-ChildItem -Path $resolvedOutputFolder -Filter "*.html" -File -ErrorAction SilentlyContinue |
                 Where-Object { $_.LastWriteTime -ge $startTime } |
                 Sort-Object LastWriteTime -Descending |
                 Select-Object -First 1
 
             if (-not $latestReport) {
-                $latestReport = Get-ChildItem -Path $outputFolder -Filter "*.html" -File -ErrorAction SilentlyContinue |
+                $latestReport = Get-ChildItem -Path $resolvedOutputFolder -Filter "*.html" -File -ErrorAction SilentlyContinue |
                     Sort-Object LastWriteTime -Descending |
                     Select-Object -First 1
             }

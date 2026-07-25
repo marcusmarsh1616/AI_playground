@@ -21,21 +21,34 @@ param(
     [string]$AppVersion,
 
     [Parameter(Mandatory = $false)]
-    [string]$ResultFilePath = ""
+    [string]$ResultFilePath = "",
+
+    [Parameter(Mandatory = $false)]
+    [switch]$Interactive
 )
 
 # Import UI Engine
 $ModulePath = "$PSScriptRoot\src"
 Import-Module "$ModulePath\DocumentationUIEngine.psm1" -Force -ErrorAction Stop
 
-# Run context-driven workflow (no data-entry GUI)
+# Run workflow
 Write-Host ""
 Write-Host "=== Documentation Capture Tool ===" -ForegroundColor Cyan
-Write-Host "Running integrated capture workflow..." -ForegroundColor Yellow
+if ($Interactive) {
+    Write-Host "Running interactive capture workflow..." -ForegroundColor Yellow
+}
+else {
+    Write-Host "Running integrated capture workflow..." -ForegroundColor Yellow
+}
 Write-Host ""
 
 try {
-    $result = Invoke-DocumentationCaptureFromContext -AppName $AppName -AppVersion $AppVersion
+    if ($Interactive) {
+        $result = Show-DocumentationCaptureUI -AppName $AppName -AppVersion $AppVersion
+    }
+    else {
+        $result = Invoke-DocumentationCaptureFromContext -AppName $AppName -AppVersion $AppVersion
+    }
 
     if (-not [string]::IsNullOrWhiteSpace($ResultFilePath)) {
         $result | ConvertTo-Json -Depth 4 | Set-Content -Path $ResultFilePath -Encoding UTF8 -Force
