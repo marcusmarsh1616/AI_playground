@@ -35,41 +35,25 @@ function Start-ValidationReportCapture {
 
     try {
         $engineRoot = $PSScriptRoot
-        $launcherPath = Join-Path $engineRoot "Start-DocumentationCaptureTool.ps1"
+        $uiEnginePath = Join-Path $engineRoot "src\DocumentationUIEngine.psm1"
         $outputFolder = Join-Path $engineRoot "documentation"
 
-        if (-not (Test-Path $launcherPath)) {
-            $result.Message = "Validation documentation launcher not found: $launcherPath"
+        if (-not (Test-Path $uiEnginePath)) {
+            $result.Message = "Validation documentation UI engine not found: $uiEnginePath"
             return $result
         }
 
         $startTime = Get-Date
-        $resultFilePath = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName() + '.json')
-
-        $argList = @(
-            "-NoProfile",
-            "-STA",
-            "-ExecutionPolicy", "Bypass",
-            "-File", $launcherPath,
-            "-AppName", $AppName,
-            "-AppVersion", $AppVersion,
-            "-Interactive",
-            "-ResultFilePath", $resultFilePath
-        )
-
-        $docProcess = Start-Process -FilePath "powershell.exe" -ArgumentList $argList -WorkingDirectory $engineRoot -PassThru
-        $result.Launched = $true
-        $null = $docProcess.WaitForExit()
-
         $launcherResult = $null
-        if (Test-Path $resultFilePath) {
-            try {
-                $launcherResult = Get-Content -Path $resultFilePath -Raw -Encoding UTF8 | ConvertFrom-Json
-            }
-            catch {
-                $launcherResult = $null
-            }
-            Remove-Item -Path $resultFilePath -Force -ErrorAction SilentlyContinue
+        $previousLocation = Get-Location
+        try {
+            Push-Location $engineRoot
+            Import-Module $uiEnginePath -Force -ErrorAction Stop
+            $result.Launched = $true
+            $launcherResult = Show-DocumentationCaptureUI -AppName $AppName -AppVersion $AppVersion
+        }
+        finally {
+            Pop-Location
         }
 
         $sourceReportPath = ""
@@ -79,7 +63,7 @@ function Start-ValidationReportCapture {
 
             if (-not [System.IO.Path]::IsPathRooted($candidateOutputPath)) {
                 $candidatePaths += (Join-Path $engineRoot $candidateOutputPath)
-                $candidatePaths += (Join-Path (Split-Path $launcherPath -Parent) $candidateOutputPath)
+                $candidatePaths += (Join-Path $previousLocation.Path $candidateOutputPath)
             }
 
             foreach ($candidatePath in ($candidatePaths | Select-Object -Unique)) {
@@ -93,8 +77,7 @@ function Start-ValidationReportCapture {
         if ([string]::IsNullOrWhiteSpace($sourceReportPath)) {
             $outputFoldersToProbe = @(
                 $outputFolder,
-                (Join-Path (Split-Path $launcherPath -Parent) "documentation"),
-                (Join-Path (Get-Location).Path "documentation")
+                (Join-Path $previousLocation.Path "documentation")
             ) | Select-Object -Unique
 
             $resolvedOutputFolder = ""
@@ -106,13 +89,7 @@ function Start-ValidationReportCapture {
             }
 
             if ([string]::IsNullOrWhiteSpace($resolvedOutputFolder)) {
-                $result.Success = $true
-                if ($launcherResult -and $launcherResult.Message) {
-                    $result.Message = "Validation tool completed: $($launcherResult.Message)"
-                }
-                else {
-                    $result.Message = "Validation tool closed. Documentation output folder was not found."
-                }
+                $result.Message = "Validation tool did not produce a documentation output folder."
                 return $result
             }
 
@@ -128,29 +105,11 @@ function Start-ValidationReportCapture {
             }
 
             if (-not $latestReport) {
-                $result.Success = $true
-                if ($launcherResult -and $launcherResult.Message) {
-                    $result.Message = "Validation tool completed: $($launcherResult.Message)"
-                }
-                else {
-                    $result.Message = "Validation tool closed. No report file was found to copy."
-                }
+                $result.Message = "Validation tool closed without generating a report file."
                 return $result
             }
 
             $sourceReportPath = $latestReport.FullName
-        }
-
-        if ($docProcess.ExitCode -ne 0) {
-            if ([string]::IsNullOrWhiteSpace($sourceReportPath)) {
-                if ($launcherResult -and $launcherResult.Message) {
-                    $result.Message = "Validation documentation tool failed: $($launcherResult.Message)"
-                }
-                else {
-                    $result.Message = "Validation documentation tool exited with code $($docProcess.ExitCode)."
-                }
-                return $result
-            }
         }
 
         if ($launcherResult -and $launcherResult.PSObject.Properties.Name -contains 'Success' -and -not $launcherResult.Success -and [string]::IsNullOrWhiteSpace($sourceReportPath)) {
@@ -185,12 +144,7 @@ function Start-ValidationReportCapture {
         $result.ReportCopied = $true
         $result.CopiedReportPath = $targetReportPath
         $result.Success = $true
-        if ($docProcess.ExitCode -ne 0) {
-            $result.Message = "Validation report saved to package docs: $reportFileName (launcher exit code $($docProcess.ExitCode) ignored because report was generated)."
-        }
-        else {
-            $result.Message = "Validation report saved to package docs: $reportFileName"
-        }
+        $result.Message = "Validation report saved to package docs: $reportFileName"
     }
     catch {
         $result.Message = "Validation report engine error: $($_.Exception.Message)"

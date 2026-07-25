@@ -13,10 +13,10 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
 # Import required engines
-Import-Module ".\src\DocumentationSessionEngine.psm1" -Force -ErrorAction Stop
-Import-Module ".\src\CaptureEngine.psm1" -Force -ErrorAction Stop
-Import-Module ".\src\InstallationDetectorEngine.psm1" -Force -ErrorAction Stop
-Import-Module ".\src\DocumentGeneratorEngine.psm1" -Force -ErrorAction Stop
+Import-Module (Join-Path $PSScriptRoot "DocumentationSessionEngine.psm1") -Force -ErrorAction Stop
+Import-Module (Join-Path $PSScriptRoot "CaptureEngine.psm1") -Force -ErrorAction Stop
+Import-Module (Join-Path $PSScriptRoot "InstallationDetectorEngine.psm1") -Force -ErrorAction Stop
+Import-Module (Join-Path $PSScriptRoot "DocumentGeneratorEngine.psm1") -Force -ErrorAction Stop
 
 #region Private Variables
 
