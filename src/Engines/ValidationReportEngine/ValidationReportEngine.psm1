@@ -1,0 +1,117 @@
+#Requires -Version 5.1
+<#
+.SYNOPSIS
+    Validation Report Engine
+.DESCRIPTION
+    Runs integrated validation documentation capture and saves the generated report to a package docs folder.
+#>
+
+function Start-ValidationReportCapture {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PackagePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$AppVendor,
+
+        [Parameter(Mandatory = $true)]
+        [string]$AppName,
+
+        [Parameter(Mandatory = $false)]
+        [string]$AppEdition,
+
+        [Parameter(Mandatory = $true)]
+        [string]$AppVersion
+    )
+
+    $result = @{
+        Success = $false
+        Launched = $false
+        ReportCopied = $false
+        CopiedReportPath = ""
+        Message = ""
+    }
+
+    try {
+        $engineRoot = $PSScriptRoot
+        $launcherPath = Join-Path $engineRoot "Start-DocumentationCaptureTool.ps1"
+        $outputFolder = Join-Path $engineRoot "documentation"
+
+        if (-not (Test-Path $launcherPath)) {
+            $result.Message = "Validation documentation launcher not found: $launcherPath"
+            return $result
+        }
+
+        $startTime = Get-Date
+
+        $argList = @(
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-File", $launcherPath,
+            "-AppName", $AppName,
+            "-AppVersion", $AppVersion
+        )
+
+        $docProcess = Start-Process -FilePath "powershell.exe" -ArgumentList $argList -WorkingDirectory $engineRoot -PassThru
+        $result.Launched = $true
+        $null = $docProcess.WaitForExit()
+
+        if ($docProcess.ExitCode -ne 0) {
+            $result.Message = "Validation documentation tool exited with code $($docProcess.ExitCode)."
+            return $result
+        }
+
+        if (-not (Test-Path $outputFolder)) {
+            $result.Success = $true
+            $result.Message = "Validation tool closed. Documentation output folder was not found."
+            return $result
+        }
+
+        $latestReport = Get-ChildItem -Path $outputFolder -Filter "*.html" -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTime -ge $startTime } |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+
+        if (-not $latestReport) {
+            $latestReport = Get-ChildItem -Path $outputFolder -Filter "*.html" -File -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending |
+                Select-Object -First 1
+        }
+
+        if (-not $latestReport) {
+            $result.Success = $true
+            $result.Message = "Validation tool closed. No report file was found to copy."
+            return $result
+        }
+
+        $docsFolder = Join-Path $PackagePath "docs"
+        if (-not (Test-Path $docsFolder)) {
+            New-Item -Path $docsFolder -ItemType Directory -Force | Out-Null
+        }
+
+        $nameParts = @($AppVendor, $AppName)
+        if (-not [string]::IsNullOrWhiteSpace($AppEdition)) {
+            $nameParts += $AppEdition
+        }
+        $nameParts += $AppVersion
+
+        $reportFileName = (($nameParts -join " ") + " Validation report.html")
+        $reportFileName = $reportFileName -replace '[<>:"/\\|?*]', '_'
+
+        $targetReportPath = Join-Path $docsFolder $reportFileName
+        Copy-Item -Path $latestReport.FullName -Destination $targetReportPath -Force
+
+        $result.ReportCopied = $true
+        $result.CopiedReportPath = $targetReportPath
+        $result.Success = $true
+        $result.Message = "Validation report saved to package docs: $reportFileName"
+    }
+    catch {
+        $result.Message = "Validation report engine error: $($_.Exception.Message)"
+    }
+
+    return $result
+}
+
+Export-ModuleMember -Function Start-ValidationReportCapture

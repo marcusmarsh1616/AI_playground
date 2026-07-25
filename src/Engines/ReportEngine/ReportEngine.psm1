@@ -208,10 +208,13 @@ function New-HTMLLeftoverReport {
     }
     
     try {
-        # Determine status
-        $statusColor = if ($LeftoverData.Found) { "#ffc107" } else { "#28a745" }
-        $statusIcon = if ($LeftoverData.Found) { "[WARN]" } else { "[PASS]" }
-        $statusText = if ($LeftoverData.Found) { "Leftovers Detected" } else { "Clean Uninstall" }
+        # Determine status (machine-level leftovers are actionable; user-level leftovers may be preserved by policy).
+        $machineLeftoverCount = if ($LeftoverData.ContainsKey('MachineLeftoverCount')) { [int]$LeftoverData.MachineLeftoverCount } else { if ($LeftoverData.Found) { [int]$LeftoverData.Details.Count } else { 0 } }
+        $userLeftoverCount = if ($LeftoverData.ContainsKey('UserLeftoverCount')) { [int]$LeftoverData.UserLeftoverCount } else { 0 }
+
+        $statusColor = if ($machineLeftoverCount -gt 0) { "#ffc107" } else { "#28a745" }
+        $statusIcon = if ($machineLeftoverCount -gt 0) { "[WARN]" } else { "[PASS]" }
+        $statusText = if ($machineLeftoverCount -gt 0) { "Machine-Level Leftovers Detected" } else { "Machine-Level Uninstall Clean" }
         
         # Build leftovers HTML
         $leftoversHTML = ""
@@ -219,6 +222,9 @@ function New-HTMLLeftoverReport {
             $folders = $LeftoverData.Details | Where-Object { $_.Type -eq "Folder" }
             $registry = $LeftoverData.Details | Where-Object { $_.Type -eq "Registry" }
             $uninstallEntries = $LeftoverData.Details | Where-Object { $_.Type -eq "Uninstall Entry" }
+            $desktopShortcuts = $LeftoverData.Details | Where-Object { $_.Type -eq "Desktop Shortcut" }
+            $startMenuItems = $LeftoverData.Details | Where-Object { $_.Type -like "Start Menu*" }
+            $userScopedItems = $LeftoverData.Details | Where-Object { $_.Scope -eq "User" }
             
             if ($folders) {
                 $leftoversHTML += "<div class='leftover-section'>`n<h3>Leftover Folders</h3>`n<div class='leftover-list'>`n"
@@ -401,6 +407,32 @@ function New-HTMLUninstallReport {
                 }
                 $leftoversHTML += "</div>`n</div>`n"
             }
+
+            if ($desktopShortcuts) {
+                $leftoversHTML += "<div class='leftover-section'>`n<h3>Desktop Shortcuts ($($desktopShortcuts.Count))</h3>`n<div class='leftover-list'>`n"
+                foreach ($shortcut in $desktopShortcuts) {
+                    $scopeTag = if ($shortcut.Scope -eq 'User') { '[PRESERVED USER]' } else { '[MACHINE]' }
+                    $leftoversHTML += "<div class='leftover-item'><span class='item-type'>$scopeTag</span><span class='item-path'>$($shortcut.Location)</span></div>`n"
+                }
+                $leftoversHTML += "</div>`n</div>`n"
+            }
+
+            if ($startMenuItems) {
+                $leftoversHTML += "<div class='leftover-section'>`n<h3>Start Menu Components ($($startMenuItems.Count))</h3>`n<div class='leftover-list'>`n"
+                foreach ($smItem in $startMenuItems) {
+                    $scopeTag = if ($smItem.Scope -eq 'User') { '[PRESERVED USER]' } else { '[MACHINE]' }
+                    $leftoversHTML += "<div class='leftover-item'><span class='item-type'>$scopeTag</span><span class='item-path'>$($smItem.Location)</span></div>`n"
+                }
+                $leftoversHTML += "</div>`n</div>`n"
+            }
+
+            if ($userScopedItems) {
+                $leftoversHTML += "<div class='leftover-section'>`n<h3>Preserved User-Level Components ($($userScopedItems.Count))</h3>`n<div class='leftover-list'>`n"
+                foreach ($userItem in $userScopedItems) {
+                    $leftoversHTML += "<div class='leftover-item'><span class='item-type'>[PRESERVED]</span><span class='item-path'>$($userItem.Location)</span><div class='item-detail'>$($userItem.Type)</div></div>`n"
+                }
+                $leftoversHTML += "</div>`n</div>`n"
+            }
         } else {
             $leftoversHTML = "<div class='clean-message'>`n<div class='clean-icon'>[OK]</div>`n<div class='clean-text'>No leftovers detected. The uninstallation was clean!</div>`n</div>`n"
         }
@@ -479,7 +511,8 @@ function New-HTMLUninstallReport {
         $html += "<div class='info-card'><div class='info-label'>Version</div><div class='info-value'>$AppVersion</div></div>`n"
         $html += "<div class='info-card'><div class='info-label'>Vendor</div><div class='info-value'>$Vendor</div></div>`n"
         $html += "<div class='info-card'><div class='info-label'>Uninstall Date</div><div class='info-value'>$((Get-Date).ToString("MMMM dd, yyyy HH:mm:ss"))</div></div>`n"
-        $html += "<div class='info-card'><div class='info-label'>Leftovers Found</div><div class='info-value'>$(if ($LeftoverData.Found) { $LeftoverData.Details.Count } else { "0" })</div></div>`n"
+        $html += "<div class='info-card'><div class='info-label'>Machine-Level Leftovers</div><div class='info-value'>$machineLeftoverCount</div></div>`n"
+        $html += "<div class='info-card'><div class='info-label'>User-Level Preserved</div><div class='info-value'>$userLeftoverCount</div></div>`n"
         $html += "<div class='info-card'><div class='info-label'>Technician</div><div class='info-value'>$env:USERNAME</div></div>`n"
         $html += "</div>`n</div>`n"
         $html += "<div class='section'>`n<h2 class='section-title'>Uninstall Command Used</h2>`n"
@@ -494,6 +527,9 @@ function New-HTMLUninstallReport {
             $html += "<div class='cleanup-stat success'><div class='cleanup-stat-value'>$($CleanupResults.TotalCleaned)</div><div class='cleanup-stat-label'>Items Removed</div></div>`n"
             if ($CleanupResults.TotalFailed -gt 0) {
                 $html += "<div class='cleanup-stat failed'><div class='cleanup-stat-value'>$($CleanupResults.TotalFailed)</div><div class='cleanup-stat-label'>Items Failed</div></div>`n"
+            }
+            if ($CleanupResults.PreservedItems -and $CleanupResults.PreservedItems.Count -gt 0) {
+                $html += "<div class='cleanup-stat'><div class='cleanup-stat-value'>$($CleanupResults.PreservedItems.Count)</div><div class='cleanup-stat-label'>User-Level Preserved</div></div>`n"
             }
             $html += "</div>`n"
             
@@ -517,6 +553,15 @@ function New-HTMLUninstallReport {
                         $html += "<div class='cleanup-item-error'>Error: $($item.Error)</div>"
                     }
                     $html += "</div>`n"
+                }
+                $html += "</div>`n"
+            }
+
+            if ($CleanupResults.PreservedItems -and $CleanupResults.PreservedItems.Count -gt 0) {
+                $html += "<h3 style='color:#6c757d;margin-top:20px;'>Preserved By Policy (User-Level)</h3>`n"
+                $html += "<div class='cleanup-items'>`n"
+                foreach ($item in $CleanupResults.PreservedItems) {
+                    $html += "<div class='cleanup-item'><span class='cleanup-item-type'>[PRESERVED]</span>$($item.Location)</div>`n"
                 }
                 $html += "</div>`n"
             }

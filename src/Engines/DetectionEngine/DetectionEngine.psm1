@@ -100,5 +100,141 @@ function Get-InstallerType {
     }
 }
 
+function Get-InstallContextRecommendation {
+    <#
+    .SYNOPSIS
+        Detects likely install-context support and recommends User or System context.
+    .DESCRIPTION
+        Uses installer metadata, extension, installer type, and manifest text hints to produce
+        a best-effort recommendation with confidence and rationale.
+    .PARAMETER FilePath
+        Full path to installer media
+    .PARAMETER InstallerType
+        Detected installer type (optional)
+    .OUTPUTS
+        Hashtable with recommendation details
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+
+        [Parameter(Mandatory = $false)]
+        [string]$InstallerType = ""
+    )
+
+    $result = [ordered]@{
+        Success = $false
+        Recommendation = "System"
+        SupportsUser = $true
+        SupportsSystem = $true
+        Confidence = "Low"
+        Title = "Context Detection"
+        Reasons = @()
+        Details = @()
+    }
+
+    if (-not (Test-Path $FilePath)) {
+        $result.Reasons += "Installer file was not found."
+        return $result
+    }
+
+    try {
+        $extension = [System.IO.Path]::GetExtension($FilePath).ToLowerInvariant()
+        $fileName = [System.IO.Path]::GetFileName($FilePath).ToLowerInvariant()
+        $detectedType = if ([string]::IsNullOrWhiteSpace($InstallerType)) { Get-InstallerType -FilePath $FilePath } else { $InstallerType }
+
+        $result.Details += "Installer Type: $detectedType"
+        $result.Details += "Media Extension: $extension"
+
+        $recommended = "System"
+        $supportsUser = $true
+        $supportsSystem = $true
+        $confidence = "Medium"
+        $reasons = @()
+
+        if ($extension -eq ".msi") {
+            $recommended = "System"
+            $supportsUser = $true
+            $supportsSystem = $true
+            $confidence = "Medium"
+            $reasons += "MSI supports enterprise system deployment patterns and can often run per-user depending on package authoring."
+
+            if ($fileName -match "peruser|per-user|user") {
+                $recommended = "User"
+                $confidence = "Medium"
+                $reasons += "Filename suggests per-user install intent."
+            }
+        }
+        else {
+            $fileInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($FilePath)
+            $company = if ($fileInfo.CompanyName) { $fileInfo.CompanyName } else { "" }
+            $product = if ($fileInfo.ProductName) { $fileInfo.ProductName } else { "" }
+            $detailsBlob = ("{0} {1} {2}" -f $company, $product, $fileName).ToLowerInvariant()
+
+            $manifestHint = ""
+            try {
+                $bytes = [System.IO.File]::ReadAllBytes($FilePath)
+                $asciiText = [System.Text.Encoding]::ASCII.GetString($bytes)
+                if ($asciiText -match "requestedExecutionLevel" -and $asciiText -match "requireAdministrator") {
+                    $manifestHint = "requireAdministrator"
+                }
+                elseif ($asciiText -match "requestedExecutionLevel" -and $asciiText -match "asInvoker") {
+                    $manifestHint = "asInvoker"
+                }
+            }
+            catch {
+                # Best-effort hint only.
+            }
+
+            if ($manifestHint -eq "requireAdministrator") {
+                $recommended = "System"
+                $supportsUser = $false
+                $supportsSystem = $true
+                $confidence = "High"
+                $reasons += "Manifest indicates requireAdministrator, which requires elevated/system-style install context."
+            }
+            elseif ($manifestHint -eq "asInvoker") {
+                $recommended = "User"
+                $supportsUser = $true
+                $supportsSystem = $true
+                $confidence = "Medium"
+                $reasons += "Manifest indicates asInvoker, which often supports user-context execution."
+            }
+
+            if ($detailsBlob -match "machine-wide|all users|allusers") {
+                $recommended = "System"
+                $confidence = "High"
+                $reasons += "Installer metadata suggests machine-wide deployment."
+            }
+            elseif ($detailsBlob -match "per-user|current user|for me only") {
+                $recommended = "User"
+                $confidence = "High"
+                $reasons += "Installer metadata suggests per-user deployment."
+            }
+
+            if ($reasons.Count -eq 0) {
+                $recommended = "System"
+                $confidence = "Low"
+                $reasons += "No strong context signals were detected; defaulting to system context for enterprise packaging safety."
+            }
+        }
+
+        $result.Success = $true
+        $result.Recommendation = $recommended
+        $result.SupportsUser = $supportsUser
+        $result.SupportsSystem = $supportsSystem
+        $result.Confidence = $confidence
+        $result.Title = "Context Detection: Recommended $recommended ($confidence confidence)"
+        $result.Reasons = $reasons
+    }
+    catch {
+        $result.Success = $false
+        $result.Reasons += "Context detection failed: $($_.Exception.Message)"
+    }
+
+    return $result
+}
+
 # Export public functions
-Export-ModuleMember -Function Get-InstallerType
+Export-ModuleMember -Function Get-InstallerType, Get-InstallContextRecommendation
