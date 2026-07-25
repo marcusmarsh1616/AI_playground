@@ -2050,8 +2050,9 @@ function Set-PackageHelperTabContent {
     )
 
     $script:PackageHelperData = $HelperData
+    $sectionKeys = @($script:PackageHelperControls.Keys)
 
-    foreach ($sectionKey in $script:PackageHelperControls.Keys) {
+    foreach ($sectionKey in $sectionKeys) {
         $sectionState = $script:PackageHelperControls[$sectionKey]
         if ($HelperData.Sections.Contains($sectionKey)) {
             $section = $HelperData.Sections[$sectionKey]
