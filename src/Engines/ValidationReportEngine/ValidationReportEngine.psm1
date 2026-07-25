@@ -80,27 +80,54 @@ function Start-ValidationReportCapture {
             return $result
         }
 
-        if (-not (Test-Path $outputFolder)) {
-            $result.Success = $true
-            $result.Message = "Validation tool closed. Documentation output folder was not found."
+        if ($launcherResult -and $launcherResult.PSObject.Properties.Name -contains 'Success' -and -not $launcherResult.Success) {
+            $result.Message = if ($launcherResult.Message) { "Validation documentation tool failed: $($launcherResult.Message)" } else { "Validation documentation tool reported failure." }
             return $result
         }
 
-        $latestReport = Get-ChildItem -Path $outputFolder -Filter "*.html" -File -ErrorAction SilentlyContinue |
-            Where-Object { $_.LastWriteTime -ge $startTime } |
-            Sort-Object LastWriteTime -Descending |
-            Select-Object -First 1
+        $sourceReportPath = ""
+        if ($launcherResult -and $launcherResult.PSObject.Properties.Name -contains 'OutputPath' -and -not [string]::IsNullOrWhiteSpace([string]$launcherResult.OutputPath)) {
+            $candidateOutputPath = [string]$launcherResult.OutputPath
+            if (Test-Path $candidateOutputPath) {
+                $sourceReportPath = $candidateOutputPath
+            }
+        }
 
-        if (-not $latestReport) {
+        if ([string]::IsNullOrWhiteSpace($sourceReportPath)) {
+            if (-not (Test-Path $outputFolder)) {
+                $result.Success = $true
+                if ($launcherResult -and $launcherResult.Message) {
+                    $result.Message = "Validation tool completed: $($launcherResult.Message)"
+                }
+                else {
+                    $result.Message = "Validation tool closed. Documentation output folder was not found."
+                }
+                return $result
+            }
+
             $latestReport = Get-ChildItem -Path $outputFolder -Filter "*.html" -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.LastWriteTime -ge $startTime } |
                 Sort-Object LastWriteTime -Descending |
                 Select-Object -First 1
-        }
 
-        if (-not $latestReport) {
-            $result.Success = $true
-            $result.Message = "Validation tool closed. No report file was found to copy."
-            return $result
+            if (-not $latestReport) {
+                $latestReport = Get-ChildItem -Path $outputFolder -Filter "*.html" -File -ErrorAction SilentlyContinue |
+                    Sort-Object LastWriteTime -Descending |
+                    Select-Object -First 1
+            }
+
+            if (-not $latestReport) {
+                $result.Success = $true
+                if ($launcherResult -and $launcherResult.Message) {
+                    $result.Message = "Validation tool completed: $($launcherResult.Message)"
+                }
+                else {
+                    $result.Message = "Validation tool closed. No report file was found to copy."
+                }
+                return $result
+            }
+
+            $sourceReportPath = $latestReport.FullName
         }
 
         $docsFolder = Join-Path $PackagePath "docs"
@@ -118,7 +145,14 @@ function Start-ValidationReportCapture {
         $reportFileName = $reportFileName -replace '[<>:"/\\|?*]', '_'
 
         $targetReportPath = Join-Path $docsFolder $reportFileName
-        Copy-Item -Path $latestReport.FullName -Destination $targetReportPath -Force
+        Copy-Item -Path $sourceReportPath -Destination $targetReportPath -Force
+
+        try {
+            Start-Process -FilePath $targetReportPath | Out-Null
+        }
+        catch {
+            # Non-fatal: report is still generated and copied successfully.
+        }
 
         $result.ReportCopied = $true
         $result.CopiedReportPath = $targetReportPath
