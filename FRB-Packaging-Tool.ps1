@@ -627,11 +627,12 @@ if (Test-Path $configPath) {
                                         $WshShell = New-Object -ComObject WScript.Shell
                                         $StartMenuPath = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"
                                         $ShortcutPath = Join-Path $StartMenuPath "FRB Packaging Tool.lnk"
+                                        $ShortcutIconPath = Join-Path $destinationToolPath "config\pf_logo.ico"
                                         $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
                                         $Shortcut.TargetPath = "powershell.exe"
                                         $Shortcut.Arguments = "-ExecutionPolicy Bypass -File `"$newToolScriptPath`""
                                         $Shortcut.WorkingDirectory = $destinationToolPath
-                                        $Shortcut.IconLocation = ".\\config\\pf_logo.ico"
+                                        $Shortcut.IconLocation = "$ShortcutIconPath,0"
                                         $Shortcut.Description = "FRB Packaging Tool"
                                         $Shortcut.Save()
                                         Write-Verbose "Start Menu shortcut created: $ShortcutPath"
@@ -1761,8 +1762,8 @@ function Get-PackageHelperSuggestionValue {
     }
 
     $escapedVar = [regex]::Escape($VariableName)
-    $singlePattern = "(?s)\$${escapedVar}\s*=\s*'([^']*)'"
-    $doublePattern = "(?s)\$${escapedVar}\s*=\s*\"([^\"]*)\""
+    $singlePattern = '(?s)\$' + $escapedVar + '\s*=\s*''([^'']*)'''
+    $doublePattern = '(?s)\$' + $escapedVar + '\s*=\s*"([^"]*)"'
 
     if ($Snippet -match $singlePattern) {
         return $matches[1]
@@ -2143,7 +2144,10 @@ function Set-InstallContextState {
     }
 
     if ($script:lblPackageHelperContext) {
-        $suffix = if ([string]::IsNullOrWhiteSpace($Reason)) { "" } else { " | $Reason" }
+        $suffix = ""
+        if (-not [string]::IsNullOrWhiteSpace($Reason)) {
+            $suffix = " | $Reason"
+        }
         $script:lblPackageHelperContext.Text = "Install context selected: $normalized$suffix"
         $script:lblPackageHelperContext.ForeColor = [System.Drawing.Color]::FromArgb(0, 110, 0)
     }
