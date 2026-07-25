@@ -1762,8 +1762,8 @@ function Get-PackageHelperSuggestionValue {
     }
 
     $escapedVar = [regex]::Escape($VariableName)
-    $singlePattern = "(?s)\$${escapedVar}\s*=\s*'([^']*)'"
-    $doublePattern = "(?s)\$${escapedVar}\s*=\s*\"([^\"]*)\""
+    $singlePattern = '(?s)\$' + $escapedVar + '\s*=\s*''([^'']*)'''
+    $doublePattern = '(?s)\$' + $escapedVar + '\s*=\s*"([^"]*)"'
 
     if ($Snippet -match $singlePattern) {
         return $matches[1]
@@ -2144,7 +2144,10 @@ function Set-InstallContextState {
     }
 
     if ($script:lblPackageHelperContext) {
-        $suffix = if ([string]::IsNullOrWhiteSpace($Reason)) { "" } else { " | $Reason" }
+        $suffix = ""
+        if (-not [string]::IsNullOrWhiteSpace($Reason)) {
+            $suffix = " | $Reason"
+        }
         $script:lblPackageHelperContext.Text = "Install context selected: $normalized$suffix"
         $script:lblPackageHelperContext.ForeColor = [System.Drawing.Color]::FromArgb(0, 110, 0)
     }
