@@ -2009,6 +2009,18 @@ function Apply-PackageHelperSectionToGui {
                 $applied = $true
             }
         }
+        "CustomInstallCommands" {
+            $applied = Add-UniqueHelperSnippet -TargetTextBox $txtCustomInstall -Snippet $snippet
+        }
+        "PostInstallCommands" {
+            $applied = Add-UniqueHelperSnippet -TargetTextBox $txtPostInstall -Snippet $snippet
+        }
+        "CustomUninstallCommands" {
+            $applied = Add-UniqueHelperSnippet -TargetTextBox $txtCustomUninstall -Snippet $snippet
+        }
+        "PostUninstallCommands" {
+            $applied = Add-UniqueHelperSnippet -TargetTextBox $txtPostUninstall -Snippet $snippet
+        }
         "PreInstallChecks" {
             $applied = Add-UniqueHelperSnippet -TargetTextBox $txtPreInstall -Snippet $snippet
         }
@@ -2026,7 +2038,7 @@ function Apply-PackageHelperSectionToGui {
 }
 
 function Apply-AllPackageHelperSuggestionsToGui {
-    $applyOrder = @("InstallCommand", "UninstallCommand", "UninstallExecutable", "PreInstallChecks", "Prerequisites")
+    $applyOrder = @("ContextSelection", "InstallCommand", "UninstallCommand", "UninstallExecutable", "CustomInstallCommands", "PostInstallCommands", "CustomUninstallCommands", "PostUninstallCommands", "PreInstallChecks", "Prerequisites")
     $appliedCount = 0
 
     foreach ($sectionKey in $applyOrder) {
@@ -2265,8 +2277,8 @@ $script:CodeEditorToolTip.ForeColor = [System.Drawing.Color]::FromArgb(40, 40, 4
 
 # TabControl creation# TabControl creation
 $tabControl = New-Object System.Windows.Forms.TabControl
-$tabControl.Location = New-Object System.Drawing.Point(20, 40)
-$tabControl.Size = New-Object System.Drawing.Size(860, 670)
+$tabControl.Location = New-Object System.Drawing.Point(20, 24)
+$tabControl.Size = New-Object System.Drawing.Size(860, 690)
 $tabControl.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($tabControl)
 
@@ -2780,21 +2792,21 @@ $tabControl.Controls.Add($tabPackageHelper)
 
 $lblPackageHelperHeader = New-Object System.Windows.Forms.Label
 $lblPackageHelperHeader.Text = "Package Helper - Copy/Paste Ready Suggestions"
-$lblPackageHelperHeader.Location = New-Object System.Drawing.Point(20, 15)
-$lblPackageHelperHeader.Size = New-Object System.Drawing.Size(800, 24)
+$lblPackageHelperHeader.Location = New-Object System.Drawing.Point(20, 4)
+$lblPackageHelperHeader.Size = New-Object System.Drawing.Size(500, 22)
 $lblPackageHelperHeader.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
 $tabPackageHelper.Controls.Add($lblPackageHelperHeader)
 
 $script:lblPackageHelperContext = New-Object System.Windows.Forms.Label
 $script:lblPackageHelperContext.Text = "Click Help package to generate section guidance for this app."
-$script:lblPackageHelperContext.Location = New-Object System.Drawing.Point(20, 42)
-$script:lblPackageHelperContext.Size = New-Object System.Drawing.Size(620, 20)
+$script:lblPackageHelperContext.Location = New-Object System.Drawing.Point(20, 26)
+$script:lblPackageHelperContext.Size = New-Object System.Drawing.Size(500, 18)
 $script:lblPackageHelperContext.ForeColor = [System.Drawing.Color]::Gray
 $tabPackageHelper.Controls.Add($script:lblPackageHelperContext)
 
 $btnRefreshPackageHelper = New-Object System.Windows.Forms.Button
 $btnRefreshPackageHelper.Text = "Refresh Helper"
-$btnRefreshPackageHelper.Location = New-Object System.Drawing.Point(670, 38)
+$btnRefreshPackageHelper.Location = New-Object System.Drawing.Point(670, 22)
 $btnRefreshPackageHelper.Size = New-Object System.Drawing.Size(130, 28)
 $btnRefreshPackageHelper.BackColor = $Colors.AccentTeal
 $btnRefreshPackageHelper.ForeColor = [System.Drawing.Color]::White
@@ -2804,7 +2816,7 @@ $tabPackageHelper.Controls.Add($btnRefreshPackageHelper)
 
 $btnApplyAllPackageHelper = New-Object System.Windows.Forms.Button
 $btnApplyAllPackageHelper.Text = "Apply All to GUI"
-$btnApplyAllPackageHelper.Location = New-Object System.Drawing.Point(530, 38)
+$btnApplyAllPackageHelper.Location = New-Object System.Drawing.Point(530, 22)
 $btnApplyAllPackageHelper.Size = New-Object System.Drawing.Size(130, 28)
 $btnApplyAllPackageHelper.BackColor = $Colors.SuccessGreen
 $btnApplyAllPackageHelper.ForeColor = [System.Drawing.Color]::White
@@ -2813,7 +2825,7 @@ $btnApplyAllPackageHelper.FlatAppearance.BorderSize = 0
 $tabPackageHelper.Controls.Add($btnApplyAllPackageHelper)
 
 $panelPackageHelper = New-Object System.Windows.Forms.Panel
-$panelPackageHelper.Location = New-Object System.Drawing.Point(20, 72)
+$panelPackageHelper.Location = New-Object System.Drawing.Point(20, 58)
 $panelPackageHelper.Size = New-Object System.Drawing.Size(820, 540)
 $panelPackageHelper.AutoScroll = $true
 $panelPackageHelper.BackColor = $Colors.Background
@@ -2824,6 +2836,10 @@ $sectionLayout = @(
     @{ Key = "InstallCommand"; Title = "Install Command Line" },
     @{ Key = "UninstallCommand"; Title = "Uninstall Command Line" },
     @{ Key = "UninstallExecutable"; Title = "Uninstall Executable" },
+    @{ Key = "CustomInstallCommands"; Title = "Custom Install Commands" },
+    @{ Key = "PostInstallCommands"; Title = "Post-Install Commands" },
+    @{ Key = "CustomUninstallCommands"; Title = "Custom Uninstall Commands" },
+    @{ Key = "PostUninstallCommands"; Title = "Post-Uninstall Commands" },
     @{ Key = "PreInstallChecks"; Title = "Pre-Install Checks" },
     @{ Key = "Prerequisites"; Title = "Prerequisite Checks" }
 )
