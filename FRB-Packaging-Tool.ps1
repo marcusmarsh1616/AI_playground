@@ -3577,12 +3577,12 @@ function Load-ExistingPackageDataIfPresent {
         Write-ProcessOutputLine -Message ("Existing package load from {0}" -f $existingStartupPath) -Level "INFO"
         Write-ProcessOutputLine -Message ("Loaded command lengths | PreInstall={0} CustomInstall={1} PostInstall={2} PreUninstall={3} CustomUninstall={4} PostUninstall={5}" -f $loadResult.PreInstall.Length, $loadResult.CustomInstall.Length, $loadResult.PostInstall.Length, $loadResult.PreUninstall.Length, $loadResult.CustomUninstall.Length, $loadResult.PostUninstall.Length) -Level "INFO"
 
-        Set-CommandSectionState -HeaderLabel $script:lblPreInstallHeader -Editor $script:txtPreInstall -Text $loadResult.PreInstall
-        Set-CommandSectionState -HeaderLabel $script:lblCustomInstallHeader -Editor $script:txtCustomInstall -Text $loadResult.CustomInstall
-        Set-CommandSectionState -HeaderLabel $script:lblPostInstallHeader -Editor $script:txtPostInstall -Text $loadResult.PostInstall
-        Set-CommandSectionState -HeaderLabel $script:lblPreUninstallHeader -Editor $script:txtPreUninstall -Text $loadResult.PreUninstall
-        Set-CommandSectionState -HeaderLabel $script:lblCustomUninstallHeader -Editor $script:txtCustomUninstall -Text $loadResult.CustomUninstall
-        Set-CommandSectionState -HeaderLabel $script:lblPostUninstallHeader -Editor $script:txtPostUninstall -Text $loadResult.PostUninstall
+        if ($script:txtPreInstall) { $script:txtPreInstall.Text = Format-CodeEditorText -Text $loadResult.PreInstall }
+        if ($script:txtCustomInstall) { $script:txtCustomInstall.Text = Format-CodeEditorText -Text $loadResult.CustomInstall }
+        if ($script:txtPostInstall) { $script:txtPostInstall.Text = Format-CodeEditorText -Text $loadResult.PostInstall }
+        if ($script:txtPreUninstall) { $script:txtPreUninstall.Text = Format-CodeEditorText -Text $loadResult.PreUninstall }
+        if ($script:txtCustomUninstall) { $script:txtCustomUninstall.Text = Format-CodeEditorText -Text $loadResult.CustomUninstall }
+        if ($script:txtPostUninstall) { $script:txtPostUninstall.Text = Format-CodeEditorText -Text $loadResult.PostUninstall }
 
         Ensure-CustomUninstallTextBound -ExpectedText $loadResult.CustomUninstall -Stage "post-bind"
 
