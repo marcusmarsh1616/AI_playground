@@ -318,6 +318,7 @@ function Get-PackageHelpSections {
     $presetUninstallExeOptions = @()
     $presetPreInstallChecks = @()
     $presetPrerequisiteSuggestions = @()
+    $presetPreUninstallSuggestions = @()
     $presetCustomInstallSuggestions = @()
     $presetPostInstallSuggestions = @()
     $presetCustomUninstallSuggestions = @()
@@ -407,69 +408,8 @@ if (`$tempDrive -and `$tempDrive.Free -lt 6GB) {
         )
     }
 
-    $presetCustomInstallSuggestions = @(
-@"
-# Custom install task template
-Write-Log -Message 'Starting custom install steps.' -Source 'Custom-Install'
-
-# Example: create a registry value, copy a file, or launch a follow-up command.
-"@
-    )
-
-    $presetPostInstallSuggestions = @(
-@"
-# Post-install task template
-Write-Log -Message 'Running post-install tasks.' -Source 'Post-Install'
-
-# Example: verify shortcuts, set defaults, or remove temporary files.
-"@
-    )
-
-    $presetCustomUninstallSuggestions = @(
-@"
-# Custom uninstall task template
-Write-Log -Message 'Starting custom uninstall steps.' -Source 'Custom-Uninstall'
-
-# Example: call vendor uninstall switches or remove machine-level leftovers.
-"@
-    )
-
-    $presetPostUninstallSuggestions = @(
-@"
-# Post-uninstall task template
-Write-Log -Message 'Running post-uninstall tasks.' -Source 'Post-Uninstall'
-
-# Example: preserve user profile data, clean machine-level files, and write report notes.
-"@
-    )
-
-    if ($safeContext -eq 'User') {
-        $presetCustomInstallSuggestions += @(
-@"
-# User-context note
-# Keep writes inside HKCU and AppData when possible.
-"@
-        )
-        $presetPostInstallSuggestions += @(
-@"
-# User-context note
-# Avoid machine-wide cleanup here unless the package explicitly requires it.
-"@
-        )
-    } else {
-        $presetCustomUninstallSuggestions += @(
-@"
-# System-context note
-# Elevated cleanup can remove machine-level shortcuts and folders safely.
-"@
-        )
-        $presetPostUninstallSuggestions += @(
-@"
-# System-context note
-# Preserve user-level folders/data so reinstall remains friendly.
-"@
-        )
-    }
+    # Keep custom command suggestions empty by default.
+    # Technicians can populate these manually when app-specific logic is required.
 
     $installCommandSuggestions = @()
     if ($presetInstallCommandSuggestions.Count -gt 0) {
@@ -596,6 +536,7 @@ if (`$installContext -eq 'User' -and [Security.Principal.WindowsIdentity]::GetCu
     $defaultUninstallExeOptions = @($defaultUninstallExeOptions | Select-Object -Unique)
     $preInstallChecks = @($preInstallChecks | Select-Object -Unique)
     $prerequisiteSuggestions = @($prerequisiteSuggestions | Select-Object -Unique)
+    $preUninstallSuggestions = @($presetPreUninstallSuggestions | Select-Object -Unique)
     $customInstallSuggestions = @($presetCustomInstallSuggestions | Select-Object -Unique)
     $postInstallSuggestions = @($presetPostInstallSuggestions | Select-Object -Unique)
     $customUninstallSuggestions = @($presetCustomUninstallSuggestions | Select-Object -Unique)
@@ -661,35 +602,35 @@ if (`$installContext -eq 'User' -and [Security.Principal.WindowsIdentity]::GetCu
                 Summary = "Possible uninstall executable names/strategies to try. Preset: $presetName."
                 Suggestions = $defaultUninstallExeOptions
             }
+            PreInstallCommands = [ordered]@{
+                Title = "Pre-Install Commands"
+                Summary = "Optional pre-install command snippets for $productDisplay."
+                Suggestions = $preInstallChecks
+            }
             CustomInstallCommands = [ordered]@{
                 Title = "Custom Install Commands"
-                Summary = "Starter custom-install patterns for $productDisplay. Use these when the app needs extra actions beyond the silent switch."
+                Summary = "Optional custom install commands for $productDisplay. Left blank when no app-specific steps are suggested."
                 Suggestions = $customInstallSuggestions
             }
             PostInstallCommands = [ordered]@{
                 Title = "Post-Install Commands"
-                Summary = "Starter post-install patterns for $productDisplay. Use these for cleanup, shortcut checks, or verification after install."
+                Summary = "Optional post-install commands for $productDisplay. Left blank when no app-specific steps are suggested."
                 Suggestions = $postInstallSuggestions
+            }
+            PreUninstallCommands = [ordered]@{
+                Title = "Pre-Uninstall Commands"
+                Summary = "Optional pre-uninstall commands for $productDisplay. Left blank when no app-specific steps are suggested."
+                Suggestions = $preUninstallSuggestions
             }
             CustomUninstallCommands = [ordered]@{
                 Title = "Custom Uninstall Commands"
-                Summary = "Starter custom-uninstall patterns for $productDisplay. Use these for vendor uninstall flow or elevated removal actions."
+                Summary = "Optional custom uninstall commands for $productDisplay. Left blank when no app-specific steps are suggested."
                 Suggestions = $customUninstallSuggestions
             }
             PostUninstallCommands = [ordered]@{
                 Title = "Post-Uninstall Commands"
-                Summary = "Starter post-uninstall patterns for $productDisplay. Use these for leftover cleanup and user-data preservation guidance."
+                Summary = "Optional post-uninstall commands for $productDisplay. Left blank when no app-specific steps are suggested."
                 Suggestions = $postUninstallSuggestions
-            }
-            PreInstallChecks = [ordered]@{
-                Title = "Pre-Install Checks"
-                Summary = "Guard rails that avoid common silent install failures before execution. Preset: $presetName."
-                Suggestions = $preInstallChecks
-            }
-            Prerequisites = [ordered]@{
-                Title = "Prerequisite Checks"
-                Summary = "Sample prerequisites that often block install success in enterprise deployments. Preset: $presetName."
-                Suggestions = $prerequisiteSuggestions
             }
         }
     }

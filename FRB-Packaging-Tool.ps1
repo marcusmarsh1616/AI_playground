@@ -137,6 +137,11 @@ $script:ContextRecommendation = @{}
 $script:PackageHelperControls = @{}
 $script:PackageHelperData = $null
 $script:CodeEditorToolTip = $null
+$script:ProcessOutputBox = $null
+$script:ProcessTab = $null
+$script:ProcessLogPath = ""
+$script:ProcessErrorLogPath = ""
+$script:ProcessLogBuffer = New-Object System.Collections.Generic.List[string]
 
 #region Configuration
 
@@ -704,10 +709,94 @@ if ([string]::IsNullOrWhiteSpace($script:MasterTemplatePath) -or -not (Test-Path
 #region Helper Functions
 
 # Function to update status
+function Write-ProcessOutputLine {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Message,
+
+        [string]$Level = "INFO"
+    )
+
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $line = "[{0}] [{1}] {2}" -f $timestamp, $Level, $Message
+
+    if ($script:ProcessOutputBox -and -not $script:ProcessOutputBox.IsDisposed) {
+        $script:ProcessOutputBox.AppendText($line + [Environment]::NewLine)
+        $script:ProcessOutputBox.SelectionStart = $script:ProcessOutputBox.TextLength
+        $script:ProcessOutputBox.ScrollToCaret()
+    }
+
+    if ($script:ProcessLogPath -and (Test-Path (Split-Path $script:ProcessLogPath -Parent))) {
+        Add-Content -Path $script:ProcessLogPath -Value $line -Encoding UTF8
+        if ($Level -eq "ERROR" -and $script:ProcessErrorLogPath) {
+            Add-Content -Path $script:ProcessErrorLogPath -Value $line -Encoding UTF8
+        }
+    }
+    else {
+        [void]$script:ProcessLogBuffer.Add($line)
+    }
+}
+
+function Initialize-PackageProcessLogs {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PackagePath
+    )
+
+    try {
+        $logsPath = Join-Path $PackagePath "logs"
+        if (-not (Test-Path $logsPath)) {
+            New-Item -Path $logsPath -ItemType Directory -Force | Out-Null
+        }
+
+        $script:ProcessLogPath = Join-Path $logsPath "Tool_Process.log"
+        $script:ProcessErrorLogPath = Join-Path $logsPath "Tool_Error.log"
+
+        if (-not (Test-Path $script:ProcessLogPath)) { New-Item -Path $script:ProcessLogPath -ItemType File -Force | Out-Null }
+        if (-not (Test-Path $script:ProcessErrorLogPath)) { New-Item -Path $script:ProcessErrorLogPath -ItemType File -Force | Out-Null }
+
+        if ($script:ProcessLogBuffer.Count -gt 0) {
+            Add-Content -Path $script:ProcessLogPath -Value @($script:ProcessLogBuffer) -Encoding UTF8
+            foreach ($entry in @($script:ProcessLogBuffer)) {
+                if ($entry -match '\[ERROR\]') {
+                    Add-Content -Path $script:ProcessErrorLogPath -Value $entry -Encoding UTF8
+                }
+            }
+            $script:ProcessLogBuffer.Clear()
+        }
+
+        Write-ProcessOutputLine -Message "Process logging initialized at: $logsPath" -Level "INFO"
+    }
+    catch {
+        Write-ProcessOutputLine -Message ("Failed to initialize package logs: {0}" -f $_.Exception.Message) -Level "ERROR"
+    }
+}
+
+function Start-ProcessSession {
+    if ($script:ProcessOutputBox -and -not $script:ProcessOutputBox.IsDisposed) {
+        $script:ProcessOutputBox.Clear()
+    }
+
+    $script:ProcessLogPath = ""
+    $script:ProcessErrorLogPath = ""
+    if (-not $script:ProcessLogBuffer) {
+        $script:ProcessLogBuffer = New-Object System.Collections.Generic.List[string]
+    }
+    else {
+        $script:ProcessLogBuffer.Clear()
+    }
+
+    Write-ProcessOutputLine -Message "Packaging session started." -Level "INFO"
+}
+
 function Update-Status {
     param([string]$Message, [string]$Color = "Blue")
     $lblStatus.Text = $Message
     $lblStatus.ForeColor = [System.Drawing.Color]::$Color
+
+    $level = if ($Color -eq "Red") { "ERROR" } elseif ($Color -eq "Orange") { "WARN" } else { "INFO" }
+    Write-ProcessOutputLine -Message $Message -Level $level
+
     $form.Refresh()
 }
 
@@ -724,7 +813,8 @@ function Update-StartupFile {
         [string]$InstallSwitch = "",
         [string]$UninstallSwitch = ""
     ,
-        [string]$RequiredProcesses = ""
+        [string]$RequiredProcesses = "",
+        [string]$InstallContext = "System"
     )
     
     try {
@@ -766,6 +856,8 @@ function Update-StartupFile {
         $scriptDateUpdated = $false
         $scriptBuildVersionUpdated = $false
         $stopProcessesUpdated = $false
+        $installContextUpdated = $false
+        $normalizedContext = if ($InstallContext -eq "User") { "User" } else { "System" }
         
         for ($i = 0; $i -lt $lines.Count; $i++) {
             if ($lines[$i] -match '##\*\s*VARIABLE DECLARATION') {
@@ -868,6 +960,10 @@ function Update-StartupFile {
                     # Always leave empty - don't auto-populate
                     $stopProcessesUpdated = $true
                 }
+                elseif (-not $installContextUpdated -and $lines[$i] -match '^\s*\[string\]\$installContext\s*=\s*[\x27\x22].*?[\x27\x22]') {
+                    $lines[$i] = "`t[string]`$installContext = '$normalizedContext' # shows what context this app should run in; System or User"
+                    $installContextUpdated = $true
+                }
             }
         }
         
@@ -917,6 +1013,8 @@ function New-PackagingFolder {
             # UPDATE MODE: Folder exists, only update Startup.pss
             Update-Status "Package exists - updating Startup.pss with new settings..." "Orange"
             $progressBar.Value = 20
+
+            Initialize-PackageProcessLogs -PackagePath $newFolderPath
             
             # Skip to Startup.pss update (jump to line ~350)
             $progressBar.Value = 80
@@ -941,6 +1039,7 @@ function New-PackagingFolder {
         }
         
         $newFolderPath = $folderResult.FolderPath
+        Initialize-PackageProcessLogs -PackagePath $newFolderPath
         $progressBar.Value = 40
         Update-Status "Folder created: $newFolderPath"
 
@@ -1008,7 +1107,8 @@ function New-PackagingFolder {
                               -UninstallExeName $uninstallExeName `
                               -InstallSwitch $installSwitch `
                               -UninstallSwitch $uninstallSwitch `
-                              -RequiredProcesses ""
+                              -RequiredProcesses "" `
+                              -InstallContext $script:SelectedInstallContext
         } else {
             throw "Startup.pss file not found: $startupPath"
         }
@@ -1195,10 +1295,31 @@ function Start-BuildTestDeployWorkflow {
     
     $progressBar.Value = 40
 
-    # USER CONTEXT: Modify files BEFORE building if checkbox is checked
-    if ($chkUserContext.Checked) {
+    # USER CONTEXT: Modify files BEFORE building if selected
+    if ($script:SelectedInstallContext -eq "User") {
         Update-Status "User Context enabled - Modifying Startup.pss and .psbuild..." "Blue"
         $form.Refresh()
+
+        if ($script:ContextRecommendation -and $script:ContextRecommendation.Recommendation -eq "System") {
+            $uacLikely = $false
+            if ($script:ContextRecommendation.Reasons) {
+                foreach ($r in @($script:ContextRecommendation.Reasons)) {
+                    if ($r -match '(?i)requireAdministrator|service|driver|system-wide|machine') {
+                        $uacLikely = $true
+                        break
+                    }
+                }
+            }
+
+            if ($uacLikely) {
+                [System.Windows.Forms.MessageBox]::Show(
+                    "This installer appears to require elevated rights by vendor design.`n`nEven with User context selected, Windows may still show a UAC prompt when the vendor installer starts.`n`nIf zero UAC is required, verify the vendor supports a true per-user installer/switch.",
+                    "User Context Notice",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Information
+                )
+            }
+        }
 
         # Modify Startup.pss - Change installContext from System to User
         $startupPath = Join-Path $script:LastCreatedPackagePath "Startup.pss"
@@ -1209,13 +1330,14 @@ function Start-BuildTestDeployWorkflow {
             Write-Verbose "Startup.pss: installContext set to User"
         }
 
-        # Modify .psbuild - Change ManifestType from 2 to 1
+        # Modify .psbuild - Use default embedded manifest for user context
         $psbuildPath = $projPath + ".psbuild"
         if (Test-Path $psbuildPath) {
             $psbuildContent = Get-Content $psbuildPath -Raw -Encoding Unicode
-            $psbuildContent = $psbuildContent -replace "ManifestType\s*=\s*\d+", "ManifestType = 3"
+            $psbuildContent = $psbuildContent -replace "ManifestType\s*=\s*\d+", "ManifestType=1"
+            $psbuildContent = $psbuildContent -replace "UseRunAs\s*=\s*\d+", "UseRunAs=0"
             Set-Content -Path $psbuildPath -Value $psbuildContent -Encoding Unicode -Force
-            Write-Verbose ".psbuild: ManifestType set to 3 (embed default manifest - no elevation)"
+            Write-Verbose ".psbuild: ManifestType set to 1 (embed default manifest - no elevation)"
         }
 
         Update-Status "User Context modifications complete. Building..." "Green"
@@ -1238,7 +1360,8 @@ function Start-BuildTestDeployWorkflow {
         $psbuildPath = $projPath + ".psbuild"
         if (Test-Path $psbuildPath) {
             $psbuildContent = Get-Content $psbuildPath -Raw -Encoding Unicode
-            $psbuildContent = $psbuildContent -replace "ManifestType\s*=\s*\d+", "ManifestType = 2"
+            $psbuildContent = $psbuildContent -replace "ManifestType\s*=\s*\d+", "ManifestType=2"
+            $psbuildContent = $psbuildContent -replace "UseRunAs\s*=\s*\d+", "UseRunAs=0"
             Set-Content -Path $psbuildPath -Value $psbuildContent -Encoding Unicode -Force
             Write-Verbose ".psbuild: ManifestType set to 2 (requireAdministrator)"
         }
@@ -2021,11 +2144,11 @@ function Apply-PackageHelperSectionToGui {
         "PostUninstallCommands" {
             $applied = Add-UniqueHelperSnippet -TargetTextBox $txtPostUninstall -Snippet $snippet
         }
-        "PreInstallChecks" {
+        "PreInstallCommands" {
             $applied = Add-UniqueHelperSnippet -TargetTextBox $txtPreInstall -Snippet $snippet
         }
-        "Prerequisites" {
-            $applied = Add-UniqueHelperSnippet -TargetTextBox $txtPreInstall -Snippet $snippet
+        "PreUninstallCommands" {
+            $applied = Add-UniqueHelperSnippet -TargetTextBox $txtPreUninstall -Snippet $snippet
         }
     }
 
@@ -2038,7 +2161,7 @@ function Apply-PackageHelperSectionToGui {
 }
 
 function Apply-AllPackageHelperSuggestionsToGui {
-    $applyOrder = @("ContextSelection", "InstallCommand", "UninstallCommand", "UninstallExecutable", "CustomInstallCommands", "PostInstallCommands", "CustomUninstallCommands", "PostUninstallCommands", "PreInstallChecks", "Prerequisites")
+    $applyOrder = @("ContextSelection", "InstallCommand", "UninstallCommand", "UninstallExecutable", "PreInstallCommands", "CustomInstallCommands", "PostInstallCommands", "PreUninstallCommands", "CustomUninstallCommands", "PostUninstallCommands")
     $appliedCount = 0
 
     foreach ($sectionKey in $applyOrder) {
@@ -2075,7 +2198,7 @@ function Set-PackageHelperTabContent {
             $sectionState.FeedbackLabel.Text = "Did this help?"
 
             if ($sectionState.Suggestions.Count -eq 0) {
-                $sectionState.OutputTextBox.Text = "No suggestions available for this section."
+                $sectionState.OutputTextBox.Text = ""
                 $sectionState.IndexLabel.Text = "Suggestion 0 of 0"
             } else {
                 Set-PackageHelperSectionSuggestion -SectionKey $sectionKey -SuggestionIndex 0
@@ -3016,12 +3139,12 @@ $sectionLayout = @(
     @{ Key = "InstallCommand"; Title = "Install Command Line" },
     @{ Key = "UninstallCommand"; Title = "Uninstall Command Line" },
     @{ Key = "UninstallExecutable"; Title = "Uninstall Executable" },
+    @{ Key = "PreInstallCommands"; Title = "Pre-Install Commands" },
     @{ Key = "CustomInstallCommands"; Title = "Custom Install Commands" },
     @{ Key = "PostInstallCommands"; Title = "Post-Install Commands" },
+    @{ Key = "PreUninstallCommands"; Title = "Pre-Uninstall Commands" },
     @{ Key = "CustomUninstallCommands"; Title = "Custom Uninstall Commands" },
-    @{ Key = "PostUninstallCommands"; Title = "Post-Uninstall Commands" },
-    @{ Key = "PreInstallChecks"; Title = "Pre-Install Checks" },
-    @{ Key = "Prerequisites"; Title = "Prerequisite Checks" }
+    @{ Key = "PostUninstallCommands"; Title = "Post-Uninstall Commands" }
 )
 
 $helperTop = 0
@@ -3195,6 +3318,42 @@ $btnApplyAllPackageHelper.Add_Click({
 
 #endregion Tab 4
 
+#region Tab 5: Process
+$tabProcess = New-Object System.Windows.Forms.TabPage
+$tabProcess.Text = "Process"
+$tabProcess.BackColor = $Colors.Background
+$tabControl.Controls.Add($tabProcess)
+$script:ProcessTab = $tabProcess
+
+$lblProcessHeader = New-Object System.Windows.Forms.Label
+$lblProcessHeader.Text = "Live Process Log"
+$lblProcessHeader.Location = New-Object System.Drawing.Point(20, 10)
+$lblProcessHeader.Size = New-Object System.Drawing.Size(800, 24)
+$lblProcessHeader.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
+$tabProcess.Controls.Add($lblProcessHeader)
+
+$lblProcessHint = New-Object System.Windows.Forms.Label
+$lblProcessHint.Text = "Status and errors appear here in real time. Package logs are saved to logs\\Tool_Process.log and logs\\Tool_Error.log."
+$lblProcessHint.Location = New-Object System.Drawing.Point(20, 35)
+$lblProcessHint.Size = New-Object System.Drawing.Size(810, 20)
+$lblProcessHint.ForeColor = [System.Drawing.Color]::FromArgb(80, 80, 80)
+$tabProcess.Controls.Add($lblProcessHint)
+
+$txtProcessLog = New-Object System.Windows.Forms.RichTextBox
+$txtProcessLog.Location = New-Object System.Drawing.Point(20, 60)
+$txtProcessLog.Size = New-Object System.Drawing.Size(820, 550)
+$txtProcessLog.ReadOnly = $true
+$txtProcessLog.Multiline = $true
+$txtProcessLog.ScrollBars = 'Both'
+$txtProcessLog.WordWrap = $false
+$txtProcessLog.Font = New-Object System.Drawing.Font("Consolas", 10)
+$txtProcessLog.BackColor = [System.Drawing.Color]::White
+$txtProcessLog.ForeColor = [System.Drawing.Color]::FromArgb(35, 35, 35)
+$tabProcess.Controls.Add($txtProcessLog)
+$script:ProcessOutputBox = $txtProcessLog
+
+#endregion Tab 5
+
 #region Status Area
 $statusBar = New-Object System.Windows.Forms.Panel
 $statusBar.Location = New-Object System.Drawing.Point(20, 720)
@@ -3214,6 +3373,7 @@ $progressBar = New-Object System.Windows.Forms.ProgressBar
 $progressBar.Location = New-Object System.Drawing.Point(10, 50)
 $progressBar.Size = New-Object System.Drawing.Size(840, 10)
 $progressBar.Style = "Continuous"
+$progressBar.Visible = $false
 $statusBar.Controls.Add($progressBar)
 
 $btnCreate = New-Object System.Windows.Forms.Button
@@ -3466,6 +3626,11 @@ $btnCopySearchTerms.Add_Click({
 
 # Start Packaging Button Click Event (validation only - workflow in New-PackagingFolder)
 $btnCreate.Add_Click({
+    Start-ProcessSession
+    if ($script:ProcessTab) {
+        $tabControl.SelectedTab = $script:ProcessTab
+    }
+
     # Use ValidationEngine to validate inputs
     $errors = @()
     
