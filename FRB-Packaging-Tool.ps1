@@ -2054,6 +2054,34 @@ function Hide-CodeEditorHelp {
     }
 }
 
+function Expand-CommandSectionIfPopulated {
+    param(
+        [System.Windows.Forms.Label]$HeaderLabel,
+        [System.Windows.Forms.RichTextBox]$Editor
+    )
+
+    if (-not $HeaderLabel -or -not $Editor) { return }
+    if ([string]::IsNullOrWhiteSpace($Editor.Text)) { return }
+
+    $Editor.Visible = $true
+    if ($HeaderLabel.Text -match '^\[\+\]') {
+        $HeaderLabel.Text = $HeaderLabel.Text.Replace('[+]', '[-]')
+    }
+
+    if ($HeaderLabel.Tag -and $HeaderLabel.Tag.ContainsKey('IsExpanded')) {
+        $HeaderLabel.Tag.IsExpanded = $true
+    }
+}
+
+function Expand-CommandSectionsWithContent {
+    Expand-CommandSectionIfPopulated -HeaderLabel $script:lblPreInstallHeader -Editor $script:txtPreInstall
+    Expand-CommandSectionIfPopulated -HeaderLabel $script:lblCustomInstallHeader -Editor $script:txtCustomInstall
+    Expand-CommandSectionIfPopulated -HeaderLabel $script:lblPostInstallHeader -Editor $script:txtPostInstall
+    Expand-CommandSectionIfPopulated -HeaderLabel $script:lblPreUninstallHeader -Editor $script:txtPreUninstall
+    Expand-CommandSectionIfPopulated -HeaderLabel $script:lblCustomUninstallHeader -Editor $script:txtCustomUninstall
+    Expand-CommandSectionIfPopulated -HeaderLabel $script:lblPostUninstallHeader -Editor $script:txtPostUninstall
+}
+
 function Register-CodeEditorBehavior {
     param(
         [Parameter(Mandatory = $true)]
@@ -2078,6 +2106,8 @@ function Register-CodeEditorBehavior {
 
     $Editor.Add_MouseEnter({ Show-CodeEditorHelp -Editor $this })
     $Editor.Add_MouseHover({ Show-CodeEditorHelp -Editor $this })
+    $Editor.Add_MouseLeave({ Hide-CodeEditorHelp -Editor $this })
+    $Editor.Add_LostFocus({ Hide-CodeEditorHelp -Editor $this })
     $Editor.Add_Leave({
         Hide-CodeEditorHelp -Editor $this
         if (-not [string]::IsNullOrWhiteSpace($this.Text)) {
@@ -2153,6 +2183,7 @@ function Apply-PackageHelperSectionToGui {
     }
 
     if ($applied) {
+        Expand-CommandSectionsWithContent
         $state.FeedbackLabel.Text = "Applied to Tool"
         $script:PackageHelperControls[$SectionKey] = $state
     }
@@ -2797,6 +2828,7 @@ $lblPreInstallHeader.Padding = New-Object System.Windows.Forms.Padding(10, 0, 0,
 $lblPreInstallHeader.Cursor = [System.Windows.Forms.Cursors]::Hand
 $lblPreInstallHeader.Tag = @{ IsExpanded = $false; TargetControl = $null }
 $tabInstall.Controls.Add($lblPreInstallHeader)
+$script:lblPreInstallHeader = $lblPreInstallHeader
 
 $txtPreInstall = New-Object System.Windows.Forms.RichTextBox
 $txtPreInstall.Location = New-Object System.Drawing.Point(20, 50)
@@ -2807,6 +2839,7 @@ $txtPreInstall.Visible = $false
 $txtPreInstall.ReadOnly = $false
 $tabInstall.Controls.Add($txtPreInstall)
 $lblPreInstallHeader.Tag.TargetControl = $txtPreInstall
+$script:txtPreInstall = $txtPreInstall
 Register-CodeEditorBehavior -Editor $txtPreInstall -HelpTitle "Pre-Install Commands" -HelpDescription "Runs before the installer starts. Use this section for prerequisite checks, process stops, service checks, and anything that prevents a bad install from starting."
 
 # Custom Install Commands Section
@@ -2822,6 +2855,7 @@ $lblCustomInstallHeader.Padding = New-Object System.Windows.Forms.Padding(10, 0,
 $lblCustomInstallHeader.Cursor = [System.Windows.Forms.Cursors]::Hand
 $lblCustomInstallHeader.Tag = @{ IsExpanded = $false; TargetControl = $null }
 $tabInstall.Controls.Add($lblCustomInstallHeader)
+$script:lblCustomInstallHeader = $lblCustomInstallHeader
 
 $txtCustomInstall = New-Object System.Windows.Forms.RichTextBox
 $txtCustomInstall.Location = New-Object System.Drawing.Point(20, 240)
@@ -2832,6 +2866,7 @@ $txtCustomInstall.Visible = $false
 $txtCustomInstall.ReadOnly = $false
 $tabInstall.Controls.Add($txtCustomInstall)
 $lblCustomInstallHeader.Tag.TargetControl = $txtCustomInstall
+$script:txtCustomInstall = $txtCustomInstall
 Register-CodeEditorBehavior -Editor $txtCustomInstall -HelpTitle "Custom Install Commands" -HelpDescription "Runs during installation. Use this section for custom install steps, vendor-specific logic, or extra commands that must happen while the app is being installed."
 
 # Post-Install Commands Section
@@ -2847,6 +2882,7 @@ $lblPostInstallHeader.Padding = New-Object System.Windows.Forms.Padding(10, 0, 0
 $lblPostInstallHeader.Cursor = [System.Windows.Forms.Cursors]::Hand
 $lblPostInstallHeader.Tag = @{ IsExpanded = $false; TargetControl = $null }
 $tabInstall.Controls.Add($lblPostInstallHeader)
+$script:lblPostInstallHeader = $lblPostInstallHeader
 
 $txtPostInstall = New-Object System.Windows.Forms.RichTextBox
 $txtPostInstall.Location = New-Object System.Drawing.Point(20, 430)
@@ -2857,6 +2893,7 @@ $txtPostInstall.Visible = $false
 $txtPostInstall.ReadOnly = $false
 $tabInstall.Controls.Add($txtPostInstall)
 $lblPostInstallHeader.Tag.TargetControl = $txtPostInstall
+$script:txtPostInstall = $txtPostInstall
 Register-CodeEditorBehavior -Editor $txtPostInstall -HelpTitle "Post-Install Commands" -HelpDescription "Runs after installation finishes. Use this section for cleanup, shortcut creation, verification, or any final actions after the install completes."
 
 # Click event handlers for expand/collapse
@@ -2952,6 +2989,7 @@ $lblPreUninstallHeader.Padding = New-Object System.Windows.Forms.Padding(10, 0, 
 $lblPreUninstallHeader.Cursor = [System.Windows.Forms.Cursors]::Hand
 $lblPreUninstallHeader.Tag = @{ IsExpanded = $false; TargetControl = $null }
 $tabUninstall.Controls.Add($lblPreUninstallHeader)
+$script:lblPreUninstallHeader = $lblPreUninstallHeader
 
 $txtPreUninstall = New-Object System.Windows.Forms.RichTextBox
 $txtPreUninstall.Location = New-Object System.Drawing.Point(20, 50)
@@ -2962,6 +3000,7 @@ $txtPreUninstall.Visible = $false
 $txtPreUninstall.ReadOnly = $false
 $tabUninstall.Controls.Add($txtPreUninstall)
 $lblPreUninstallHeader.Tag.TargetControl = $txtPreUninstall
+$script:txtPreUninstall = $txtPreUninstall
 Register-CodeEditorBehavior -Editor $txtPreUninstall -HelpTitle "Pre-Uninstall Commands" -HelpDescription "Runs before the uninstall starts. Use this section to stop processes, close apps, or prepare the machine so removal can succeed cleanly."
 
 # Custom Uninstall Commands Section
@@ -2977,6 +3016,7 @@ $lblCustomUninstallHeader.Padding = New-Object System.Windows.Forms.Padding(10, 
 $lblCustomUninstallHeader.Cursor = [System.Windows.Forms.Cursors]::Hand
 $lblCustomUninstallHeader.Tag = @{ IsExpanded = $false; TargetControl = $null }
 $tabUninstall.Controls.Add($lblCustomUninstallHeader)
+$script:lblCustomUninstallHeader = $lblCustomUninstallHeader
 
 $txtCustomUninstall = New-Object System.Windows.Forms.RichTextBox
 $txtCustomUninstall.Location = New-Object System.Drawing.Point(20, 240)
@@ -2987,6 +3027,7 @@ $txtCustomUninstall.Visible = $false
 $txtCustomUninstall.ReadOnly = $false
 $tabUninstall.Controls.Add($txtCustomUninstall)
 $lblCustomUninstallHeader.Tag.TargetControl = $txtCustomUninstall
+$script:txtCustomUninstall = $txtCustomUninstall
 Register-CodeEditorBehavior -Editor $txtCustomUninstall -HelpTitle "Custom Uninstall Commands" -HelpDescription "Runs during uninstall. Use this section for the vendor's uninstall command, machine cleanup steps, or other actions that should happen while removing the app."
 
 # Post-Uninstall Commands Section
@@ -3002,6 +3043,7 @@ $lblPostUninstallHeader.Padding = New-Object System.Windows.Forms.Padding(10, 0,
 $lblPostUninstallHeader.Cursor = [System.Windows.Forms.Cursors]::Hand
 $lblPostUninstallHeader.Tag = @{ IsExpanded = $false; TargetControl = $null }
 $tabUninstall.Controls.Add($lblPostUninstallHeader)
+$script:lblPostUninstallHeader = $lblPostUninstallHeader
 
 $txtPostUninstall = New-Object System.Windows.Forms.RichTextBox
 $txtPostUninstall.Location = New-Object System.Drawing.Point(20, 430)
@@ -3012,6 +3054,7 @@ $txtPostUninstall.Visible = $false
 $txtPostUninstall.ReadOnly = $false
 $tabUninstall.Controls.Add($txtPostUninstall)
 $lblPostUninstallHeader.Tag.TargetControl = $txtPostUninstall
+$script:txtPostUninstall = $txtPostUninstall
 Register-CodeEditorBehavior -Editor $txtPostUninstall -HelpTitle "Post-Uninstall Commands" -HelpDescription "Runs after uninstall completes. Use this section for leftover cleanup, report-related cleanup, or preserving user-level data while removing machine-level artifacts."
 
 # Click event handlers for expand/collapse
@@ -3438,6 +3481,8 @@ function Load-ExistingPackageDataIfPresent {
         if ($script:txtPreUninstall) { $script:txtPreUninstall.Text = Format-CodeEditorText -Text $loadResult.PreUninstall }
         if ($script:txtCustomUninstall) { $script:txtCustomUninstall.Text = Format-CodeEditorText -Text $loadResult.CustomUninstall }
         if ($script:txtPostUninstall) { $script:txtPostUninstall.Text = Format-CodeEditorText -Text $loadResult.PostUninstall }
+
+        Expand-CommandSectionsWithContent
 
         if ($script:txtUninstallExecutable) {
             $script:txtUninstallExecutable.Text = $loadResult.AppUninstallExeName
