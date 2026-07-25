@@ -211,13 +211,11 @@ exit `$LASTEXITCODE
         $fileName = $fileName.Replace(' ', '_')
         $outputPath = Join-Path $docFolder $fileName
         
-        Export-ValidationDocument -HtmlContent $doc -OutputPath $outputPath -OpenAfterExport
+        Export-ValidationDocument -HtmlContent $doc -OutputPath $outputPath
         
         # Session cleanup handled by setting to null
         
-        Write-UIStatus "Documentation complete - report opened!" "Green"
-        
-        [System.Windows.Forms.MessageBox]::Show("Validation documentation completed successfully!" + [Environment]::NewLine + [Environment]::NewLine + "File: $fileName", "Success", 'OK', 'Information')
+        Write-UIStatus "Documentation complete." "Green"
         
         # Reset UI
         $script:CurrentSession = $null

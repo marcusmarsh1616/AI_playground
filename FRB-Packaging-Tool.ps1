@@ -1762,6 +1762,17 @@ function Start-BuildTestDeployWorkflow {
     $script:DetectedInstallerType = ""
     $progressBar.Value = 0
 
+    # Reset process tab content for next run and return focus to Main Settings.
+    if ($script:ProcessOutputBox) {
+        $script:ProcessOutputBox.Clear()
+    }
+    if ($script:ProcessLogBuffer) {
+        $script:ProcessLogBuffer.Clear()
+    }
+    if ($tabControl -and $tabMain) {
+        $tabControl.SelectedTab = $tabMain
+    }
+
 }
 
 function Start-IntegratedValidationDocumentation {
