@@ -627,11 +627,12 @@ if (Test-Path $configPath) {
                                         $WshShell = New-Object -ComObject WScript.Shell
                                         $StartMenuPath = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"
                                         $ShortcutPath = Join-Path $StartMenuPath "FRB Packaging Tool.lnk"
+                                        $ShortcutIconPath = Join-Path $destinationToolPath "config\pf_logo.ico"
                                         $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
                                         $Shortcut.TargetPath = "powershell.exe"
                                         $Shortcut.Arguments = "-ExecutionPolicy Bypass -File `"$newToolScriptPath`""
                                         $Shortcut.WorkingDirectory = $destinationToolPath
-                                        $Shortcut.IconLocation = ".\\config\\pf_logo.ico"
+                                        $Shortcut.IconLocation = "$ShortcutIconPath,0"
                                         $Shortcut.Description = "FRB Packaging Tool"
                                         $Shortcut.Save()
                                         Write-Verbose "Start Menu shortcut created: $ShortcutPath"
