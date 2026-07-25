@@ -2073,6 +2073,37 @@ function Expand-CommandSectionIfPopulated {
     }
 }
 
+function Set-CommandSectionState {
+    param(
+        [System.Windows.Forms.Label]$HeaderLabel,
+        [System.Windows.Forms.RichTextBox]$Editor,
+        [string]$Text
+    )
+
+    if (-not $HeaderLabel -or -not $Editor) { return }
+
+    $Editor.Text = Format-CodeEditorText -Text $Text
+
+    if ([string]::IsNullOrWhiteSpace($Editor.Text)) {
+        $Editor.Visible = $false
+        if ($HeaderLabel.Text -match '^\[-\]') {
+            $HeaderLabel.Text = $HeaderLabel.Text.Replace('[-]', '[+]')
+        }
+        if ($HeaderLabel.Tag -and $HeaderLabel.Tag.ContainsKey('IsExpanded')) {
+            $HeaderLabel.Tag.IsExpanded = $false
+        }
+        return
+    }
+
+    $Editor.Visible = $true
+    if ($HeaderLabel.Text -match '^\[\+\]') {
+        $HeaderLabel.Text = $HeaderLabel.Text.Replace('[+]', '[-]')
+    }
+    if ($HeaderLabel.Tag -and $HeaderLabel.Tag.ContainsKey('IsExpanded')) {
+        $HeaderLabel.Tag.IsExpanded = $true
+    }
+}
+
 function Sync-CommandSectionExpansionState {
     [System.Windows.Forms.Application]::DoEvents()
     Expand-CommandSectionsWithContent
@@ -3480,14 +3511,12 @@ function Load-ExistingPackageDataIfPresent {
     try {
         $loadResult = Get-CustomCommandsFromStartupPss -StartupPssPath $existingStartupPath
 
-        if ($script:txtPreInstall) { $script:txtPreInstall.Text = Format-CodeEditorText -Text $loadResult.PreInstall }
-        if ($script:txtCustomInstall) { $script:txtCustomInstall.Text = Format-CodeEditorText -Text $loadResult.CustomInstall }
-        if ($script:txtPostInstall) { $script:txtPostInstall.Text = Format-CodeEditorText -Text $loadResult.PostInstall }
-        if ($script:txtPreUninstall) { $script:txtPreUninstall.Text = Format-CodeEditorText -Text $loadResult.PreUninstall }
-        if ($script:txtCustomUninstall) { $script:txtCustomUninstall.Text = Format-CodeEditorText -Text $loadResult.CustomUninstall }
-        if ($script:txtPostUninstall) { $script:txtPostUninstall.Text = Format-CodeEditorText -Text $loadResult.PostUninstall }
-
-        Sync-CommandSectionExpansionState
+        Set-CommandSectionState -HeaderLabel $script:lblPreInstallHeader -Editor $script:txtPreInstall -Text $loadResult.PreInstall
+        Set-CommandSectionState -HeaderLabel $script:lblCustomInstallHeader -Editor $script:txtCustomInstall -Text $loadResult.CustomInstall
+        Set-CommandSectionState -HeaderLabel $script:lblPostInstallHeader -Editor $script:txtPostInstall -Text $loadResult.PostInstall
+        Set-CommandSectionState -HeaderLabel $script:lblPreUninstallHeader -Editor $script:txtPreUninstall -Text $loadResult.PreUninstall
+        Set-CommandSectionState -HeaderLabel $script:lblCustomUninstallHeader -Editor $script:txtCustomUninstall -Text $loadResult.CustomUninstall
+        Set-CommandSectionState -HeaderLabel $script:lblPostUninstallHeader -Editor $script:txtPostUninstall -Text $loadResult.PostUninstall
 
         if ($script:txtUninstallExecutable) {
             $script:txtUninstallExecutable.Text = $loadResult.AppUninstallExeName
@@ -3507,6 +3536,7 @@ function Load-ExistingPackageDataIfPresent {
         }
         if ($script:lblUninstallSwitch) { $script:lblUninstallSwitch.Visible = $true }
 
+        Sync-CommandSectionExpansionState
         $script:LastLoadedStartupPath = $existingStartupPath
         Update-Status "Custom commands and metadata loaded from existing package!" "Green"
     }
@@ -3531,6 +3561,7 @@ function Check-PackageFolderExists {
         if (Test-Path $checkPath) {
             $lblFolderExistsFlag.Visible = $true
             Load-ExistingPackageDataIfPresent -PackagePath $checkPath
+            Sync-CommandSectionExpansionState
         } else {
             $lblFolderExistsFlag.Visible = $false
             $script:LastLoadedStartupPath = ""
