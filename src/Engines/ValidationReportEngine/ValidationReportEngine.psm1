@@ -48,6 +48,7 @@ function Start-ValidationReportCapture {
 
         $argList = @(
             "-NoProfile",
+            "-STA",
             "-ExecutionPolicy", "Bypass",
             "-File", $launcherPath,
             "-AppName", $AppName,
@@ -68,21 +69,6 @@ function Start-ValidationReportCapture {
                 $launcherResult = $null
             }
             Remove-Item -Path $resultFilePath -Force -ErrorAction SilentlyContinue
-        }
-
-        if ($docProcess.ExitCode -ne 0) {
-            if ($launcherResult -and $launcherResult.Message) {
-                $result.Message = "Validation documentation tool failed: $($launcherResult.Message)"
-            }
-            else {
-                $result.Message = "Validation documentation tool exited with code $($docProcess.ExitCode)."
-            }
-            return $result
-        }
-
-        if ($launcherResult -and $launcherResult.PSObject.Properties.Name -contains 'Success' -and -not $launcherResult.Success) {
-            $result.Message = if ($launcherResult.Message) { "Validation documentation tool failed: $($launcherResult.Message)" } else { "Validation documentation tool reported failure." }
-            return $result
         }
 
         $sourceReportPath = ""
@@ -130,6 +116,23 @@ function Start-ValidationReportCapture {
             $sourceReportPath = $latestReport.FullName
         }
 
+        if ($docProcess.ExitCode -ne 0) {
+            if ([string]::IsNullOrWhiteSpace($sourceReportPath)) {
+                if ($launcherResult -and $launcherResult.Message) {
+                    $result.Message = "Validation documentation tool failed: $($launcherResult.Message)"
+                }
+                else {
+                    $result.Message = "Validation documentation tool exited with code $($docProcess.ExitCode)."
+                }
+                return $result
+            }
+        }
+
+        if ($launcherResult -and $launcherResult.PSObject.Properties.Name -contains 'Success' -and -not $launcherResult.Success -and [string]::IsNullOrWhiteSpace($sourceReportPath)) {
+            $result.Message = if ($launcherResult.Message) { "Validation documentation tool failed: $($launcherResult.Message)" } else { "Validation documentation tool reported failure." }
+            return $result
+        }
+
         $docsFolder = Join-Path $PackagePath "docs"
         if (-not (Test-Path $docsFolder)) {
             New-Item -Path $docsFolder -ItemType Directory -Force | Out-Null
@@ -157,7 +160,12 @@ function Start-ValidationReportCapture {
         $result.ReportCopied = $true
         $result.CopiedReportPath = $targetReportPath
         $result.Success = $true
-        $result.Message = "Validation report saved to package docs: $reportFileName"
+        if ($docProcess.ExitCode -ne 0) {
+            $result.Message = "Validation report saved to package docs: $reportFileName (launcher exit code $($docProcess.ExitCode) ignored because report was generated)."
+        }
+        else {
+            $result.Message = "Validation report saved to package docs: $reportFileName"
+        }
     }
     catch {
         $result.Message = "Validation report engine error: $($_.Exception.Message)"
