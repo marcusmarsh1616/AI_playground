@@ -50,7 +50,7 @@ function Start-ValidationReportCapture {
             Push-Location $engineRoot
             Import-Module $uiEnginePath -Force -ErrorAction Stop
             $result.Launched = $true
-            $launcherResult = Show-DocumentationCaptureUI -AppName $AppName -AppVersion $AppVersion
+            $launcherResult = Invoke-DocumentationCaptureFromContext -AppName $AppName -AppVersion $AppVersion
         }
         finally {
             Pop-Location

@@ -13,6 +13,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
 # Import required engines
+Import-Module (Join-Path $PSScriptRoot "SnagitController.psm1") -Force -ErrorAction Stop
 Import-Module (Join-Path $PSScriptRoot "DocumentationSessionEngine.psm1") -Force -ErrorAction Stop
 Import-Module (Join-Path $PSScriptRoot "CaptureEngine.psm1") -Force -ErrorAction Stop
 Import-Module (Join-Path $PSScriptRoot "InstallationDetectorEngine.psm1") -Force -ErrorAction Stop
@@ -58,7 +59,7 @@ function Start-AutomatedDocumentation {
     $script:Controls.txtAppVersion.Enabled = $false
     
     try {
-        if (-not (Test-SnagitInstalled)) {
+        if (-not (SnagitController\Test-SnagitInstalled)) {
             throw "Snagit is required for validation capture, but it is not installed or the Snagit COM automation interface is unavailable."
         }
 
