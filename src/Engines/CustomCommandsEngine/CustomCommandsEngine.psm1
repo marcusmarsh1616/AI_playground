@@ -470,12 +470,123 @@ function Get-CustomCommandsFromStartupPss {
                 $result[$point.CommandKey] = ($sectionLines -join [Environment]::NewLine).Trim()
             }
         }
+
+        if ([string]::IsNullOrWhiteSpace($result.CustomUninstall)) {
+            $uninstallRegionStart = -1
+            $legacyCommentLine = -1
+            $uninstallRegionEnd = -1
+
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+                $trimmed = $lines[$i].Trim()
+                if ($uninstallRegionStart -lt 0 -and $trimmed -eq '#region <Perform Uninstallation tasks here>') {
+                    $uninstallRegionStart = $i
+                    continue
+                }
+
+                if ($uninstallRegionStart -ge 0 -and $legacyCommentLine -lt 0 -and $trimmed -like '#Execute-Process -Path ''Setup.exe''*') {
+                    $legacyCommentLine = $i
+                    continue
+                }
+
+                if ($uninstallRegionStart -ge 0 -and $trimmed -eq '#endregion') {
+                    $uninstallRegionEnd = $i
+                    break
+                }
+            }
+
+            if ($legacyCommentLine -ge 0 -and $uninstallRegionEnd -gt $legacyCommentLine) {
+                $legacyLines = New-Object System.Collections.Generic.List[string]
+
+                for ($i = ($legacyCommentLine + 1); $i -lt $uninstallRegionEnd; $i++) {
+                    $trimmed = $lines[$i].Trim()
+                    if (-not [string]::IsNullOrWhiteSpace($trimmed)) {
+                        [void]$legacyLines.Add($lines[$i].TrimStart())
+                    }
+                }
+
+                if ($legacyLines.Count -gt 0) {
+                    $result.CustomUninstall = ($legacyLines -join [Environment]::NewLine).Trim()
+                }
+            }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($result.CustomUninstall)) {
+            $legacyCustomUninstall = Get-LegacyCustomUninstallContent -Lines $lines
+            if (-not [string]::IsNullOrWhiteSpace($legacyCustomUninstall)) {
+                $result.CustomUninstall = $legacyCustomUninstall
+            }
+        }
     }
     catch {
         Write-Warning "Error extracting custom commands: $($_.Exception.Message)"
     }
     
     return $result
+}
+
+function Get-LegacyCustomUninstallContent {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Lines
+    )
+
+    $startIndex = -1
+    $endIndex = -1
+
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        if ($Lines[$i].Trim() -eq '#region <Perform Uninstallation tasks here>') {
+            $startIndex = $i + 1
+            continue
+        }
+
+        if ($startIndex -ge 0 -and $Lines[$i].Trim() -eq '#endregion') {
+            $endIndex = $i
+            break
+        }
+    }
+
+    if ($startIndex -lt 0 -or $endIndex -le $startIndex) {
+        return ""
+    }
+
+    $ignoredPatterns = @(
+        '^## Uninstaller is Setup$',
+        '^# Customize based on the setup executable uninstall command line switches$',
+        '^Try$',
+        '^Catch$',
+        '^\{$',
+        '^\}$',
+        '^If \(\$appUninstallExeName\)$',
+        '^ElseIf \(\$appGUID\)$',
+        '^Execute-Process -Path \$appUninstallExeName',
+        '^Execute-MSI -Action ''Uninstall'' -Path \$appGUID',
+        '^Stop-Process ''EUSInstallProgress''',
+        '^Write-Log -Message "\$appName \$appVersion failed to uninstall\. Exiting Uninstall"',
+        '^#Execute-Process -Path ''Setup\.exe'''
+    )
+
+    $userLines = New-Object System.Collections.Generic.List[string]
+    for ($i = $startIndex; $i -lt $endIndex; $i++) {
+        $trimmed = $Lines[$i].Trim()
+        if ([string]::IsNullOrWhiteSpace($trimmed)) {
+            continue
+        }
+
+        $ignore = $false
+        foreach ($pattern in $ignoredPatterns) {
+            if ($trimmed -match $pattern) {
+                $ignore = $true
+                break
+            }
+        }
+
+        if (-not $ignore) {
+            [void]$userLines.Add($Lines[$i].TrimStart())
+        }
+    }
+
+    return ($userLines -join [Environment]::NewLine).Trim()
 }
 
 #endregion Functions
