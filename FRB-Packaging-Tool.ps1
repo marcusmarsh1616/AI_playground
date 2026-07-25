@@ -16,13 +16,13 @@
 .NOTES
     Author: FRB Automation Team
     Created: June 4, 2026
-    Version: 5.0.0 - Okta Integration & MSI Enhancement Edition
+    Version: 6.0 - Okta Integration & MSI Enhancement Edition
     Architecture: Modular Engine-Based
     
     Previous Version: v3.2.0 (Custom Commands Edition)
     
 .CHANGELOG
-    v5.0.0 - July 6, 2026
+    v6.0 - July 6, 2026
       - MAJOR: GitLab/Okta authentication integration for Master Template downloads
       - MAJOR: MSI metadata extraction now works identically to EXE files
       - Enhancement: Python/Playwright prerequisites bundled for network deployment
@@ -413,7 +413,7 @@ $splash.Controls.Add($lblTitle)
 
 # Add version
 $lblVersion = New-Object System.Windows.Forms.Label
-$lblVersion.Text = "Version 5.0.0"
+$lblVersion.Text = "Version 6.0"
 $lblVersion.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $lblVersion.ForeColor = [System.Drawing.Color]::LightGray
 $lblVersion.AutoSize = $false
@@ -2073,6 +2073,11 @@ function Expand-CommandSectionIfPopulated {
     }
 }
 
+function Sync-CommandSectionExpansionState {
+    [System.Windows.Forms.Application]::DoEvents()
+    Expand-CommandSectionsWithContent
+}
+
 function Expand-CommandSectionsWithContent {
     Expand-CommandSectionIfPopulated -HeaderLabel $script:lblPreInstallHeader -Editor $script:txtPreInstall
     Expand-CommandSectionIfPopulated -HeaderLabel $script:lblCustomInstallHeader -Editor $script:txtCustomInstall
@@ -2183,7 +2188,7 @@ function Apply-PackageHelperSectionToGui {
     }
 
     if ($applied) {
-        Expand-CommandSectionsWithContent
+        Sync-CommandSectionExpansionState
         $state.FeedbackLabel.Text = "Applied to Tool"
         $script:PackageHelperControls[$SectionKey] = $state
     }
@@ -2578,7 +2583,7 @@ function Invoke-InstallContextDetectionPrompt {
 
 # Form creation with modern layout
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "FRB Packaging Tool v5.0.0"
+$form.Text = "FRB Packaging Tool v6.0"
 $form.Size = New-Object System.Drawing.Size(920, 900)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "Sizable"
@@ -3482,7 +3487,7 @@ function Load-ExistingPackageDataIfPresent {
         if ($script:txtCustomUninstall) { $script:txtCustomUninstall.Text = Format-CodeEditorText -Text $loadResult.CustomUninstall }
         if ($script:txtPostUninstall) { $script:txtPostUninstall.Text = Format-CodeEditorText -Text $loadResult.PostUninstall }
 
-        Expand-CommandSectionsWithContent
+        Sync-CommandSectionExpansionState
 
         if ($script:txtUninstallExecutable) {
             $script:txtUninstallExecutable.Text = $loadResult.AppUninstallExeName
