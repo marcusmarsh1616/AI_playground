@@ -143,6 +143,9 @@ $script:ProcessLogPath = ""
 $script:ProcessErrorLogPath = ""
 $script:ProcessLogBuffer = New-Object System.Collections.Generic.List[string]
 $script:IsLoadingExistingPackageData = $false
+$script:IsPopulatingMetadata = $false
+$script:LastExistingPackageLoadPath = ""
+$script:LastExistingPackageLoadTick = 0
 
 #region Configuration
 
@@ -3501,7 +3504,25 @@ function Load-ExistingPackageDataIfPresent {
         $script:LastLoadedStartupPath = ""
     }
 
+    if (-not $script:LastExistingPackageLoadPath) {
+        $script:LastExistingPackageLoadPath = ""
+    }
+
+    if (-not $script:LastExistingPackageLoadTick) {
+        $script:LastExistingPackageLoadTick = 0
+    }
+
     if ($script:IsLoadingExistingPackageData) {
+        return
+    }
+
+    $nowTick = [Environment]::TickCount
+    $elapsedMs = 0
+    if ($script:LastExistingPackageLoadTick -gt 0) {
+        $elapsedMs = [Math]::Abs($nowTick - $script:LastExistingPackageLoadTick)
+    }
+
+    if ($script:LastExistingPackageLoadPath -eq $existingStartupPath -and $elapsedMs -lt 2000) {
         return
     }
 
@@ -3511,6 +3532,8 @@ function Load-ExistingPackageDataIfPresent {
     }
 
     $script:IsLoadingExistingPackageData = $true
+    $script:LastExistingPackageLoadPath = $existingStartupPath
+    $script:LastExistingPackageLoadTick = $nowTick
     $previousStartupPath = $script:LastLoadedStartupPath
     $script:LastLoadedStartupPath = $existingStartupPath
 
@@ -3563,6 +3586,10 @@ function Load-ExistingPackageDataIfPresent {
 
 # Function to check if package folder exists
 function Check-PackageFolderExists {
+    if ($script:IsPopulatingMetadata) {
+        return
+    }
+
     if (-not [string]::IsNullOrWhiteSpace($txtVendor.Text) -and 
         -not [string]::IsNullOrWhiteSpace($txtName.Text) -and 
         -not [string]::IsNullOrWhiteSpace($txtVersion.Text)) {
@@ -3622,16 +3649,22 @@ $btnBrowse.Add_Click({
         $form.Refresh()
         
         $metadata = Get-InstallerMetadata -FilePath $script:InstallationMediaPath
-        
-        # Auto-populate fields if metadata found
-        if (-not [string]::IsNullOrWhiteSpace($metadata.Vendor)) {
-            $txtVendor.Text = $metadata.Vendor
+
+        $script:IsPopulatingMetadata = $true
+        try {
+            # Auto-populate fields if metadata found
+            if (-not [string]::IsNullOrWhiteSpace($metadata.Vendor)) {
+                $txtVendor.Text = $metadata.Vendor
+            }
+            if (-not [string]::IsNullOrWhiteSpace($metadata.ProductName)) {
+                $txtName.Text = $metadata.ProductName
+            }
+            if (-not [string]::IsNullOrWhiteSpace($metadata.Version)) {
+                $txtVersion.Text = $metadata.Version
+            }
         }
-        if (-not [string]::IsNullOrWhiteSpace($metadata.ProductName)) {
-            $txtName.Text = $metadata.ProductName
-        }
-        if (-not [string]::IsNullOrWhiteSpace($metadata.Version)) {
-            $txtVersion.Text = $metadata.Version
+        finally {
+            $script:IsPopulatingMetadata = $false
         }
         
         # Folder recognition is the single trigger for Startup.pss rehydrate.
