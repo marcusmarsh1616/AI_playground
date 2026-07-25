@@ -3577,12 +3577,12 @@ function Load-ExistingPackageDataIfPresent {
         Write-ProcessOutputLine -Message ("Existing package load from {0}" -f $existingStartupPath) -Level "INFO"
         Write-ProcessOutputLine -Message ("Loaded command lengths | PreInstall={0} CustomInstall={1} PostInstall={2} PreUninstall={3} CustomUninstall={4} PostUninstall={5}" -f $loadResult.PreInstall.Length, $loadResult.CustomInstall.Length, $loadResult.PostInstall.Length, $loadResult.PreUninstall.Length, $loadResult.CustomUninstall.Length, $loadResult.PostUninstall.Length) -Level "INFO"
 
-        if ($script:txtPreInstall) { $script:txtPreInstall.Text = Format-CodeEditorText -Text $loadResult.PreInstall }
-        if ($script:txtCustomInstall) { $script:txtCustomInstall.Text = Format-CodeEditorText -Text $loadResult.CustomInstall }
-        if ($script:txtPostInstall) { $script:txtPostInstall.Text = Format-CodeEditorText -Text $loadResult.PostInstall }
-        if ($script:txtPreUninstall) { $script:txtPreUninstall.Text = Format-CodeEditorText -Text $loadResult.PreUninstall }
-        if ($script:txtCustomUninstall) { $script:txtCustomUninstall.Text = Format-CodeEditorText -Text $loadResult.CustomUninstall }
-        if ($script:txtPostUninstall) { $script:txtPostUninstall.Text = Format-CodeEditorText -Text $loadResult.PostUninstall }
+        if ($script:txtPreInstall -and -not [string]::IsNullOrWhiteSpace($loadResult.PreInstall)) { $script:txtPreInstall.Text = $loadResult.PreInstall }
+        if ($script:txtCustomInstall -and -not [string]::IsNullOrWhiteSpace($loadResult.CustomInstall)) { $script:txtCustomInstall.Text = $loadResult.CustomInstall }
+        if ($script:txtPostInstall -and -not [string]::IsNullOrWhiteSpace($loadResult.PostInstall)) { $script:txtPostInstall.Text = $loadResult.PostInstall }
+        if ($script:txtPreUninstall -and -not [string]::IsNullOrWhiteSpace($loadResult.PreUninstall)) { $script:txtPreUninstall.Text = $loadResult.PreUninstall }
+        if ($script:txtCustomUninstall -and -not [string]::IsNullOrWhiteSpace($loadResult.CustomUninstall)) { $script:txtCustomUninstall.Text = $loadResult.CustomUninstall }
+        if ($script:txtPostUninstall -and -not [string]::IsNullOrWhiteSpace($loadResult.PostUninstall)) { $script:txtPostUninstall.Text = $loadResult.PostUninstall }
 
         Ensure-CustomUninstallTextBound -ExpectedText $loadResult.CustomUninstall -Stage "post-bind"
 
