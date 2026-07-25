@@ -93,6 +93,21 @@ function Get-ImageDimensions {
     return $dimensions
 }
 
+function Get-FigureOneImagePath {
+    $candidatePaths = @(
+        (Join-Path $PSScriptRoot "..\design\FRS wrapper pic.jpg"),
+        (Join-Path $PSScriptRoot "..\..\..\Validation Report\design\FRS wrapper pic.jpg")
+    )
+
+    foreach ($candidatePath in $candidatePaths) {
+        if (Test-Path $candidatePath) {
+            return $candidatePath
+        }
+    }
+
+    throw "FRS wrapper pic.jpg was not found for Figure 1. Expected under the validation engine design folder."
+}
+
 #endregion
 
 #region Main Functions
@@ -168,58 +183,54 @@ function New-ValidationDocument {
     $html = $html.Replace('[OS Version]', $OSVersion)
     $html = $html.Replace('[Date]', $ValidationDate.ToString('yyyy-MM-dd'))
     
-        # Automatically embed FRS wrapper screenshot for Figure 1
-    $frsWrapperPath = "$PSScriptRoot\..\design\FRS wrapper pic.jpg"
-    if (Test-Path $frsWrapperPath) {
-        Write-Verbose "Auto-embedding FRS wrapper for Figure 1"
-        
-        # Get image dimensions
-        Add-Type -AssemblyName System.Drawing
-        $image = [System.Drawing.Image]::FromFile($frsWrapperPath)
-        $imgWidth = $image.Width
-        $imgHeight = $image.Height
-        $image.Dispose()
-        
-        # Convert to Base64
-        $imageBytes = [System.IO.File]::ReadAllBytes($frsWrapperPath)
-        $base64 = [Convert]::ToBase64String($imageBytes)
-        $base64Image = "data:image/jpeg;base64,$base64"
-        
-        # Build figure HTML
-        $figureHtml = (
-            '<div class="figure-container">',
-            "    <img src=`"$base64Image`" alt=`"Installation Progress Dialog`">",
-            '    <div class="figure-caption">Figure 1: Installation Progress Dialog</div>',
-            '</div>'
-        ) -join [Environment]::NewLine
-        
-        # Replace the placeholder using simple string methods
-        $figureMarker = "Figure 1:"
-        $markerIndex = $html.IndexOf($figureMarker)
-        
-        if ($markerIndex -ge 0) {
-            $searchStart = $markerIndex - 100
-            if ($searchStart -lt 0) { $searchStart = 0 }
-            
-            $beforeMarker = $html.Substring($searchStart, $markerIndex - $searchStart)
-            $divStart = $beforeMarker.LastIndexOf('<div class="figure-')
-            
-            if ($divStart -ge 0) {
-                $divStart = $searchStart + $divStart
-                $afterMarker = $html.Substring($markerIndex)
-                $closingDiv = $afterMarker.IndexOf('</div>')
-                
-                if ($closingDiv -ge 0) {
-                    $endPos = $markerIndex + $closingDiv + 6
-                    $before = $html.Substring(0, $divStart)
-                    $after = $html.Substring($endPos)
-                    $html = $before + $figureHtml + $after
-                    Write-Verbose "FRS wrapper embedded for Figure 1"
-                }
+    # Automatically embed FRS wrapper screenshot for Figure 1
+    $frsWrapperPath = Get-FigureOneImagePath
+    Write-Verbose "Auto-embedding FRS wrapper for Figure 1 from: $frsWrapperPath"
+
+    # Get image dimensions
+    Add-Type -AssemblyName System.Drawing
+    $image = [System.Drawing.Image]::FromFile($frsWrapperPath)
+    $imgWidth = $image.Width
+    $imgHeight = $image.Height
+    $image.Dispose()
+
+    # Convert to Base64
+    $imageBytes = [System.IO.File]::ReadAllBytes($frsWrapperPath)
+    $base64 = [Convert]::ToBase64String($imageBytes)
+    $base64Image = "data:image/jpeg;base64,$base64"
+
+    # Build figure HTML
+    $figureHtml = (
+        '<div class="figure-container">',
+        "    <img src=`"$base64Image`" alt=`"Installation Progress Dialog`">",
+        '    <div class="figure-caption">Figure 1: Installation Progress Dialog</div>',
+        '</div>'
+    ) -join [Environment]::NewLine
+
+    # Replace the placeholder using simple string methods
+    $figureMarker = "Figure 1:"
+    $markerIndex = $html.IndexOf($figureMarker)
+
+    if ($markerIndex -ge 0) {
+        $searchStart = $markerIndex - 100
+        if ($searchStart -lt 0) { $searchStart = 0 }
+
+        $beforeMarker = $html.Substring($searchStart, $markerIndex - $searchStart)
+        $divStart = $beforeMarker.LastIndexOf('<div class="figure-')
+
+        if ($divStart -ge 0) {
+            $divStart = $searchStart + $divStart
+            $afterMarker = $html.Substring($markerIndex)
+            $closingDiv = $afterMarker.IndexOf('</div>')
+
+            if ($closingDiv -ge 0) {
+                $endPos = $markerIndex + $closingDiv + 6
+                $before = $html.Substring(0, $divStart)
+                $after = $html.Substring($endPos)
+                $html = $before + $figureHtml + $after
+                Write-Verbose "FRS wrapper embedded for Figure 1"
             }
         }
-    } else {
-        Write-Warning "FRS wrapper image not found at: $frsWrapperPath"
     }
     
     Write-Verbose "Document created successfully"

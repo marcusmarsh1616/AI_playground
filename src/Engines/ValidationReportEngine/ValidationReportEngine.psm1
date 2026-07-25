@@ -44,21 +44,39 @@ function Start-ValidationReportCapture {
         }
 
         $startTime = Get-Date
+        $resultFilePath = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName() + '.json')
 
         $argList = @(
             "-NoProfile",
             "-ExecutionPolicy", "Bypass",
             "-File", $launcherPath,
             "-AppName", $AppName,
-            "-AppVersion", $AppVersion
+            "-AppVersion", $AppVersion,
+            "-ResultFilePath", $resultFilePath
         )
 
         $docProcess = Start-Process -FilePath "powershell.exe" -ArgumentList $argList -WorkingDirectory $engineRoot -PassThru
         $result.Launched = $true
         $null = $docProcess.WaitForExit()
 
+        $launcherResult = $null
+        if (Test-Path $resultFilePath) {
+            try {
+                $launcherResult = Get-Content -Path $resultFilePath -Raw -Encoding UTF8 | ConvertFrom-Json
+            }
+            catch {
+                $launcherResult = $null
+            }
+            Remove-Item -Path $resultFilePath -Force -ErrorAction SilentlyContinue
+        }
+
         if ($docProcess.ExitCode -ne 0) {
-            $result.Message = "Validation documentation tool exited with code $($docProcess.ExitCode)."
+            if ($launcherResult -and $launcherResult.Message) {
+                $result.Message = "Validation documentation tool failed: $($launcherResult.Message)"
+            }
+            else {
+                $result.Message = "Validation documentation tool exited with code $($docProcess.ExitCode)."
+            }
             return $result
         }
 

@@ -18,7 +18,10 @@ param(
     [string]$AppName,
 
     [Parameter(Mandatory = $true)]
-    [string]$AppVersion
+    [string]$AppVersion,
+
+    [Parameter(Mandatory = $false)]
+    [string]$ResultFilePath = ""
 )
 
 # Import UI Engine
@@ -31,4 +34,30 @@ Write-Host "=== Documentation Capture Tool ===" -ForegroundColor Cyan
 Write-Host "Running integrated capture workflow..." -ForegroundColor Yellow
 Write-Host ""
 
-Invoke-DocumentationCaptureFromContext -AppName $AppName -AppVersion $AppVersion
+try {
+    $result = Invoke-DocumentationCaptureFromContext -AppName $AppName -AppVersion $AppVersion
+
+    if (-not [string]::IsNullOrWhiteSpace($ResultFilePath)) {
+        $result | ConvertTo-Json -Depth 4 | Set-Content -Path $ResultFilePath -Encoding UTF8 -Force
+    }
+
+    if ($result -and $result.Success) {
+        exit 0
+    }
+
+    exit 1
+}
+catch {
+    $errorResult = @{
+        Success = $false
+        Message = $_.Exception.Message
+        OutputPath = ""
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($ResultFilePath)) {
+        $errorResult | ConvertTo-Json -Depth 4 | Set-Content -Path $ResultFilePath -Encoding UTF8 -Force
+    }
+
+    Write-Error $_.Exception.Message
+    exit 1
+}
