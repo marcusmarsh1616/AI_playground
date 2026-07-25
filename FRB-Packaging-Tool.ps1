@@ -1778,7 +1778,7 @@ function Get-PackageHelperSuggestionValue {
 function Add-UniqueHelperSnippet {
     param(
         [Parameter(Mandatory = $true)]
-        [System.Windows.Forms.TextBox]$TargetTextBox,
+        [System.Windows.Forms.TextBoxBase]$TargetTextBox,
 
         [Parameter(Mandatory = $true)]
         [string]$Snippet
@@ -1944,8 +1944,8 @@ function Register-CodeEditorBehavior {
     )
 
     $Editor.Tag = @{ HelpTitle = $HelpTitle; HelpDescription = $HelpDescription }
-    $Editor.BackColor = [System.Drawing.Color]::FromArgb(30, 30, 30)
-    $Editor.ForeColor = [System.Drawing.Color]::FromArgb(212, 212, 212)
+    $Editor.BackColor = [System.Drawing.Color]::White
+    $Editor.ForeColor = [System.Drawing.Color]::FromArgb(35, 35, 35)
     $Editor.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
     $Editor.DetectUrls = $false
     $Editor.ShortcutsEnabled = $true
@@ -2030,7 +2030,7 @@ function Apply-PackageHelperSectionToGui {
     }
 
     if ($applied) {
-        $state.FeedbackLabel.Text = "Applied to GUI"
+        $state.FeedbackLabel.Text = "Applied to Tool"
         $script:PackageHelperControls[$SectionKey] = $state
     }
 
@@ -2048,7 +2048,7 @@ function Apply-AllPackageHelperSuggestionsToGui {
     }
 
     if ($script:lblPackageHelperContext) {
-        $script:lblPackageHelperContext.Text = "Applied $appliedCount section(s) into package fields and command areas."
+        $script:lblPackageHelperContext.Text = "Applied $appliedCount section(s) into tool fields and command areas."
         $script:lblPackageHelperContext.ForeColor = [System.Drawing.Color]::FromArgb(0, 110, 0)
     }
 
@@ -2166,6 +2166,214 @@ function Set-InstallContextState {
     }
 }
 
+function Get-FriendlyInstallContextReasons {
+    param(
+        [string[]]$Reasons,
+        [string]$RecommendedContext,
+        [string]$Confidence
+    )
+
+    $friendly = New-Object System.Collections.Generic.List[string]
+
+    if ($Reasons -and $Reasons.Count -gt 0) {
+        foreach ($reason in $Reasons) {
+            if ([string]::IsNullOrWhiteSpace($reason)) { continue }
+
+            $text = $reason.Trim()
+            if ($text -match '(?i)msi') {
+                [void]$friendly.Add("This installer follows a standard package format often deployed to all users.")
+            }
+            elseif ($text -match '(?i)setup|bootstrap|launcher') {
+                [void]$friendly.Add("This installer looks like a setup launcher that may need full machine permissions.")
+            }
+            elseif ($text -match '(?i)appdata|hkcu|user profile|current user') {
+                [void]$friendly.Add("This app appears to keep files or settings in the signed-in user's profile.")
+            }
+            elseif ($text -match '(?i)program files|hklm|machine|system') {
+                [void]$friendly.Add("This app appears to install system-wide for everyone on the device.")
+            }
+            elseif ($text -match '(?i)service|driver') {
+                [void]$friendly.Add("This app may add background components that usually require system-level install rights.")
+            }
+            else {
+                [void]$friendly.Add("The installer metadata and naming pattern suggest this context is the safer default.")
+            }
+        }
+    }
+
+    if ($friendly.Count -eq 0) {
+        [void]$friendly.Add("No strong install hints were found, so a safe default recommendation is being used.")
+    }
+
+    if ($Confidence -eq 'High') {
+        [void]$friendly.Add("Confidence is high based on the installer details that were detected.")
+    }
+    elseif ($Confidence -eq 'Medium') {
+        [void]$friendly.Add("Confidence is moderate. If unsure, use the recommended option and validate after install.")
+    }
+    else {
+        [void]$friendly.Add("Confidence is low. Choose the context that matches your deployment target.")
+    }
+
+    return @($friendly | Select-Object -Unique)
+}
+
+function Show-InstallContextSelectionDialog {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RecommendedContext,
+
+        [Parameter(Mandatory = $true)]
+        [string[]]$FriendlyReasons
+    )
+
+    $dialog = New-Object System.Windows.Forms.Form
+    $dialog.Text = "Install Context Selection"
+    $dialog.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterParent
+    $dialog.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+    $dialog.MaximizeBox = $false
+    $dialog.MinimizeBox = $false
+    $dialog.ControlBox = $false
+    $dialog.ShowInTaskbar = $false
+    $dialog.BackColor = [System.Drawing.Color]::White
+    $dialog.ClientSize = New-Object System.Drawing.Size(700, 450)
+    $dialog.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+
+    $title = New-Object System.Windows.Forms.Label
+    $title.Text = "Choose How This App Should Install"
+    $title.Location = New-Object System.Drawing.Point(20, 16)
+    $title.Size = New-Object System.Drawing.Size(660, 28)
+    $title.Font = New-Object System.Drawing.Font("Segoe UI", 14, [System.Drawing.FontStyle]::Bold)
+    $dialog.Controls.Add($title)
+
+    $subtitle = New-Object System.Windows.Forms.Label
+    $subtitle.Text = "Pick the context that matches your deployment intent."
+    $subtitle.Location = New-Object System.Drawing.Point(22, 50)
+    $subtitle.Size = New-Object System.Drawing.Size(650, 22)
+    $subtitle.ForeColor = [System.Drawing.Color]::FromArgb(70, 70, 70)
+    $dialog.Controls.Add($subtitle)
+
+    $reasonHeader = New-Object System.Windows.Forms.Label
+    $reasonHeader.Text = "Why this is suggested:"
+    $reasonHeader.Location = New-Object System.Drawing.Point(22, 84)
+    $reasonHeader.Size = New-Object System.Drawing.Size(250, 22)
+    $reasonHeader.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+    $dialog.Controls.Add($reasonHeader)
+
+    $reasonText = New-Object System.Windows.Forms.TextBox
+    $reasonText.Location = New-Object System.Drawing.Point(22, 108)
+    $reasonText.Size = New-Object System.Drawing.Size(656, 118)
+    $reasonText.Multiline = $true
+    $reasonText.ReadOnly = $true
+    $reasonText.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+    $reasonText.BackColor = [System.Drawing.Color]::FromArgb(250, 250, 250)
+    $reasonText.Text = ((@($FriendlyReasons) | ForEach-Object { "- $_" }) -join [Environment]::NewLine)
+    $dialog.Controls.Add($reasonText)
+
+    $panelUser = New-Object System.Windows.Forms.Panel
+    $panelUser.Location = New-Object System.Drawing.Point(22, 242)
+    $panelUser.Size = New-Object System.Drawing.Size(318, 142)
+    $panelUser.BackColor = [System.Drawing.Color]::FromArgb(246, 250, 255)
+    $panelUser.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+    $dialog.Controls.Add($panelUser)
+
+    $lblUserTitle = New-Object System.Windows.Forms.Label
+    $lblUserTitle.Text = "USER"
+    $lblUserTitle.Location = New-Object System.Drawing.Point(12, 10)
+    $lblUserTitle.Size = New-Object System.Drawing.Size(170, 24)
+    $lblUserTitle.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
+    $panelUser.Controls.Add($lblUserTitle)
+
+    if ($RecommendedContext -eq "User") {
+        $lblUserRecommended = New-Object System.Windows.Forms.Label
+        $lblUserRecommended.Text = "Recommended"
+        $lblUserRecommended.Location = New-Object System.Drawing.Point(198, 12)
+        $lblUserRecommended.Size = New-Object System.Drawing.Size(105, 20)
+        $lblUserRecommended.ForeColor = [System.Drawing.Color]::FromArgb(0, 102, 204)
+        $lblUserRecommended.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+        $panelUser.Controls.Add($lblUserRecommended)
+    }
+
+    $lblUserDesc = New-Object System.Windows.Forms.Label
+    $lblUserDesc.Text = "Installs for the signed-in user. Best for profile-based apps and when admin rights are not required."
+    $lblUserDesc.Location = New-Object System.Drawing.Point(12, 38)
+    $lblUserDesc.Size = New-Object System.Drawing.Size(294, 58)
+    $lblUserDesc.ForeColor = [System.Drawing.Color]::FromArgb(60, 60, 60)
+    $panelUser.Controls.Add($lblUserDesc)
+
+    $btnUser = New-Object System.Windows.Forms.Button
+    $btnUser.Text = "USER"
+    $btnUser.Location = New-Object System.Drawing.Point(12, 102)
+    $btnUser.Size = New-Object System.Drawing.Size(292, 30)
+    $btnUser.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
+    $btnUser.ForeColor = [System.Drawing.Color]::White
+    $btnUser.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnUser.FlatAppearance.BorderSize = 0
+    $panelUser.Controls.Add($btnUser)
+
+    $panelSystem = New-Object System.Windows.Forms.Panel
+    $panelSystem.Location = New-Object System.Drawing.Point(360, 242)
+    $panelSystem.Size = New-Object System.Drawing.Size(318, 142)
+    $panelSystem.BackColor = [System.Drawing.Color]::FromArgb(249, 249, 249)
+    $panelSystem.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+    $dialog.Controls.Add($panelSystem)
+
+    $lblSystemTitle = New-Object System.Windows.Forms.Label
+    $lblSystemTitle.Text = "SYSTEM"
+    $lblSystemTitle.Location = New-Object System.Drawing.Point(12, 10)
+    $lblSystemTitle.Size = New-Object System.Drawing.Size(170, 24)
+    $lblSystemTitle.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
+    $panelSystem.Controls.Add($lblSystemTitle)
+
+    if ($RecommendedContext -eq "System") {
+        $lblSystemRecommended = New-Object System.Windows.Forms.Label
+        $lblSystemRecommended.Text = "Recommended"
+        $lblSystemRecommended.Location = New-Object System.Drawing.Point(198, 12)
+        $lblSystemRecommended.Size = New-Object System.Drawing.Size(105, 20)
+        $lblSystemRecommended.ForeColor = [System.Drawing.Color]::FromArgb(0, 102, 204)
+        $lblSystemRecommended.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+        $panelSystem.Controls.Add($lblSystemRecommended)
+    }
+
+    $lblSystemDesc = New-Object System.Windows.Forms.Label
+    $lblSystemDesc.Text = "Installs for the whole device. Best for shared computers, background services, or admin-level setup."
+    $lblSystemDesc.Location = New-Object System.Drawing.Point(12, 38)
+    $lblSystemDesc.Size = New-Object System.Drawing.Size(294, 58)
+    $lblSystemDesc.ForeColor = [System.Drawing.Color]::FromArgb(60, 60, 60)
+    $panelSystem.Controls.Add($lblSystemDesc)
+
+    $btnSystem = New-Object System.Windows.Forms.Button
+    $btnSystem.Text = "SYSTEM"
+    $btnSystem.Location = New-Object System.Drawing.Point(12, 102)
+    $btnSystem.Size = New-Object System.Drawing.Size(292, 30)
+    $btnSystem.BackColor = [System.Drawing.Color]::FromArgb(80, 80, 80)
+    $btnSystem.ForeColor = [System.Drawing.Color]::White
+    $btnSystem.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnSystem.FlatAppearance.BorderSize = 0
+    $panelSystem.Controls.Add($btnSystem)
+
+    $dialog.Tag = ""
+    $btnUser.Add_Click({
+        $dialog.Tag = "User"
+        $dialog.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $dialog.Close()
+    })
+    $btnSystem.Add_Click({
+        $dialog.Tag = "System"
+        $dialog.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $dialog.Close()
+    })
+
+    [void]$dialog.ShowDialog($form)
+    $dialog.Dispose()
+
+    if ($dialog.Tag -in @("User", "System")) {
+        return [string]$dialog.Tag
+    }
+
+    return $RecommendedContext
+}
+
 function Invoke-InstallContextDetectionPrompt {
     param(
         [Parameter(Mandatory = $true)]
@@ -2189,42 +2397,14 @@ function Invoke-InstallContextDetectionPrompt {
         }
 
         $recommended = if ($contextResult.Recommendation -eq "User") { "User" } else { "System" }
-        $alternate = if ($recommended -eq "User") { "System" } else { "User" }
-        $reasons = if ($contextResult.Reasons -and $contextResult.Reasons.Count -gt 0) {
-            ($contextResult.Reasons | ForEach-Object { "- $_" }) -join [Environment]::NewLine
-        } else {
-            "- No strong signals were detected."
-        }
+        $friendlyReasons = Get-FriendlyInstallContextReasons -Reasons $contextResult.Reasons -RecommendedContext $recommended -Confidence $contextResult.Confidence
+        $selection = Show-InstallContextSelectionDialog -RecommendedContext $recommended -FriendlyReasons $friendlyReasons
 
-        $message = @(
-            "Context detection complete for selected install media.",
-            "",
-            "Recommended: $recommended ($($contextResult.Confidence) confidence)",
-            "",
-            "Reasons:",
-            $reasons,
-            "",
-            "Choose context:",
-            "Yes = Use recommended ($recommended)",
-            "No = Use alternate ($alternate)",
-            "Cancel = Keep current context ($script:SelectedInstallContext)"
-        ) -join [Environment]::NewLine
-
-        $response = [System.Windows.Forms.MessageBox]::Show(
-            $message,
-            "Install Context Selection",
-            [System.Windows.Forms.MessageBoxButtons]::YesNoCancel,
-            [System.Windows.Forms.MessageBoxIcon]::Question
-        )
-
-        if ($response -eq [System.Windows.Forms.DialogResult]::Yes) {
-            Set-InstallContextState -Context $recommended -Reason "Recommended by detection"
-        }
-        elseif ($response -eq [System.Windows.Forms.DialogResult]::No) {
-            Set-InstallContextState -Context $alternate -Reason "Technician override"
+        if ($selection -eq $recommended) {
+            Set-InstallContextState -Context $selection -Reason "Recommended selection"
         }
         else {
-            Set-InstallContextState -Context $script:SelectedInstallContext -Reason "Technician kept existing selection"
+            Set-InstallContextState -Context $selection -Reason "Technician selection"
         }
     }
     catch {
@@ -2815,7 +2995,7 @@ $btnRefreshPackageHelper.FlatAppearance.BorderSize = 0
 $tabPackageHelper.Controls.Add($btnRefreshPackageHelper)
 
 $btnApplyAllPackageHelper = New-Object System.Windows.Forms.Button
-$btnApplyAllPackageHelper.Text = "Apply All to GUI"
+$btnApplyAllPackageHelper.Text = "Apply All to Tool"
 $btnApplyAllPackageHelper.Location = New-Object System.Drawing.Point(530, 22)
 $btnApplyAllPackageHelper.Size = New-Object System.Drawing.Size(130, 28)
 $btnApplyAllPackageHelper.BackColor = $Colors.SuccessGreen
@@ -2894,7 +3074,7 @@ foreach ($sectionInfo in $sectionLayout) {
     $group.Controls.Add($btnCopy)
 
     $btnApply = New-Object System.Windows.Forms.Button
-    $btnApply.Text = "Apply to GUI"
+    $btnApply.Text = "Apply to Tool"
     $btnApply.Location = New-Object System.Drawing.Point(495, 145)
     $btnApply.Size = New-Object System.Drawing.Size(95, 28)
     $btnApply.BackColor = [System.Drawing.Color]::FromArgb(0, 105, 160)
