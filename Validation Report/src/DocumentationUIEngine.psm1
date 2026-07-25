@@ -235,6 +235,41 @@ exit `$LASTEXITCODE
 
 #endregion
 
+function Invoke-DocumentationCaptureFromContext {
+    <#
+    .SYNOPSIS
+        Runs automated documentation workflow without manual data-entry GUI.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$AppName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$AppVersion
+    )
+
+    if ([string]::IsNullOrWhiteSpace($AppName)) {
+        throw "AppName is required."
+    }
+    if ([string]::IsNullOrWhiteSpace($AppVersion)) {
+        throw "AppVersion is required."
+    }
+
+    # Create lightweight hidden UI objects so existing workflow can run unchanged.
+    $script:Form = New-Object System.Windows.Forms.Form
+    $script:Controls = @{}
+    $script:Controls.StatusLabel = New-Object System.Windows.Forms.Label
+    $script:Controls.txtAppName = New-Object System.Windows.Forms.TextBox
+    $script:Controls.txtAppVersion = New-Object System.Windows.Forms.TextBox
+    $script:Controls.btnStart = New-Object System.Windows.Forms.Button
+
+    $script:Controls.txtAppName.Text = $AppName
+    $script:Controls.txtAppVersion.Text = $AppVersion
+
+    Start-AutomatedDocumentation
+}
+
 
 function Parse-HelperOutput {
     param([string]$RawOutput)
@@ -390,5 +425,6 @@ function Show-DocumentationCaptureUI {
 
 # Export public functions
 Export-ModuleMember -Function @(
-    'Show-DocumentationCaptureUI'
+    'Show-DocumentationCaptureUI',
+    'Invoke-DocumentationCaptureFromContext'
 )

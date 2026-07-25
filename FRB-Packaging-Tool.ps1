@@ -127,6 +127,7 @@ Add-Type -AssemblyName System.Drawing
 # GUI State Persistence Variables for test workflow
 $script:SavedVendor = ""
 $script:SavedName = ""
+$script:SavedEdition = ""
 $script:SavedVersion = ""
 $script:SavedInstallSwitch = ""
 $script:SavedUninstallSwitch = ""
@@ -1288,6 +1289,7 @@ function Start-BuildTestDeployWorkflow {
         # Save current GUI state for potential loops (v3.1: Manual-only mode)
     $script:SavedVendor = $txtVendor.Text
     $script:SavedName = $txtName.Text
+    $script:SavedEdition = $txtEdition.Text
     $script:SavedVersion = $txtVersion.Text
     $script:SavedInstallSwitch = $txtInstallSwitch.Text
     $script:SavedUninstallSwitch = $txtUninstallSwitch.Text
@@ -1365,6 +1367,21 @@ function Start-BuildTestDeployWorkflow {
         if ($installTestResult.UserConfirmed) {
             Update-Status "Installation confirmed successful by technician!" "Green"
             $form.Refresh()
+
+            $docResult = Start-IntegratedValidationDocumentation -PackagePath $script:LastCreatedPackagePath -AppVendor $script:SavedVendor -AppName $script:SavedName -AppEdition $script:SavedEdition -AppVersion $script:SavedVersion
+            if (-not $docResult.Success) {
+                Update-Status "Validation documentation warning: $($docResult.Message)" "Orange"
+                $form.Refresh()
+            }
+            elseif ($docResult.ReportCopied) {
+                Update-Status "Validation documentation report copied to package Docs." "Green"
+                $form.Refresh()
+            }
+            else {
+                Update-Status $docResult.Message "Blue"
+                $form.Refresh()
+            }
+
             break :InstallLoop
         } else {
             # User said NO - allow modification and retry
@@ -1396,47 +1413,7 @@ function Start-BuildTestDeployWorkflow {
     
     $progressBar.Value = 80
     
-    # SCAN AND REPORT GENERATION
-    Update-Status "Scanning installed software for validation report..." "Blue"
-    $form.Refresh()
-    
-    try {
-        $scanData = Get-InstalledSoftwareData -Vendor $script:SavedVendor -ProductName $script:SavedName
-        
-        $reportParams = @{
-            Vendor = $script:SavedVendor
-            ProductName = $script:SavedName
-            Version = $script:SavedVersion
-            ScanData = $scanData
-        }
-        
-        # Create Docs folder if it doesn't exist
-        $docsFolder = Join-Path $script:LastCreatedPackagePath "Docs"
-        if (-not (Test-Path $docsFolder)) {
-            New-Item -Path $docsFolder -ItemType Directory -Force | Out-Null
-        }
-        
-        $reportFileName = "Validation_Report_" + $script:SavedVendor + "_" + $script:SavedName + "_" + $script:SavedVersion + ".html"
-        $reportFileName = $reportFileName -replace '[<>:"/\|?*]', '_'
-        $reportPath = Join-Path $docsFolder $reportFileName
-        
-        $reportResult = New-HTMLValidationReport @reportParams -OutputPath $reportPath
-        
-        if ($reportResult.Success) {
-            Update-Status "Validation report generated successfully!" "Green"
-            $form.Refresh()
-            
-            # Open report in browser
-            Start-Process $reportPath
-            Start-Sleep -Milliseconds 500
-        } else {
-            Update-Status "Warning: Report generation failed but continuing..." "Orange"
-            $form.Refresh()
-        }
-    } catch {
-        Update-Status "Warning: Report generation error but continuing..." "Orange"
-        $form.Refresh()
-    }
+    # Validation documentation now runs from the installation verification YES path.
     
     $progressBar.Value = 85
     
@@ -1651,6 +1628,111 @@ function Start-BuildTestDeployWorkflow {
     $script:DetectedInstallerType = ""
     $progressBar.Value = 0
 
+}
+
+function Start-IntegratedValidationDocumentation {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PackagePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$AppVendor,
+
+        [Parameter(Mandatory = $true)]
+        [string]$AppName,
+
+        [Parameter(Mandatory = $false)]
+        [string]$AppEdition,
+
+        [Parameter(Mandatory = $true)]
+        [string]$AppVersion
+    )
+
+    $result = @{
+        Success = $false
+        Launched = $false
+        ReportCopied = $false
+        CopiedReportPath = ""
+        Message = ""
+    }
+
+    $validationToolRoot = Join-Path $script:ToolRoot "Validation Report"
+    $validationLauncher = Join-Path $validationToolRoot "Start-DocumentationCaptureTool.ps1"
+    $validationOutputFolder = Join-Path $validationToolRoot "documentation"
+
+    if (-not (Test-Path $validationLauncher)) {
+        $result.Message = "Validation documentation launcher not found: $validationLauncher"
+        return $result
+    }
+
+    try {
+        Update-Status "Launching Validation Documentation Tool..." "Blue"
+        $form.Refresh()
+
+        $startTime = Get-Date
+
+        $argList = @(
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-File", $validationLauncher,
+            "-AppName", $AppName,
+            "-AppVersion", $AppVersion
+        )
+
+        $docProcess = Start-Process -FilePath "powershell.exe" -ArgumentList $argList -WorkingDirectory $validationToolRoot -PassThru
+        $result.Launched = $true
+
+        # Wait for the documentation tool to complete before continuing workflow.
+        $null = $docProcess.WaitForExit()
+
+        # Pull the newest generated report into package Docs if one was created.
+        if (Test-Path $validationOutputFolder) {
+            $latestReport = Get-ChildItem -Path $validationOutputFolder -Filter "*.html" -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.LastWriteTime -ge $startTime } |
+                Sort-Object LastWriteTime -Descending |
+                Select-Object -First 1
+
+            if (-not $latestReport) {
+                $latestReport = Get-ChildItem -Path $validationOutputFolder -Filter "*.html" -File -ErrorAction SilentlyContinue |
+                    Sort-Object LastWriteTime -Descending |
+                    Select-Object -First 1
+            }
+
+            if ($latestReport) {
+                $docsFolder = Join-Path $PackagePath "docs"
+                if (-not (Test-Path $docsFolder)) {
+                    New-Item -Path $docsFolder -ItemType Directory -Force | Out-Null
+                }
+
+                $nameParts = @($AppVendor, $AppName)
+                if (-not [string]::IsNullOrWhiteSpace($AppEdition)) {
+                    $nameParts += $AppEdition
+                }
+                $nameParts += $AppVersion
+
+                $reportFileName = (($nameParts -join " ") + " Validation report.html")
+                $reportFileName = $reportFileName -replace '[<>:"/\\|?*]', '_'
+
+                $targetReportPath = Join-Path $docsFolder $reportFileName
+                Copy-Item -Path $latestReport.FullName -Destination $targetReportPath -Force
+
+                $result.ReportCopied = $true
+                $result.CopiedReportPath = $targetReportPath
+                $result.Message = "Validation report saved to package docs: $reportFileName"
+            } else {
+                $result.Message = "Validation tool closed. No report file was found to copy."
+            }
+        } else {
+            $result.Message = "Validation tool closed. Documentation output folder was not found."
+        }
+
+        $result.Success = $true
+    }
+    catch {
+        $result.Message = "Validation documentation integration error: $($_.Exception.Message)"
+    }
+
+    return $result
 }
 
 
@@ -1986,6 +2068,7 @@ $lblPreInstallHeader.Add_Click({
         $label.Tag.IsExpanded = $true
     }
 })
+
 
 $lblCustomInstallHeader.Add_Click({
     $label = $this

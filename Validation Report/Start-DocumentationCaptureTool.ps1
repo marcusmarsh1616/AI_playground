@@ -13,14 +13,22 @@
     Version: 2.0.0
 #>
 
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$AppName,
+
+    [Parameter(Mandatory = $true)]
+    [string]$AppVersion
+)
+
 # Import UI Engine
 $ModulePath = "$PSScriptRoot\src"
 Import-Module "$ModulePath\DocumentationUIEngine.psm1" -Force -ErrorAction Stop
 
-# Launch GUI
+# Run context-driven workflow (no data-entry GUI)
 Write-Host ""
 Write-Host "=== Documentation Capture Tool ===" -ForegroundColor Cyan
-Write-Host "Launching GUI..." -ForegroundColor Yellow
+Write-Host "Running integrated capture workflow..." -ForegroundColor Yellow
 Write-Host ""
 
-Show-DocumentationCaptureUI
+Invoke-DocumentationCaptureFromContext -AppName $AppName -AppVersion $AppVersion
