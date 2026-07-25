@@ -57,6 +57,10 @@ function Start-AutomatedDocumentation {
     $script:Controls.txtAppVersion.Enabled = $false
     
     try {
+        if (-not (Test-SnagitInstalled)) {
+            throw "Snagit is required for validation capture, but it is not installed or the Snagit COM automation interface is unavailable."
+        }
+
         # Step 1: Create session
         Write-UIStatus "Creating documentation session..." "Blue"
         $script:CurrentSession = New-DocumentationSession `
@@ -221,6 +225,12 @@ exit `$LASTEXITCODE
         $script:Controls.txtAppVersion.Enabled = $true
         $script:Controls.btnStart.Enabled = $true
         Write-UIStatus "Ready for next documentation session" "Black"
+
+        return @{
+            Success = $true
+            Message = "Validation documentation completed successfully."
+            OutputPath = $outputPath
+        }
         
     } catch {
         Write-UIStatus "Error: $($_.Exception.Message)" "Red"
@@ -230,6 +240,12 @@ exit `$LASTEXITCODE
         $script:Controls.txtAppName.Enabled = $true
         $script:Controls.txtAppVersion.Enabled = $true
         $script:Controls.btnStart.Enabled = $true
+
+        return @{
+            Success = $false
+            Message = $_.Exception.Message
+            OutputPath = ""
+        }
     }
 }
 
@@ -267,7 +283,7 @@ function Invoke-DocumentationCaptureFromContext {
     $script:Controls.txtAppName.Text = $AppName
     $script:Controls.txtAppVersion.Text = $AppVersion
 
-    Start-AutomatedDocumentation
+    return (Start-AutomatedDocumentation)
 }
 
 
