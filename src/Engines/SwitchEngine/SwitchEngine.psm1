@@ -318,6 +318,10 @@ function Get-PackageHelpSections {
     $presetUninstallExeOptions = @()
     $presetPreInstallChecks = @()
     $presetPrerequisiteSuggestions = @()
+    $presetCustomInstallSuggestions = @()
+    $presetPostInstallSuggestions = @()
+    $presetCustomUninstallSuggestions = @()
+    $presetPostUninstallSuggestions = @()
 
     $vendorLower = $safeVendor.ToLowerInvariant()
     $appLower = $safeAppName.ToLowerInvariant()
@@ -399,6 +403,70 @@ if (-not `$webView2) {
 if (`$tempDrive -and `$tempDrive.Free -lt 6GB) {
     Show-InstallationPrompt -Message 'At least 6 GB free space is recommended for Autodesk extraction/install.' -ButtonRightText 'OK' -Icon Warning
 }
+"@
+        )
+    }
+
+    $presetCustomInstallSuggestions = @(
+@"
+# Custom install task template
+Write-Log -Message 'Starting custom install steps.' -Source 'Custom-Install'
+
+# Example: create a registry value, copy a file, or launch a follow-up command.
+"@
+    )
+
+    $presetPostInstallSuggestions = @(
+@"
+# Post-install task template
+Write-Log -Message 'Running post-install tasks.' -Source 'Post-Install'
+
+# Example: verify shortcuts, set defaults, or remove temporary files.
+"@
+    )
+
+    $presetCustomUninstallSuggestions = @(
+@"
+# Custom uninstall task template
+Write-Log -Message 'Starting custom uninstall steps.' -Source 'Custom-Uninstall'
+
+# Example: call vendor uninstall switches or remove machine-level leftovers.
+"@
+    )
+
+    $presetPostUninstallSuggestions = @(
+@"
+# Post-uninstall task template
+Write-Log -Message 'Running post-uninstall tasks.' -Source 'Post-Uninstall'
+
+# Example: preserve user profile data, clean machine-level files, and write report notes.
+"@
+    )
+
+    if ($safeContext -eq 'User') {
+        $presetCustomInstallSuggestions += @(
+@"
+# User-context note
+# Keep writes inside HKCU and AppData when possible.
+"@
+        )
+        $presetPostInstallSuggestions += @(
+@"
+# User-context note
+# Avoid machine-wide cleanup here unless the package explicitly requires it.
+"@
+        )
+    } else {
+        $presetCustomUninstallSuggestions += @(
+@"
+# System-context note
+# Elevated cleanup can remove machine-level shortcuts and folders safely.
+"@
+        )
+        $presetPostUninstallSuggestions += @(
+@"
+# System-context note
+# Preserve user-level folders/data so reinstall remains friendly.
 "@
         )
     }
@@ -528,6 +596,10 @@ if (`$installContext -eq 'User' -and [Security.Principal.WindowsIdentity]::GetCu
     $defaultUninstallExeOptions = @($defaultUninstallExeOptions | Select-Object -Unique)
     $preInstallChecks = @($preInstallChecks | Select-Object -Unique)
     $prerequisiteSuggestions = @($prerequisiteSuggestions | Select-Object -Unique)
+    $customInstallSuggestions = @($presetCustomInstallSuggestions | Select-Object -Unique)
+    $postInstallSuggestions = @($presetPostInstallSuggestions | Select-Object -Unique)
+    $customUninstallSuggestions = @($presetCustomUninstallSuggestions | Select-Object -Unique)
+    $postUninstallSuggestions = @($presetPostUninstallSuggestions | Select-Object -Unique)
 
     $contextSelectionSuggestions = @()
     $contextSelectionSuggestions += "Selected Context: $safeContext"
@@ -588,6 +660,26 @@ if (`$installContext -eq 'User' -and [Security.Principal.WindowsIdentity]::GetCu
                 Title = "Uninstall Executable"
                 Summary = "Possible uninstall executable names/strategies to try. Preset: $presetName."
                 Suggestions = $defaultUninstallExeOptions
+            }
+            CustomInstallCommands = [ordered]@{
+                Title = "Custom Install Commands"
+                Summary = "Starter custom-install patterns for $productDisplay. Use these when the app needs extra actions beyond the silent switch."
+                Suggestions = $customInstallSuggestions
+            }
+            PostInstallCommands = [ordered]@{
+                Title = "Post-Install Commands"
+                Summary = "Starter post-install patterns for $productDisplay. Use these for cleanup, shortcut checks, or verification after install."
+                Suggestions = $postInstallSuggestions
+            }
+            CustomUninstallCommands = [ordered]@{
+                Title = "Custom Uninstall Commands"
+                Summary = "Starter custom-uninstall patterns for $productDisplay. Use these for vendor uninstall flow or elevated removal actions."
+                Suggestions = $customUninstallSuggestions
+            }
+            PostUninstallCommands = [ordered]@{
+                Title = "Post-Uninstall Commands"
+                Summary = "Starter post-uninstall patterns for $productDisplay. Use these for leftover cleanup and user-data preservation guidance."
+                Suggestions = $postUninstallSuggestions
             }
             PreInstallChecks = [ordered]@{
                 Title = "Pre-Install Checks"
