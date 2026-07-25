@@ -2108,6 +2108,38 @@ function Set-CommandSectionState {
     }
 }
 
+function Ensure-CustomUninstallTextBound {
+    param(
+        [string]$ExpectedText,
+        [string]$Stage = ""
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ExpectedText)) {
+        return
+    }
+
+    if (-not $script:txtCustomUninstall) {
+        return
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($script:txtCustomUninstall.Text)) {
+        return
+    }
+
+    $script:txtCustomUninstall.Text = Format-CodeEditorText -Text $ExpectedText
+    if ($script:lblCustomUninstallHeader) {
+        $script:txtCustomUninstall.Visible = $true
+        if ($script:lblCustomUninstallHeader.Text -match '^\[\+\]') {
+            $script:lblCustomUninstallHeader.Text = $script:lblCustomUninstallHeader.Text.Replace('[+]', '[-]')
+        }
+        if ($script:lblCustomUninstallHeader.Tag -and $script:lblCustomUninstallHeader.Tag.ContainsKey('IsExpanded')) {
+            $script:lblCustomUninstallHeader.Tag.IsExpanded = $true
+        }
+    }
+
+    Write-ProcessOutputLine -Message ("CustomUninstall textbox rebinding applied at stage '{0}'. Length={1}" -f $Stage, $script:txtCustomUninstall.TextLength) -Level "WARN"
+}
+
 function Sync-CommandSectionExpansionState {
     [System.Windows.Forms.Application]::DoEvents()
     Expand-CommandSectionsWithContent
@@ -3552,6 +3584,8 @@ function Load-ExistingPackageDataIfPresent {
         Set-CommandSectionState -HeaderLabel $script:lblCustomUninstallHeader -Editor $script:txtCustomUninstall -Text $loadResult.CustomUninstall
         Set-CommandSectionState -HeaderLabel $script:lblPostUninstallHeader -Editor $script:txtPostUninstall -Text $loadResult.PostUninstall
 
+        Ensure-CustomUninstallTextBound -ExpectedText $loadResult.CustomUninstall -Stage "post-bind"
+
         Write-ProcessOutputLine -Message ("Textbox lengths after bind | PreInstall={0} CustomInstall={1} PostInstall={2} PreUninstall={3} CustomUninstall={4} PostUninstall={5}" -f $script:txtPreInstall.TextLength, $script:txtCustomInstall.TextLength, $script:txtPostInstall.TextLength, $script:txtPreUninstall.TextLength, $script:txtCustomUninstall.TextLength, $script:txtPostUninstall.TextLength) -Level "INFO"
 
         if ($script:txtUninstallExecutable) {
@@ -3573,6 +3607,9 @@ function Load-ExistingPackageDataIfPresent {
         if ($script:lblUninstallSwitch) { $script:lblUninstallSwitch.Visible = $true }
 
         Sync-CommandSectionExpansionState
+        Ensure-CustomUninstallTextBound -ExpectedText $loadResult.CustomUninstall -Stage "post-sync"
+
+        Write-ProcessOutputLine -Message ("Textbox lengths after sync | PreInstall={0} CustomInstall={1} PostInstall={2} PreUninstall={3} CustomUninstall={4} PostUninstall={5}" -f $script:txtPreInstall.TextLength, $script:txtCustomInstall.TextLength, $script:txtPostInstall.TextLength, $script:txtPreUninstall.TextLength, $script:txtCustomUninstall.TextLength, $script:txtPostUninstall.TextLength) -Level "INFO"
         Update-Status "Custom commands and metadata loaded from existing package!" "Green"
     }
     catch {
