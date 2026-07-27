@@ -33,7 +33,7 @@
         "autoOpenReports": true
     },
     "deployment": {
-        "networkSharePath": "\\\\rb.win.frb.org\\k1\\shared\\DSC_Pkgs\\Pkgxfer",
+            "networkSharePath": "\\\\rb.win.frb.org\\k1\\shared\\DSC_Pkgs\\Pkgmedia\\Lss Packages\\",
         "autoCopyEnabled": true,
         "createBackupBeforeCopy": true,
         "overwriteExisting": true,

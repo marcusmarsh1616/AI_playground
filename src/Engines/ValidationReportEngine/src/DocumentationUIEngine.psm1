@@ -18,6 +18,7 @@ Import-Module (Join-Path $PSScriptRoot "DocumentationSessionEngine.psm1") -Force
 Import-Module (Join-Path $PSScriptRoot "CaptureEngine.psm1") -Force -ErrorAction Stop
 Import-Module (Join-Path $PSScriptRoot "InstallationDetectorEngine.psm1") -Force -ErrorAction Stop
 Import-Module (Join-Path $PSScriptRoot "DocumentGeneratorEngine.psm1") -Force -ErrorAction Stop
+Import-Module (Join-Path $PSScriptRoot "VendorDocumentationEngine.psm1") -Force -ErrorAction Stop
 
 #region Private Variables
 
@@ -25,6 +26,7 @@ $script:CurrentSession = $null
 $script:Form = $null
 $script:Controls = @{}
 $script:UiRunResult = $null
+$script:CurrentAppVendor = ""
 
 #endregion
 
@@ -88,6 +90,26 @@ function Start-AutomatedDocumentation {
             throw "Figure 2 capture failed"
         }
         
+        Start-Sleep -Milliseconds 500
+        $script:Form.WindowState = 'Normal'
+        $script:Form.BringToFront()
+        Start-Sleep -Milliseconds 500
+
+        # Step 3.5: Capture Figure 4 (Application Opened)
+        Write-UIStatus "Capturing Figure 4 (Application Opened)" "Blue"
+        $script:Form.WindowState = 'Minimized'
+        Start-Sleep -Milliseconds 500
+
+        $outputPath4 = Join-Path $script:CurrentSession.WorkingDirectory "Figure4.jpg"
+        $result4 = Invoke-AutomatedApplicationLaunchCapture -AppName $script:CurrentSession.AppName -OutputPath $outputPath4
+
+        if ($result4.Success) {
+            $script:CurrentSession = Update-DocumentationSessionCapture -Session $script:CurrentSession -FigureNumber 4 -FilePath $outputPath4
+            Write-UIStatus "Figure 4 captured successfully" "Green"
+        } else {
+            throw "Figure 4 capture failed"
+        }
+
         Start-Sleep -Milliseconds 500
         $script:Form.WindowState = 'Normal'
         $script:Form.BringToFront()
@@ -189,6 +211,9 @@ exit `$LASTEXITCODE
         if ($script:CurrentSession.Captures.Figure3) {
             $doc = Add-ValidationScreenshot -HtmlContent $doc -FigureNumber 3 -ImagePath $script:CurrentSession.Captures.Figure3
         }
+        if ($script:CurrentSession.Captures.Figure4) {
+            $doc = Add-ValidationScreenshot -HtmlContent $doc -FigureNumber 4 -ImagePath $script:CurrentSession.Captures.Figure4
+        }
         # Format data for HTML (replace newlines with <br> tags)
         $formattedDirs = $script:CurrentSession.InstallDetails.InstallDirectory.Replace([Environment]::NewLine, '<br>')
         $formattedKeys = $script:CurrentSession.InstallDetails.RegistryKeys.Replace([Environment]::NewLine, '<br>')
@@ -200,6 +225,13 @@ exit `$LASTEXITCODE
             -RegistryKeys $formattedKeys `
             -ServicesCreated $script:CurrentSession.InstallDetails.ServicesCreated `
             -UninstallKeys $formattedUninstall
+
+        $vendorSummary = Get-VendorDocumentationSummary -Vendor $script:CurrentAppVendor -AppName $script:CurrentSession.AppName -AppVersion $script:CurrentSession.AppVersion
+        $doc = Set-VendorDocumentationDetails `
+            -HtmlContent $doc `
+            -PrerequisitesText $vendorSummary.Prerequisites `
+            -ApplicationConflictsText $vendorSummary.ApplicationConflicts `
+            -UpgradePathsText $vendorSummary.UpgradePaths
         
         $docFolder = ".\documentation"
         if (-not (Test-Path $docFolder)) {
@@ -216,6 +248,7 @@ exit `$LASTEXITCODE
         # Session cleanup handled by setting to null
         
         Write-UIStatus "Documentation complete." "Green"
+        Close-InstalledAppsWindow
         
         # Reset UI
         $script:CurrentSession = $null
@@ -233,6 +266,7 @@ exit `$LASTEXITCODE
         }
         
     } catch {
+        Close-InstalledAppsWindow
         Write-UIStatus "Error: $($_.Exception.Message)" "Red"
         [System.Windows.Forms.MessageBox]::Show("Error occurred:" + [Environment]::NewLine + [Environment]::NewLine + $_.Exception.Message, "Error", 'OK', 'Error')
         
@@ -258,6 +292,9 @@ function Invoke-DocumentationCaptureFromContext {
     #>
     [CmdletBinding()]
     param(
+        [Parameter(Mandatory = $false)]
+        [string]$AppVendor = "",
+
         [Parameter(Mandatory = $true)]
         [string]$AppName,
 
@@ -282,6 +319,7 @@ function Invoke-DocumentationCaptureFromContext {
 
     $script:Controls.txtAppName.Text = $AppName
     $script:Controls.txtAppVersion.Text = $AppVersion
+    $script:CurrentAppVendor = $AppVendor
 
     return (Start-AutomatedDocumentation)
 }

@@ -13,6 +13,348 @@
     Part of: FRB Packaging Tool Modular Architecture
 #>
 
+$script:WebSuggestionCache = @{}
+
+function Get-WebSuggestionCachePath {
+    $cacheRoot = Join-Path $env:LOCALAPPDATA "FRB-Packaging-Tool"
+    if (-not (Test-Path $cacheRoot)) {
+        New-Item -Path $cacheRoot -ItemType Directory -Force | Out-Null
+    }
+
+    return (Join-Path $cacheRoot "web-switch-cache.json")
+}
+
+function Initialize-WebSuggestionCache {
+    if ($script:WebSuggestionCache.Count -gt 0) {
+        return
+    }
+
+    $cachePath = Get-WebSuggestionCachePath
+    if (-not (Test-Path $cachePath)) {
+        return
+    }
+
+    try {
+        $cacheJson = Get-Content -Path $cachePath -Raw -Encoding UTF8
+        if ([string]::IsNullOrWhiteSpace($cacheJson)) { return }
+        $cacheObject = $cacheJson | ConvertFrom-Json -ErrorAction Stop
+        foreach ($prop in $cacheObject.PSObject.Properties) {
+            $script:WebSuggestionCache[$prop.Name] = $prop.Value
+        }
+    }
+    catch {
+        # Ignore cache read errors and continue with fresh in-memory cache.
+    }
+}
+
+function Save-WebSuggestionCache {
+    try {
+        $cachePath = Get-WebSuggestionCachePath
+        $cacheObject = [ordered]@{}
+        foreach ($key in $script:WebSuggestionCache.Keys) {
+            $cacheObject[$key] = $script:WebSuggestionCache[$key]
+        }
+        $cacheObject | ConvertTo-Json -Depth 8 | Set-Content -Path $cachePath -Encoding UTF8 -Force
+    }
+    catch {
+        # Cache persistence failures should not block helper generation.
+    }
+}
+
+function Get-SimplifiedWebText {
+    [CmdletBinding()]
+    param(
+        [string]$RawHtml = ""
+    )
+
+    if ([string]::IsNullOrWhiteSpace($RawHtml)) {
+        return ""
+    }
+
+    $text = $RawHtml
+    $text = [regex]::Replace($text, '(?is)<script.*?</script>', ' ')
+    $text = [regex]::Replace($text, '(?is)<style.*?</style>', ' ')
+    $text = [regex]::Replace($text, '(?is)<[^>]+>', ' ')
+    $text = [regex]::Replace($text, '&nbsp;|&#160;', ' ')
+    $text = [regex]::Replace($text, '&quot;|&#34;', '"')
+    $text = [regex]::Replace($text, '&#39;|&apos;', "'")
+    $text = [regex]::Replace($text, '&amp;', '&')
+    $text = [regex]::Replace($text, '\s+', ' ')
+    return $text.Trim()
+}
+
+function Extract-SilentSwitchesFromText {
+    [CmdletBinding()]
+    param(
+        [string]$Text = "",
+        [ValidateSet("Install", "Uninstall")]
+        [string]$Mode = "Install"
+    )
+
+    $results = New-Object System.Collections.Generic.List[string]
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return @()
+    }
+
+    $normalized = $Text -replace '[\r\n]+', ' '
+    $candidates = New-Object System.Collections.Generic.List[string]
+
+    $patternA = '(?i)(/(?:SILENT|VERYSILENT|S|Q|QN|QB!?|PASSIVE|QUIET|NORESTART|SUPPRESSMSGBOXES|SP-|NOICONS)(?:\s+[^\r\n]{0,80})?)'
+    $patternB = '(?i)(--?(?:silent|quiet|norestart|uninstall)(?:[=: ]+[^\s\r\n<>]{1,40})?)'
+
+    foreach ($match in [regex]::Matches($normalized, $patternA)) {
+        $value = $match.Groups[1].Value.Trim(' ', ';', ',', '.', ':')
+        if (-not [string]::IsNullOrWhiteSpace($value)) {
+            [void]$candidates.Add($value)
+        }
+    }
+
+    foreach ($match in [regex]::Matches($normalized, $patternB)) {
+        $value = $match.Groups[1].Value.Trim(' ', ';', ',', '.', ':')
+        if (-not [string]::IsNullOrWhiteSpace($value)) {
+            [void]$candidates.Add($value)
+        }
+    }
+
+    $cluster = @($candidates | Select-Object -Unique)
+    foreach ($item in $cluster) {
+        $v = $item.Trim()
+        if ([string]::IsNullOrWhiteSpace($v)) { continue }
+
+        $lower = $v.ToLowerInvariant()
+        $switchTokens = New-Object System.Collections.Generic.List[string]
+
+        if ($lower -match '(^|\s)/verysilent(\s|$)') { [void]$switchTokens.Add('/VERYSILENT') }
+        if ($lower -match '(^|\s)/silent(\s|$)') { [void]$switchTokens.Add('/SILENT') }
+        if ($lower -match '(^|\s)/s(\s|$)') { [void]$switchTokens.Add('/S') }
+        if ($lower -match '(^|\s)/qn(\s|$)') { [void]$switchTokens.Add('/qn') }
+        if ($lower -match '(^|\s)/qb!?(\s|$)') { [void]$switchTokens.Add('/qb!') }
+        if ($lower -match '(^|\s)/quiet(\s|$)') { [void]$switchTokens.Add('/quiet') }
+        if ($lower -match '(^|\s)/passive(\s|$)') { [void]$switchTokens.Add('/passive') }
+        if ($lower -match '(^|\s)/norestart(\s|$)') { [void]$switchTokens.Add('/norestart') }
+        if ($lower -match 'suppressmsgboxes') { [void]$switchTokens.Add('/SUPPRESSMSGBOXES') }
+        if ($lower -match '(^|\s)/sp-(\s|$)') { [void]$switchTokens.Add('/SP-') }
+        if ($lower -match '(^|\s)/noicons(\s|$)') { [void]$switchTokens.Add('/NOICONS') }
+        if ($lower -match '(^|\s)--silent(\s|$)') { [void]$switchTokens.Add('--silent') }
+        if ($lower -match '(^|\s)--quiet(\s|$)') { [void]$switchTokens.Add('--quiet') }
+        if ($lower -match '(^|\s)-silent(\s|$)') { [void]$switchTokens.Add('-silent') }
+
+        if ($Mode -eq "Uninstall") {
+            if ($lower -match '(^|\s)/x(\s|$)') { [void]$switchTokens.Add('/x') }
+            if ($lower -match 'uninstall') { [void]$switchTokens.Add('/uninstall') }
+            if ($lower -match '_\?=') { [void]$switchTokens.Add('_?=') }
+        }
+
+        if ($v -match '(?i)\bREBOOT=ReallySuppress\b') {
+            [void]$switchTokens.Add('REBOOT=ReallySuppress')
+        }
+        if ($v -match '(?i)/noUpdater') {
+            [void]$switchTokens.Add('/noUpdater')
+        }
+        if ($v -match '(?i)/closeRunningNpp') {
+            [void]$switchTokens.Add('/closeRunningNpp')
+        }
+
+        $switchLine = (@($switchTokens | Select-Object -Unique | Select-Object -First 8) -join ' ').Trim()
+        if ([string]::IsNullOrWhiteSpace($switchLine)) {
+            continue
+        }
+
+        $looksSilent = $switchLine -match '(?i)silent|quiet|/qn|/qb|/s|norestart|verysilent|suppressmsgboxes'
+        if (-not $looksSilent) { continue }
+
+        if ($Mode -eq "Uninstall") {
+            if ($switchLine -match '(?i)install' -and $switchLine -notmatch '(?i)uninstall') { continue }
+            if ($switchLine -match '(?i)^/i\b') { continue }
+        }
+
+        [void]$results.Add($switchLine)
+    }
+
+    return @($results | Select-Object -Unique | Select-Object -First 8)
+}
+
+function Invoke-BingSearchLinks {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Query,
+
+        [int]$MaxLinks = 6
+    )
+
+    $links = New-Object System.Collections.Generic.List[string]
+    try {
+        $uri = "https://www.bing.com/search?q=$([uri]::EscapeDataString($Query))&count=12&setlang=en-us"
+        $response = Invoke-WebRequest -Uri $uri -UseBasicParsing -TimeoutSec 12 -ErrorAction Stop
+        $html = $response.Content
+        if ([string]::IsNullOrWhiteSpace($html)) {
+            return @()
+        }
+
+        foreach ($match in [regex]::Matches($html, '(?i)<a\s+href="(https?://[^"]+)"')) {
+            $url = $match.Groups[1].Value
+            if ([string]::IsNullOrWhiteSpace($url)) { continue }
+            if ($url -match '(?i)bing\.com|microsofttranslator|r\.bing\.com|go\.microsoft\.com') { continue }
+            if ($url -match '(?i)javascript:|mailto:') { continue }
+            [void]$links.Add($url)
+            if ($links.Count -ge $MaxLinks) { break }
+        }
+    }
+    catch {
+        return @()
+    }
+
+    return @($links | Select-Object -Unique)
+}
+
+function Invoke-DuckDuckGoSearchLinks {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Query,
+
+        [int]$MaxLinks = 8
+    )
+
+    $links = New-Object System.Collections.Generic.List[string]
+    try {
+        $uri = "https://duckduckgo.com/html/?q=$([uri]::EscapeDataString($Query))"
+        $response = Invoke-WebRequest -Uri $uri -UseBasicParsing -TimeoutSec 12 -ErrorAction Stop
+        $html = $response.Content
+        if ([string]::IsNullOrWhiteSpace($html)) {
+            return @()
+        }
+
+        foreach ($match in [regex]::Matches($html, 'uddg=([^&"]+)')) {
+            $encoded = $match.Groups[1].Value
+            if ([string]::IsNullOrWhiteSpace($encoded)) { continue }
+            $url = [uri]::UnescapeDataString($encoded)
+            if ([string]::IsNullOrWhiteSpace($url)) { continue }
+            if ($url -notmatch '^https?://') { continue }
+            if ($url -match '(?i)duckduckgo\.com') { continue }
+            [void]$links.Add($url)
+            if ($links.Count -ge $MaxLinks) { break }
+        }
+    }
+    catch {
+        return @()
+    }
+
+    return @($links | Select-Object -Unique)
+}
+
+function Get-WebSilentSwitchSuggestions {
+    [CmdletBinding()]
+    param(
+        [string]$Vendor = "",
+        [string]$AppName = "",
+        [string]$Version = "",
+        [string]$InstallerType = "Generic"
+    )
+
+    Initialize-WebSuggestionCache
+
+    $safeVendor = if ([string]::IsNullOrWhiteSpace($Vendor)) { "" } else { $Vendor.Trim() }
+    $safeAppName = if ([string]::IsNullOrWhiteSpace($AppName)) { "" } else { $AppName.Trim() }
+    $safeVersion = if ([string]::IsNullOrWhiteSpace($Version)) { "" } else { $Version.Trim() }
+    $safeInstallerType = if ([string]::IsNullOrWhiteSpace($InstallerType)) { "Generic" } else { $InstallerType.Trim() }
+
+    if ([string]::IsNullOrWhiteSpace($safeAppName)) {
+        return @{ Install = @(); Uninstall = @(); Sources = @(); Notes = @("Web lookup skipped: app name missing.") }
+    }
+
+    $cacheKey = ("{0}|{1}|{2}|{3}" -f $safeVendor.ToLowerInvariant(), $safeAppName.ToLowerInvariant(), $safeVersion.ToLowerInvariant(), $safeInstallerType.ToLowerInvariant())
+    if ($script:WebSuggestionCache.ContainsKey($cacheKey)) {
+        $cached = $script:WebSuggestionCache[$cacheKey]
+        if ($cached -and $cached.GeneratedAt) {
+            try {
+                $generated = [DateTime]::Parse($cached.GeneratedAt)
+                if ((New-TimeSpan -Start $generated -End (Get-Date)).TotalDays -lt 30) {
+                    return $cached
+                }
+            }
+            catch {
+            }
+        }
+    }
+
+    $installValues = New-Object System.Collections.Generic.List[string]
+    $uninstallValues = New-Object System.Collections.Generic.List[string]
+    $sources = New-Object System.Collections.Generic.List[string]
+    $notes = New-Object System.Collections.Generic.List[string]
+
+    $productBits = @($safeVendor, $safeAppName, $safeVersion, $safeInstallerType) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    $productQuery = ($productBits -join ' ')
+
+    $queries = @(
+        "$productQuery silent install",
+        "$productQuery unattended install",
+        "$productQuery silent uninstall",
+        "$productQuery quiet uninstall",
+        "$productQuery vendor documentation silent install"
+    )
+
+    $allLinks = New-Object System.Collections.Generic.List[string]
+    foreach ($query in $queries) {
+        foreach ($link in @(Invoke-DuckDuckGoSearchLinks -Query $query -MaxLinks 6)) {
+            [void]$allLinks.Add($link)
+        }
+        foreach ($link in @(Invoke-BingSearchLinks -Query $query -MaxLinks 5)) {
+            [void]$allLinks.Add($link)
+        }
+    }
+    $candidateLinks = @($allLinks | Select-Object -Unique | Select-Object -First 10)
+
+    foreach ($link in $candidateLinks) {
+        try {
+            $web = Invoke-WebRequest -Uri $link -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
+            $raw = $web.Content
+            if ([string]::IsNullOrWhiteSpace($raw)) { continue }
+
+            $text = Get-SimplifiedWebText -RawHtml $raw
+            if ([string]::IsNullOrWhiteSpace($text)) { continue }
+
+            $host = ""
+            try { $host = ([uri]$link).Host } catch { $host = "web" }
+            [void]$sources.Add("$host - $link")
+
+            foreach ($candidate in @(Extract-SilentSwitchesFromText -Text $text -Mode "Install")) {
+                [void]$installValues.Add($candidate)
+            }
+            foreach ($candidate in @(Extract-SilentSwitchesFromText -Text $text -Mode "Uninstall")) {
+                [void]$uninstallValues.Add($candidate)
+            }
+        }
+        catch {
+            continue
+        }
+    }
+
+    $installFinal = @($installValues | Select-Object -Unique | Select-Object -First 8)
+    $uninstallFinal = @($uninstallValues | Select-Object -Unique | Select-Object -First 8)
+
+    if ($installFinal.Count -eq 0 -and $uninstallFinal.Count -eq 0) {
+        [void]$notes.Add("Web lookup completed but no reliable silent switches were extracted.")
+    }
+    elseif ($sources.Count -gt 0) {
+        [void]$notes.Add("Web lookup produced source-backed silent switch candidates.")
+    }
+
+    $result = [ordered]@{
+        Install = $installFinal
+        Uninstall = $uninstallFinal
+        Sources = @($sources | Select-Object -Unique | Select-Object -First 8)
+        Notes = @($notes | Select-Object -Unique)
+        GeneratedAt = (Get-Date).ToString("o")
+    }
+
+    $script:WebSuggestionCache[$cacheKey] = $result
+    Save-WebSuggestionCache
+
+    return $result
+}
+
 function Get-InstallSwitches {
     <#
     .SYNOPSIS
@@ -239,6 +581,123 @@ function Get-SwitchesForInstaller {
     return $result
 }
 
+function Get-WrapperAwareSectionSuggestions {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SectionKey,
+
+        [string]$InstallerType = "Generic",
+        [string]$AppName = "Application",
+        [string]$Vendor = "Vendor",
+        [string]$InstallContext = "System"
+    )
+
+    $safeInstallerType = if ([string]::IsNullOrWhiteSpace($InstallerType)) { "Generic" } else { $InstallerType }
+    $safeAppName = if ([string]::IsNullOrWhiteSpace($AppName)) { "Application" } else { $AppName.Trim() }
+    $safeVendor = if ([string]::IsNullOrWhiteSpace($Vendor)) { "Vendor" } else { $Vendor.Trim() }
+    $safeContext = if ($InstallContext -eq "User") { "User" } else { "System" }
+
+    switch ($SectionKey) {
+        "PreInstallCommands" {
+            return @(
+@"
+# Wrapper-aware pre-install check using Globals.ps1 cmdlets
+Write-Log -Message 'Preparing to install $safeAppName in $safeContext context.' -Source 'Pre-Install'
+Show-InstallationProgress -StatusMessage 'Preparing $safeAppName for installation...'
+Block-AppExecution -ProcessName '$($safeAppName -replace '\s+', '')' -ErrorAction SilentlyContinue
+"@,
+@"
+# Stop vendor-related services before install if they can lock files
+if (Test-ServiceExists -Name '$($safeVendor -replace '\s+', '')') {
+    Stop-ServiceAndDependencies -Name '$($safeVendor -replace '\s+', '')' -ErrorAction SilentlyContinue
+}
+"@
+            )
+        }
+        "CustomInstallCommands" {
+            if ($safeInstallerType -eq "MSI") {
+                return @(
+@"
+# Wrapper-aware MSI install example
+Write-Log -Message 'Executing MSI install for $safeAppName.' -Source 'Install'
+Execute-MSI -Action Install -Path `$appMsiName -Parameters `$appInstallCommandLine
+"@
+                )
+            }
+
+            return @(
+@"
+# Wrapper-aware EXE install example
+Write-Log -Message 'Executing installer for $safeAppName.' -Source 'Install'
+Execute-Process -Path `$installPhasePath -Parameters `$appInstallCommandLine -WindowStyle Hidden -PassThru
+"@
+            )
+        }
+        "PostInstallCommands" {
+            return @(
+@"
+# Wrapper-aware post-install validation example
+Write-Log -Message 'Validating $safeAppName install footprint.' -Source 'Post-Install'
+Get-InstalledApplication -Name '$safeAppName' -Exact -ErrorAction SilentlyContinue | Out-Null
+Update-SessionEnvironmentVariables
+"@,
+@"
+# Refresh shell and session so shortcuts and environment changes are visible
+Write-Log -Message 'Refreshing desktop and session state after install.' -Source 'Post-Install'
+[PSADT.Explorer]::RefreshDesktopAndEnvironmentVariables()
+"@
+            )
+        }
+        "PreUninstallCommands" {
+            return @(
+@"
+# Wrapper-aware pre-uninstall preparation
+Write-Log -Message 'Preparing to uninstall $safeAppName.' -Source 'Pre-Uninstall'
+Show-InstallationProgress -StatusMessage 'Preparing $safeAppName for uninstall...'
+Block-AppExecution -ProcessName '$($safeAppName -replace '\s+', '')' -ErrorAction SilentlyContinue
+"@
+            )
+        }
+        "CustomUninstallCommands" {
+            if ($safeInstallerType -eq "MSI") {
+                return @(
+@"
+# Wrapper-aware MSI uninstall example
+Write-Log -Message 'Executing MSI uninstall for $safeAppName.' -Source 'Uninstall'
+Execute-MSI -Action Uninstall -Path `$appMsiName -Parameters `$appUninstallCommandLine
+"@
+                )
+            }
+
+            return @(
+@"
+# Wrapper-aware EXE uninstall example
+Write-Log -Message 'Executing uninstall command for $safeAppName.' -Source 'Uninstall'
+Execute-Process -Path `$appUninstallExeName -Parameters `$appUninstallCommandLine -WindowStyle Hidden -PassThru
+"@
+            )
+        }
+        "PostUninstallCommands" {
+            return @(
+@"
+# Wrapper-aware post-uninstall cleanup example
+Write-Log -Message 'Cleaning residual machine folders for $safeAppName if they remain.' -Source 'Post-Uninstall'
+Remove-Folder -Path (Join-Path `$env:ProgramFiles '$safeAppName') -ContinueOnError `$true
+Remove-Folder -Path (Join-Path `$env:ProgramFiles '${safeVendor}') -ContinueOnError `$true
+"@,
+@"
+# Preserve user-level items by policy but log what should be checked manually
+Write-Log -Message 'User-level leftovers such as AppData or HKCU keys should be reviewed per package policy.' -Source 'Post-Uninstall'
+"@
+            )
+        }
+        default {
+            return @()
+        }
+    }
+}
+
 function Get-PackageHelpSections {
     <#
     .SYNOPSIS
@@ -283,7 +742,8 @@ function Get-PackageHelpSections {
         [string]$CurrentUninstallSwitch = "",
         [string]$CurrentUninstallExecutable = "",
         [string]$InstallContext = "System",
-        [hashtable]$ContextRecommendation = @{}
+        [hashtable]$ContextRecommendation = @{},
+        [switch]$DisableWebLookup
     )
 
     $safeInstallerType = if ([string]::IsNullOrWhiteSpace($InstallerType)) { "Generic" } else { $InstallerType }
@@ -300,6 +760,11 @@ function Get-PackageHelpSections {
     $installSwitches = @(Get-InstallSwitches -InstallerType $safeInstallerType)
     $uninstallSwitches = @(Get-UninstallSwitches -InstallerType $safeInstallerType)
 
+    $webSuggestions = @{ Install = @(); Uninstall = @(); Sources = @(); Notes = @() }
+    if (-not $DisableWebLookup) {
+        $webSuggestions = Get-WebSilentSwitchSuggestions -Vendor $safeVendor -AppName $safeAppName -Version $safeVersion -InstallerType $safeInstallerType
+    }
+
     if (-not [string]::IsNullOrWhiteSpace($CurrentInstallSwitch)) {
         $installSwitches = @($CurrentInstallSwitch.Trim()) + ($installSwitches | Where-Object { $_ -ne $CurrentInstallSwitch.Trim() })
     }
@@ -308,8 +773,19 @@ function Get-PackageHelpSections {
     }
 
     $extension = ""
+    $mediaFileName = ""
+    $mediaFileNameNoExt = ""
     if (-not [string]::IsNullOrWhiteSpace($InstallMediaPath)) {
-        try { $extension = [System.IO.Path]::GetExtension($InstallMediaPath).ToLower() } catch { $extension = "" }
+        try {
+            $extension = [System.IO.Path]::GetExtension($InstallMediaPath).ToLower()
+            $mediaFileName = [System.IO.Path]::GetFileName($InstallMediaPath)
+            $mediaFileNameNoExt = [System.IO.Path]::GetFileNameWithoutExtension($InstallMediaPath)
+        }
+        catch {
+            $extension = ""
+            $mediaFileName = ""
+            $mediaFileNameNoExt = ""
+        }
     }
 
     $presetName = "General"
@@ -425,6 +901,17 @@ if (`$tempDrive -and `$tempDrive.Free -lt 6GB) {
         }
     }
 
+    # Use already-entered values as first-priority suggestions so helper output stays grounded in real package data.
+    if (-not [string]::IsNullOrWhiteSpace($CurrentInstallSwitch)) {
+        $installCommandSuggestions = @("`$appInstallCommandLine = '$($CurrentInstallSwitch.Trim())'") + $installCommandSuggestions
+    }
+
+    foreach ($webInstall in @($webSuggestions.Install)) {
+        if ([string]::IsNullOrWhiteSpace($webInstall)) { continue }
+        $sourceTag = if ($webSuggestions.Sources.Count -gt 0) { $webSuggestions.Sources[0] } else { "Web lookup" }
+        $installCommandSuggestions = @("# Source: $sourceTag`r`n`$appInstallCommandLine = '$webInstall'") + $installCommandSuggestions
+    }
+
     $uninstallCommandSuggestions = @()
     if ($presetUninstallCommandSuggestions.Count -gt 0) {
         $uninstallCommandSuggestions += $presetUninstallCommandSuggestions
@@ -439,12 +926,91 @@ if (`$tempDrive -and `$tempDrive.Free -lt 6GB) {
         }
     }
 
+    # Additional uninstall switch candidates inferred from install switch and media type.
+    if (-not [string]::IsNullOrWhiteSpace($CurrentInstallSwitch)) {
+        $currentInstallTrim = $CurrentInstallSwitch.Trim()
+        if ($extension -eq ".msi" -or $safeInstallerType -eq "MSI") {
+            if ($currentInstallTrim -match '(?i)REBOOT=ReallySuppress|/norestart') {
+                $uninstallCommandSuggestions += "`$appUninstallCommandLine = '/qn REBOOT=ReallySuppress'"
+            }
+            if ($currentInstallTrim -match '(?i)/qb!|/passive') {
+                $uninstallCommandSuggestions += "`$appUninstallCommandLine = '/qb! REBOOT=ReallySuppress'"
+            }
+        }
+        elseif ($currentInstallTrim -match '(?i)VERYSILENT') {
+            $uninstallCommandSuggestions += "`$appUninstallCommandLine = '/VERYSILENT /NORESTART /SUPPRESSMSGBOXES'"
+        }
+        elseif ($currentInstallTrim -match '(?i)SILENT') {
+            $uninstallCommandSuggestions += "`$appUninstallCommandLine = '/SILENT /NORESTART'"
+        }
+        elseif ($currentInstallTrim -match '(?i)(^|\s)/S(\s|$)') {
+            $uninstallCommandSuggestions += "`$appUninstallCommandLine = '/S'"
+        }
+    }
+
+    if ($safeInstallerType -eq "NSIS") {
+        $uninstallCommandSuggestions += "`$appUninstallCommandLine = '/S _?=`"`$dirFiles`"'"
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($CurrentUninstallSwitch)) {
+        $uninstallCommandSuggestions = @("`$appUninstallCommandLine = '$($CurrentUninstallSwitch.Trim())'") + $uninstallCommandSuggestions
+    }
+
+    foreach ($webUninstall in @($webSuggestions.Uninstall)) {
+        if ([string]::IsNullOrWhiteSpace($webUninstall)) { continue }
+        $sourceTag = if ($webSuggestions.Sources.Count -gt 0) { $webSuggestions.Sources[0] } else { "Web lookup" }
+        $uninstallCommandSuggestions = @("# Source: $sourceTag`r`n`$appUninstallCommandLine = '$webUninstall'") + $uninstallCommandSuggestions
+    }
+
     $defaultUninstallExeOptions = @(
         "`$appUninstallExeName = 'unins000.exe'",
         "`$appUninstallExeName = '$($safeAppName -replace '\\s+', '')_Uninstall.exe'",
         "`$appUninstallExeName = '$safeAppName-uninstall.exe'",
         "`$appUninstallExeName = '' # Use MSI/product code uninstall path"
     )
+
+    if ($safeInstallerType -eq "MSI" -or $extension -eq ".msi") {
+        $defaultUninstallExeOptions = @(
+            "`$appUninstallExeName = '' # MSI uninstall path (no EXE name needed)",
+            "`$appUninstallExeName = '' # Use app product code with Execute-MSI -Action Uninstall"
+        ) + $defaultUninstallExeOptions
+    }
+
+    if ($safeInstallerType -eq "InnoSetup") {
+        $defaultUninstallExeOptions = @(
+            "`$appUninstallExeName = 'unins000.exe'",
+            "`$appUninstallExeName = 'unins001.exe'"
+        ) + $defaultUninstallExeOptions
+    }
+
+    if ($safeInstallerType -eq "NSIS") {
+        $defaultUninstallExeOptions = @(
+            "`$appUninstallExeName = 'uninstall.exe'",
+            "`$appUninstallExeName = 'Uninstall.exe'",
+            "`$appUninstallExeName = 'uninst.exe'"
+        ) + $defaultUninstallExeOptions
+    }
+
+    if ($safeInstallerType -eq "InstallShield") {
+        $defaultUninstallExeOptions = @(
+            "`$appUninstallExeName = 'setup.exe'",
+            "`$appUninstallExeName = 'uninstall.exe'"
+        ) + $defaultUninstallExeOptions
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($mediaFileName)) {
+        $defaultUninstallExeOptions = @(
+            "`$appUninstallExeName = '$mediaFileName' # Try media executable as uninstall launcher"
+        ) + $defaultUninstallExeOptions
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($mediaFileNameNoExt)) {
+        $trimmedMediaStem = $mediaFileNameNoExt.Trim()
+        $defaultUninstallExeOptions = @(
+            "`$appUninstallExeName = '$trimmedMediaStem.exe'",
+            "`$appUninstallExeName = '${trimmedMediaStem}_uninstall.exe'"
+        ) + $defaultUninstallExeOptions
+    }
 
     if ($presetUninstallExeOptions.Count -gt 0) {
         $defaultUninstallExeOptions = $presetUninstallExeOptions + $defaultUninstallExeOptions
@@ -458,7 +1024,7 @@ if (`$tempDrive -and `$tempDrive.Free -lt 6GB) {
     $preInstallChecks = @(
 @"
 # Check pending reboot (common silent install blocker)
-`$rebootPending = Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'
+`$rebootPending = Test-PendingReboot -ErrorAction SilentlyContinue
 if (`$rebootPending) {
     Write-Log -Message 'Pending reboot detected. Request reboot before install.' -Source 'Pre-Install'
     Show-InstallationPrompt -Message 'A reboot is pending. Reboot the device and rerun installation.' -ButtonRightText 'OK' -Icon Warning
@@ -468,8 +1034,8 @@ if (`$rebootPending) {
 @"
 # Stop application processes before install
 `$blockedProcesses = @('$($safeAppName -replace '\\s+', '')','${safeAppName}.exe','$($safeVendor -replace '\\s+', '')') | Where-Object { -not [string]::IsNullOrWhiteSpace(`$_) }
-foreach (`$processName in `$blockedProcesses) {
-    Get-Process -Name `$processName -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+if (`$blockedProcesses.Count -gt 0) {
+    Block-AppExecution -ProcessName `$blockedProcesses -ErrorAction SilentlyContinue
 }
 "@,
 @"
@@ -542,6 +1108,20 @@ if (`$installContext -eq 'User' -and [Security.Principal.WindowsIdentity]::GetCu
     $customUninstallSuggestions = @($presetCustomUninstallSuggestions | Select-Object -Unique)
     $postUninstallSuggestions = @($presetPostUninstallSuggestions | Select-Object -Unique)
 
+    $preInstallChecks += Get-WrapperAwareSectionSuggestions -SectionKey "PreInstallCommands" -InstallerType $safeInstallerType -AppName $safeAppName -Vendor $safeVendor -InstallContext $safeContext
+    $customInstallSuggestions += Get-WrapperAwareSectionSuggestions -SectionKey "CustomInstallCommands" -InstallerType $safeInstallerType -AppName $safeAppName -Vendor $safeVendor -InstallContext $safeContext
+    $postInstallSuggestions += Get-WrapperAwareSectionSuggestions -SectionKey "PostInstallCommands" -InstallerType $safeInstallerType -AppName $safeAppName -Vendor $safeVendor -InstallContext $safeContext
+    $preUninstallSuggestions += Get-WrapperAwareSectionSuggestions -SectionKey "PreUninstallCommands" -InstallerType $safeInstallerType -AppName $safeAppName -Vendor $safeVendor -InstallContext $safeContext
+    $customUninstallSuggestions += Get-WrapperAwareSectionSuggestions -SectionKey "CustomUninstallCommands" -InstallerType $safeInstallerType -AppName $safeAppName -Vendor $safeVendor -InstallContext $safeContext
+    $postUninstallSuggestions += Get-WrapperAwareSectionSuggestions -SectionKey "PostUninstallCommands" -InstallerType $safeInstallerType -AppName $safeAppName -Vendor $safeVendor -InstallContext $safeContext
+
+    $preInstallChecks = @($preInstallChecks | Select-Object -Unique)
+    $customInstallSuggestions = @($customInstallSuggestions | Select-Object -Unique)
+    $postInstallSuggestions = @($postInstallSuggestions | Select-Object -Unique)
+    $preUninstallSuggestions = @($preUninstallSuggestions | Select-Object -Unique)
+    $customUninstallSuggestions = @($customUninstallSuggestions | Select-Object -Unique)
+    $postUninstallSuggestions = @($postUninstallSuggestions | Select-Object -Unique)
+
     $contextSelectionSuggestions = @()
     $contextSelectionSuggestions += "Selected Context: $safeContext"
     if ($safeContext -eq "User") {
@@ -589,47 +1169,47 @@ if (`$installContext -eq 'User' -and [Security.Principal.WindowsIdentity]::GetCu
             }
             InstallCommand = [ordered]@{
                 Title = "Install Command Line"
-                Summary = "Silent install switch options for $productDisplay ($safeInstallerType). Preset: $presetName."
+                Summary = "Silent install switch options for $productDisplay ($safeInstallerType). Source-ordered from existing field value, live web lookup, vendor preset, installer defaults, and media hints."
                 Suggestions = $installCommandSuggestions
             }
             UninstallCommand = [ordered]@{
                 Title = "Uninstall Command Line"
-                Summary = "Silent uninstall switch options for $productDisplay ($safeInstallerType). Preset: $presetName."
+                Summary = "Silent uninstall switch options for $productDisplay ($safeInstallerType). Source-ordered from existing field value, live web lookup, vendor preset, installer defaults, media hints, and install-switch parity."
                 Suggestions = $uninstallCommandSuggestions
             }
             UninstallExecutable = [ordered]@{
                 Title = "Uninstall Executable"
-                Summary = "Possible uninstall executable names/strategies to try. Preset: $presetName."
+                Summary = "Uninstall executable candidates ordered from existing field value, installer family heuristics, and install-media filename patterns."
                 Suggestions = $defaultUninstallExeOptions
             }
             PreInstallCommands = [ordered]@{
                 Title = "Pre-Install Commands"
-                Summary = "Optional pre-install command snippets for $productDisplay."
+                Summary = "Wrapper-aware pre-install command snippets for $productDisplay using Globals.ps1 cmdlets where helpful."
                 Suggestions = $preInstallChecks
             }
             CustomInstallCommands = [ordered]@{
                 Title = "Custom Install Commands"
-                Summary = "Optional custom install commands for $productDisplay. Left blank when no app-specific steps are suggested."
+                Summary = "Wrapper-aware custom install commands for $productDisplay with executable/MSI patterns technicians can actually adapt."
                 Suggestions = $customInstallSuggestions
             }
             PostInstallCommands = [ordered]@{
                 Title = "Post-Install Commands"
-                Summary = "Optional post-install commands for $productDisplay. Left blank when no app-specific steps are suggested."
+                Summary = "Wrapper-aware post-install commands for $productDisplay including validation and shell refresh patterns."
                 Suggestions = $postInstallSuggestions
             }
             PreUninstallCommands = [ordered]@{
                 Title = "Pre-Uninstall Commands"
-                Summary = "Optional pre-uninstall commands for $productDisplay. Left blank when no app-specific steps are suggested."
+                Summary = "Wrapper-aware pre-uninstall commands for $productDisplay using package wrapper cmdlets."
                 Suggestions = $preUninstallSuggestions
             }
             CustomUninstallCommands = [ordered]@{
                 Title = "Custom Uninstall Commands"
-                Summary = "Optional custom uninstall commands for $productDisplay. Left blank when no app-specific steps are suggested."
+                Summary = "Wrapper-aware custom uninstall commands for $productDisplay with MSI or executable examples."
                 Suggestions = $customUninstallSuggestions
             }
             PostUninstallCommands = [ordered]@{
                 Title = "Post-Uninstall Commands"
-                Summary = "Optional post-uninstall commands for $productDisplay. Left blank when no app-specific steps are suggested."
+                Summary = "Wrapper-aware post-uninstall cleanup commands for $productDisplay, including machine-scope cleanup patterns."
                 Suggestions = $postUninstallSuggestions
             }
         }
@@ -639,4 +1219,4 @@ if (`$installContext -eq 'User' -and [Security.Principal.WindowsIdentity]::GetCu
 }
 
 # Export public functions
-Export-ModuleMember -Function Get-InstallSwitches, Get-UninstallSwitches, Get-SwitchesForInstaller, Get-PackageHelpSections
+Export-ModuleMember -Function Get-InstallSwitches, Get-UninstallSwitches, Get-SwitchesForInstaller, Get-PackageHelpSections, Get-WrapperAwareSectionSuggestions, Get-WebSilentSwitchSuggestions

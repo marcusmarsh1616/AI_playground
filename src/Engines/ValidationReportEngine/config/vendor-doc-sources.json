@@ -1,0 +1,13 @@
+{
+  "vendors": {
+    "Adobe": [
+      "https://helpx.adobe.com/enterprise/package/help/using-creative-cloud-packager.html"
+    ],
+    "Google": [
+      "https://support.google.com/chrome/a/answer/6350036"
+    ],
+    "Microsoft": [
+      "https://learn.microsoft.com/en-us/deployoffice/overview-office-deployment-tool"
+    ]
+  }
+}

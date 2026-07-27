@@ -35,6 +35,69 @@ function Test-IsAdministrator {
     }
 }
 
+function Remove-InstalledDesktopShortcuts {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$SearchTokens
+    )
+
+    $result = @{
+        Removed = @()
+        Failed = @()
+    }
+
+    $desktopScopes = @(
+        @{ Path = "$env:PUBLIC\Desktop"; Scope = "Machine" },
+        @{ Path = "$env:USERPROFILE\Desktop"; Scope = "User" }
+    )
+
+    $normalizedTokens = @($SearchTokens | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
+    if ($normalizedTokens.Count -eq 0) {
+        return $result
+    }
+
+    foreach ($desktopScope in $desktopScopes) {
+        if ([string]::IsNullOrWhiteSpace($desktopScope.Path) -or -not (Test-Path $desktopScope.Path)) {
+            continue
+        }
+
+        $shortcuts = Get-ChildItem -Path $desktopScope.Path -Filter "*.lnk" -File -ErrorAction SilentlyContinue
+        foreach ($shortcut in $shortcuts) {
+            $matched = $false
+            foreach ($token in $normalizedTokens) {
+                if ($shortcut.Name -like "*$token*") {
+                    $matched = $true
+                    break
+                }
+            }
+
+            if (-not $matched) {
+                continue
+            }
+
+            try {
+                Remove-Item -Path $shortcut.FullName -Force -ErrorAction Stop
+                $result.Removed += [PSCustomObject]@{
+                    Path = $shortcut.FullName
+                    Scope = $desktopScope.Scope
+                    Name = $shortcut.Name
+                }
+            }
+            catch {
+                $result.Failed += [PSCustomObject]@{
+                    Path = $shortcut.FullName
+                    Scope = $desktopScope.Scope
+                    Name = $shortcut.Name
+                    Error = $_.Exception.Message
+                }
+            }
+        }
+    }
+
+    return $result
+}
+
 function Start-InstallationTest {
     <#
     .SYNOPSIS
@@ -72,6 +135,8 @@ function Start-InstallationTest {
         UserConfirmed = $false
         ExitCode = -1
         ErrorMessage = ""
+        RemovedDesktopShortcuts = @()
+        FailedDesktopShortcutRemovals = @()
     }
     
     try {
@@ -113,6 +178,10 @@ function Start-InstallationTest {
             
             # Give system time to settle
             Start-Sleep -Seconds 2
+
+            $shortcutCleanup = Remove-InstalledDesktopShortcuts -SearchTokens @($AppName, $Vendor)
+            $result.RemovedDesktopShortcuts = @($shortcutCleanup.Removed)
+            $result.FailedDesktopShortcutRemovals = @($shortcutCleanup.Failed)
             
             # Prompt technician for verification
             $userResponse = [System.Windows.Forms.MessageBox]::Show(

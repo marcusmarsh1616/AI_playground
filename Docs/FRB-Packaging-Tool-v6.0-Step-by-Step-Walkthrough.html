@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FRB-Packaging-Tool v6.0 Walkthrough</title>
+  <style>
+    :root {
+      --navy: #123b66;
+      --blue: #2f6fb2;
+      --teal: #0d7a71;
+      --gold: #c28c12;
+      --ink: #1f2937;
+      --muted: #5b6472;
+      --line: #d8e1ec;
+      --panel: #ffffff;
+      --bg: #f5f8fc;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Arial, sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, #edf5ff 0, transparent 26%),
+        radial-gradient(circle at top right, #effbf5 0, transparent 18%),
+        var(--bg);
+    }
+    .page {
+      width: min(1080px, calc(100% - 32px));
+      margin: 24px auto 40px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      box-shadow: 0 16px 36px rgba(17, 39, 66, 0.10);
+      border-radius: 18px;
+      overflow: hidden;
+    }
+    .hero {
+      padding: 42px 48px 30px;
+      background: linear-gradient(135deg, #0f355d 0%, #1d5f93 54%, #227e72 100%);
+      color: white;
+    }
+    .eyebrow {
+      text-transform: uppercase;
+      letter-spacing: .18em;
+      font-size: 11px;
+      opacity: .85;
+      margin-bottom: 10px;
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(30px, 4vw, 48px);
+      line-height: 1.05;
+    }
+    .hero p {
+      margin: 14px 0 0;
+      max-width: 900px;
+      font-size: 16px;
+      line-height: 1.65;
+      color: rgba(255,255,255,.94);
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+      margin-top: 26px;
+    }
+    .stat {
+      background: rgba(255,255,255,.12);
+      border: 1px solid rgba(255,255,255,.18);
+      border-radius: 14px;
+      padding: 14px 16px;
+      backdrop-filter: blur(6px);
+    }
+    .stat .label { font-size: 12px; text-transform: uppercase; letter-spacing: .12em; opacity: .8; }
+    .stat .value { font-size: 19px; font-weight: 700; margin-top: 6px; }
+    .content { padding: 34px 48px 44px; }
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 18px 20px;
+      background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+      margin-bottom: 18px;
+    }
+    h2 {
+      margin: 0 0 12px;
+      font-size: 22px;
+      color: var(--navy);
+    }
+    h3 {
+      color: var(--navy);
+      margin: 0 0 8px;
+      font-size: 16px;
+    }
+    p { line-height: 1.7; margin: 10px 0; }
+    .callout {
+      border-left: 6px solid var(--teal);
+      background: #ecfeff;
+      border-radius: 12px;
+      padding: 14px 16px;
+      margin: 14px 0 22px;
+    }
+    .timeline {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 10px;
+      margin: 14px 0 24px;
+    }
+    .step-chip {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px 10px;
+      background: #fff;
+      text-align: center;
+      box-shadow: 0 6px 16px rgba(17, 39, 66, 0.04);
+    }
+    .step-chip .num {
+      display: inline-block;
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      background: var(--blue);
+      color: white;
+      line-height: 30px;
+      font-weight: 800;
+      margin-bottom: 8px;
+    }
+    .step {
+      border-left: 5px solid var(--blue);
+      padding: 14px 16px;
+      background: #fbfdff;
+      border-radius: 12px;
+      margin: 14px 0;
+      border: 1px solid var(--line);
+    }
+    .step .title {
+      font-weight: 800;
+      color: var(--navy);
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+    }
+    ul {
+      margin: 10px 0 18px 22px;
+    }
+    li { margin: 8px 0; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 14px;
+      margin-top: 16px;
+    }
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 16px;
+      background: #fff;
+    }
+    .tag {
+      display: inline-block;
+      background: #dbeafe;
+      color: #174b7a;
+      border-radius: 999px;
+      padding: 5px 10px;
+      font-size: 12px;
+      font-weight: 700;
+      margin-bottom: 10px;
+    }
+    .checklist {
+      columns: 2;
+      column-gap: 24px;
+      margin-top: 12px;
+    }
+    .checklist li { break-inside: avoid; }
+    .footer {
+      padding: 18px 48px 28px;
+      color: var(--muted);
+      font-size: 11px;
+      border-top: 1px solid var(--line);
+      background: #fcfdff;
+    }
+    @media (max-width: 900px) {
+      .stats, .timeline, .grid, .checklist { grid-template-columns: 1fr; columns: 1; }
+      .hero, .content, .footer { padding-left: 22px; padding-right: 22px; }
+    }
+    @media print {
+      body { background: white; }
+      .page { box-shadow: none; border: none; width: 100%; margin: 0; border-radius: 0; }
+      .hero { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .step, .card, .panel, .callout { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <div class="eyebrow">FRB Packaging Tool | Operator Guide</div>
+      <h1>FRB-Packaging-Tool v6.0 Step-by-Step Walkthrough</h1>
+      <p>This guide is the practical path through the finished tool. It focuses on how a technician uses v6.0 from start to finish, what the tool does automatically, and what success looks like when the run is complete.</p>
+      <div class="stats">
+        <div class="stat"><div class="label">Start</div><div class="value">Main Settings</div></div>
+        <div class="stat"><div class="label">Work Flow</div><div class="value">Package, Build, Validate, Deploy</div></div>
+        <div class="stat"><div class="label">Finish</div><div class="value">Docs report + clean reset</div></div>
+      </div>
+    </section>
+
+    <section class="content">
+      <div class="panel">
+        <h2>How v6.0 Feels</h2>
+        <p>v6.0 is built to feel guided rather than mechanical. You choose the media, confirm the metadata, review the package helper output, and let the tool carry the workflow through validation and reporting. The live process tab gives you a running commentary so you always know what stage you are in.</p>
+      </div>
+
+      <div class="callout">
+        <strong>Success signal:</strong> when the package is complete, the final validation report lands in the package docs folder with the correct naming convention, opens automatically, and the tool resets back to Main Settings for the next package.
+      </div>
+
+      <h2>Quick Timeline</h2>
+      <div class="timeline">
+        <div class="step-chip"><div class="num">1</div><div>Launch tool</div></div>
+        <div class="step-chip"><div class="num">2</div><div>Select media</div></div>
+        <div class="step-chip"><div class="num">3</div><div>Review helper output</div></div>
+        <div class="step-chip"><div class="num">4</div><div>Build and validate</div></div>
+        <div class="step-chip"><div class="num">5</div><div>Review report</div></div>
+      </div>
+
+      <h2>Step-by-Step Walkthrough</h2>
+      <div class="step">
+        <div class="title">Step 1 - Open FRB-Packaging-Tool v6.0</div>
+        <p>Start the tool from the approved packaging location. The Main Settings tab should appear first. This is your control room for the entire run.</p>
+      </div>
+
+      <div class="step">
+        <div class="title">Step 2 - Enter or Confirm the Package Metadata</div>
+        <p>Enter vendor, product name, edition if needed, and version. These values drive the package folder, the validation report file name, and the overall identity of the package.</p>
+      </div>
+
+      <div class="step">
+        <div class="title">Step 3 - Choose the Installation Media</div>
+        <p>Select the EXE or MSI file. v6.0 reads the installer metadata, detects installer type, and starts auto-populating what it can so you do not have to repeat work.</p>
+      </div>
+
+      <div class="step">
+        <div class="title">Step 4 - Review the Install Context Prompt</div>
+        <p>If the installer suggests user or system context, choose the one that matches the deployment intent. This keeps the package aligned with how it will be delivered in production.</p>
+      </div>
+
+      <div class="step">
+        <div class="title">Step 5 - Review Package Helper Output</div>
+        <p>Open Package Helper to see curated suggestions for install switches, uninstall values, and reusable command snippets. The goal is to reduce manual typing and make the packaging decision faster.</p>
+      </div>
+
+      <div class="step">
+        <div class="title">Step 6 - Review Custom Commands</div>
+        <p>The custom command sections let you inspect or edit the package-specific Startup.pss logic. Existing packages can rehydrate these sections so you can pick up work where it was last left off.</p>
+      </div>
+
+      <div class="step">
+        <div class="title">Step 7 - Create or Update the Package</div>
+        <p>Start the packaging workflow. The tool copies the template, updates the project files, inserts custom command content, and prepares the package folder structure for the next stage.</p>
+      </div>
+
+      <div class="step">
+        <div class="title">Step 8 - Build and Run Validation</div>
+        <p>Build the package and continue into validation. This is where v6.0 shines: the workflow now captures install progress, Programs and Features evidence, Start Menu evidence, and the application-open screenshot that proves the app launches.</p>
+      </div>
+
+      <div class="step">
+        <div class="title">Step 9 - Review the Validation Report</div>
+        <p>The report is copied into the package docs folder using the correct naming convention and opens automatically. This is the version you want to show and keep.</p>
+      </div>
+
+      <div class="step">
+        <div class="title">Step 10 - Complete Uninstall Validation if Required</div>
+        <p>If the workflow includes uninstall validation, complete the technician prompts and confirm the results before finishing the run.</p>
+      </div>
+
+      <div class="step">
+        <div class="title">Step 11 - Finish and Reset</div>
+        <p>Once everything is done, the tool clears the live process log and returns to Main Settings so the next package starts with a clean slate.</p>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <div class="tag">What to Watch For</div>
+          <ul>
+            <li>Correct package path and naming.</li>
+            <li>Validation report opens from the docs folder, not a temp location.</li>
+            <li>Live process tab messages keep pace with the workflow.</li>
+            <li>Application-open screenshot is captured as proof of launch.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <div class="tag">What a Good Run Looks Like</div>
+          <ul>
+            <li>Tool returns to Main Settings when complete.</li>
+            <li>Report is easy to read and clearly tied to the package.</li>
+            <li>No extra popups or duplicate report openings.</li>
+            <li>You can immediately begin the next package.</li>
+          </ul>
+        </div>
+      </div>
+
+      <h2>Completion Checklist</h2>
+      <ul class="checklist">
+        <li>Package folder created or updated</li>
+        <li>Startup.pss customized correctly</li>
+        <li>Install switches reviewed</li>
+        <li>Uninstall values reviewed</li>
+        <li>Validation screenshots captured</li>
+        <li>Report copied to docs folder</li>
+        <li>Report opened for review</li>
+        <li>Live process log cleared</li>
+        <li>Main Settings tab restored</li>
+        <li>Ready for the next package</li>
+      </ul>
+
+      <div class="panel">
+        <h2>Final Message</h2>
+        <p>FRB-Packaging-Tool v6.0 is designed to feel complete. It does the work, explains the work, and leaves behind a polished report that shows the value of the effort. That is the version you hand to someone else with confidence.</p>
+      </div>
+    </section>
+
+    <div class="footer">
+      FRB-Packaging-Tool v6.0 Walkthrough | Repository-ready operator guide.
+    </div>
+  </main>
+</body>
+</html>

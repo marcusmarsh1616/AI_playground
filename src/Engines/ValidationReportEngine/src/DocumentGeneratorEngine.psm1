@@ -27,7 +27,7 @@ $script:FigurePlaceholders = @{
     1 = "Installation Progress Dialog"
     2 = "Programs and Features Entry"
     3 = "Start Menu Shortcuts"
-    4 = "Uninstall Progress Dialog"
+    4 = "Application Opened"
 }
 
 #region Helper Functions
@@ -412,6 +412,47 @@ function Set-ValidationDetails {
     return $HtmlContent
 }
 
+function Set-VendorDocumentationDetails {
+    <#
+    .SYNOPSIS
+        Sets vendor documentation sections in the validation document
+
+    .DESCRIPTION
+        Populates prerequisites, conflicts, and upgrade paths from vendor-only
+        documentation lookup results. Missing data uses required fallback text.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory, ValueFromPipeline)]
+        [string]$HtmlContent,
+
+        [Parameter()]
+        [string]$PrerequisitesText = "The Vendor has nothing to report",
+
+        [Parameter()]
+        [string]$ApplicationConflictsText = "The Vendor has nothing to report",
+
+        [Parameter()]
+        [string]$UpgradePathsText = "The Vendor has nothing to report"
+    )
+
+    Add-Type -AssemblyName System.Net
+
+    $pre = if ([string]::IsNullOrWhiteSpace($PrerequisitesText)) { "The Vendor has nothing to report" } else { $PrerequisitesText }
+    $conf = if ([string]::IsNullOrWhiteSpace($ApplicationConflictsText)) { "The Vendor has nothing to report" } else { $ApplicationConflictsText }
+    $upg = if ([string]::IsNullOrWhiteSpace($UpgradePathsText)) { "The Vendor has nothing to report" } else { $UpgradePathsText }
+
+    $pre = [System.Net.WebUtility]::HtmlEncode($pre).Replace([Environment]::NewLine, '<br>')
+    $conf = [System.Net.WebUtility]::HtmlEncode($conf).Replace([Environment]::NewLine, '<br>')
+    $upg = [System.Net.WebUtility]::HtmlEncode($upg).Replace([Environment]::NewLine, '<br>')
+
+    $HtmlContent = $HtmlContent.Replace('[Vendor Prerequisites]', $pre)
+    $HtmlContent = $HtmlContent.Replace('[Vendor Application Conflicts]', $conf)
+    $HtmlContent = $HtmlContent.Replace('[Vendor Upgrade Paths]', $upg)
+
+    return $HtmlContent
+}
+
 function Export-ValidationDocument {
     <#
     .SYNOPSIS
@@ -480,6 +521,7 @@ Export-ModuleMember -Function @(
     'New-ValidationDocument',
     'Add-ValidationScreenshot',
     'Set-ValidationDetails',
+    'Set-VendorDocumentationDetails',
     'Export-ValidationDocument'
 )
 

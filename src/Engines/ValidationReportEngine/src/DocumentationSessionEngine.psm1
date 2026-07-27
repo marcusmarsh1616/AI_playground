@@ -123,6 +123,7 @@ function New-DocumentationSession {
         Captures = @{
             Figure2 = $null
             Figure3 = $null
+            Figure4 = $null
         }
         InstallDetails = @{
             InstallDirectory = ""
@@ -160,6 +161,7 @@ function Get-DocumentationSessionStatus {
     $captureCount = 0
     if ($Session.Captures.Figure2) { $captureCount++ }
     if ($Session.Captures.Figure3) { $captureCount++ }
+    if ($Session.Captures.Figure4) { $captureCount++ }
     
     $detailsDetected = -not [string]::IsNullOrWhiteSpace($Session.InstallDetails.InstallDirectory)
     
@@ -168,7 +170,7 @@ function Get-DocumentationSessionStatus {
         AppName = $Session.AppName
         Status = $Session.Status
         CapturesCompleted = $captureCount
-        TotalCaptures = 2
+        TotalCaptures = 3
         DetailsDetected = $detailsDetected
         WorkingDirectory = $Session.WorkingDirectory
         IsReadyForGeneration = ($captureCount -gt 0)
@@ -197,7 +199,7 @@ function Update-DocumentationSessionCapture {
         [PSCustomObject]$Session,
         
         [Parameter(Mandatory)]
-        [ValidateSet(2, 3)]
+        [ValidateSet(2, 3, 4)]
         [int]$FigureNumber,
         
         [Parameter(Mandatory)]
@@ -214,6 +216,7 @@ function Update-DocumentationSessionCapture {
     switch ($FigureNumber) {
         2 { $Session.Captures.Figure2 = $FilePath }
         3 { $Session.Captures.Figure3 = $FilePath }
+        4 { $Session.Captures.Figure4 = $FilePath }
     }
     
     return $Session

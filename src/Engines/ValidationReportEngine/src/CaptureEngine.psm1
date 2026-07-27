@@ -338,6 +338,77 @@ function Invoke-AutomatedStartMenuCapture {
     }
 }
 
+function Invoke-AutomatedApplicationLaunchCapture {
+    <#
+    .SYNOPSIS
+        Automates launching an application and captures the opened UI
+
+    .DESCRIPTION
+        Uses Start Menu search to launch the target application, waits for the
+        window to appear, then triggers Snagit capture.
+
+    .PARAMETER AppName
+        Application name to search and launch
+
+    .PARAMETER OutputPath
+        Where to save the screenshot
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$AppName,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath
+    )
+
+    Write-Verbose "Starting automated application launch capture for: $AppName"
+
+    try {
+        Add-Type -AssemblyName System.Windows.Forms
+
+        # Open Start Menu and search for the app.
+        [System.Windows.Forms.SendKeys]::SendWait("^{ESC}")
+        Start-Sleep -Milliseconds 800
+        [System.Windows.Forms.SendKeys]::SendWait($AppName)
+        Start-Sleep -Seconds 2
+
+        # Launch top result and allow UI to render.
+        [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+        Start-Sleep -Seconds 5
+
+        return Invoke-ScreenCapture -OutputPath $OutputPath -FigureNumber 4 -Description "Application Opened: $AppName"
+    }
+    catch {
+        Write-Error "Automation error: $($_.Exception.Message)"
+        return [PSCustomObject]@{
+            Success = $false
+            ErrorMessage = $_.Exception.Message
+            OutputPath = $null
+        }
+    }
+}
+
+function Close-InstalledAppsWindow {
+    [CmdletBinding()]
+    param()
+
+    try {
+        $settingsProcesses = Get-Process -ErrorAction SilentlyContinue | Where-Object {
+            $_.MainWindowTitle -like "*Settings*" -or $_.ProcessName -eq "SystemSettings"
+        }
+
+        foreach ($settingsProcess in $settingsProcesses) {
+            if ($settingsProcess.MainWindowHandle -ne 0) {
+                [void]$settingsProcess.CloseMainWindow()
+            }
+        }
+    }
+    catch {
+        Write-Verbose "Unable to close Installed Apps window: $($_.Exception.Message)"
+    }
+}
+
 function Test-SnagitAvailable {
     <#
     .SYNOPSIS
@@ -371,5 +442,7 @@ Export-ModuleMember -Function @(
     'Invoke-ScreenCapture',
     'Invoke-AutomatedInstalledAppsCapture',
     'Invoke-AutomatedStartMenuCapture',
+    'Invoke-AutomatedApplicationLaunchCapture',
+    'Close-InstalledAppsWindow',
     'Test-SnagitAvailable'
 )

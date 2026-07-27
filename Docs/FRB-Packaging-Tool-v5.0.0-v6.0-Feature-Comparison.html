@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FRB-Packaging-Tool v5.0.0 to v6.0 Feature Comparison</title>
+  <style>
+    :root {
+      --navy: #123b66;
+      --blue: #2f6fb2;
+      --sky: #eaf3ff;
+      --gold: #c28c12;
+      --green: #0f7a52;
+      --ink: #1f2937;
+      --muted: #5b6472;
+      --line: #d8e1ec;
+      --panel: #ffffff;
+      --bg: #f5f8fc;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Arial, sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, #edf5ff 0, transparent 28%),
+        radial-gradient(circle at top right, #effbf5 0, transparent 18%),
+        var(--bg);
+    }
+    .page {
+      width: min(1100px, calc(100% - 32px));
+      margin: 24px auto 40px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      box-shadow: 0 16px 36px rgba(17, 39, 66, 0.10);
+      border-radius: 18px;
+      overflow: hidden;
+    }
+    .hero {
+      padding: 42px 48px 30px;
+      background: linear-gradient(135deg, #0f355d 0%, #1f5f99 55%, #2b79c2 100%);
+      color: white;
+    }
+    .eyebrow {
+      text-transform: uppercase;
+      letter-spacing: .18em;
+      font-size: 11px;
+      opacity: .85;
+      margin-bottom: 10px;
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(30px, 4vw, 48px);
+      line-height: 1.05;
+    }
+    .hero p {
+      margin: 14px 0 0;
+      max-width: 860px;
+      font-size: 16px;
+      line-height: 1.65;
+      color: rgba(255,255,255,.94);
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+      margin-top: 26px;
+    }
+    .stat {
+      background: rgba(255,255,255,.12);
+      border: 1px solid rgba(255,255,255,.18);
+      border-radius: 14px;
+      padding: 14px 16px;
+      backdrop-filter: blur(6px);
+    }
+    .stat .label { font-size: 12px; text-transform: uppercase; letter-spacing: .12em; opacity: .8; }
+    .stat .value { font-size: 19px; font-weight: 700; margin-top: 6px; }
+    .content { padding: 34px 48px 44px; }
+    .intro-grid { display: grid; grid-template-columns: 1.2fr .8fr; gap: 18px; margin-bottom: 24px; }
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 18px 20px;
+      background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+    }
+    .panel h2, h2 {
+      margin: 0 0 12px;
+      font-size: 22px;
+      color: var(--navy);
+    }
+    .panel p, p { line-height: 1.7; margin: 10px 0; }
+    .callout {
+      border-left: 6px solid var(--blue);
+      background: var(--sky);
+      border-radius: 12px;
+      padding: 14px 16px;
+      margin: 14px 0 24px;
+    }
+    .callout strong { color: var(--navy); }
+    .tags { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    .tag {
+      background: #dcecff;
+      color: #174b7a;
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 14px 0 22px;
+      font-size: 10.7pt;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 12px 10px;
+      vertical-align: top;
+    }
+    th {
+      background: linear-gradient(180deg, #215b93 0%, #18466f 100%);
+      color: white;
+      text-align: left;
+    }
+    tbody tr:nth-child(even) td { background: #fafcff; }
+    .why {
+      color: var(--green);
+      font-weight: 700;
+    }
+    .section-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 14px;
+      margin: 16px 0 6px;
+    }
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 16px;
+      background: #fff;
+    }
+    .card h3 { margin: 0 0 8px; color: var(--navy); }
+    ul { margin: 10px 0 18px 22px; }
+    li { margin: 8px 0; }
+    .release-note {
+      background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 16px 18px;
+      margin: 16px 0 24px;
+    }
+    .release-note .title { font-weight: 800; color: var(--navy); font-size: 14px; text-transform: uppercase; letter-spacing: .08em; }
+    .footer {
+      padding: 18px 48px 28px;
+      color: var(--muted);
+      font-size: 11px;
+      border-top: 1px solid var(--line);
+      background: #fcfdff;
+    }
+    @media print {
+      body { background: white; }
+      .page { box-shadow: none; border: none; width: 100%; margin: 0; border-radius: 0; }
+      .hero { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .panel, .card, .callout, .release-note { break-inside: avoid; }
+    }
+    @media (max-width: 900px) {
+      .stats, .intro-grid, .section-grid { grid-template-columns: 1fr; }
+      .hero, .content, .footer { padding-left: 22px; padding-right: 22px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <div class="eyebrow">FRB Packaging Tool | Release Narrative</div>
+      <h1>From v5.0.0 Foundation to v6.0 Momentum</h1>
+      <p>This document highlights how FRB-Packaging-Tool evolved from a functional packaging workflow into a more polished, modular, technician-friendly platform. The v6.0 release is not just an update; it is a stronger operating experience with better validation, reporting, and workflow control.</p>
+      <div class="stats">
+        <div class="stat"><div class="label">Baseline</div><div class="value">v5.0.0 Packaging Core</div></div>
+        <div class="stat"><div class="label">Current</div><div class="value">v6.0 Modular Workflow</div></div>
+        <div class="stat"><div class="label">Outcome</div><div class="value">Stronger, clearer, faster to trust</div></div>
+      </div>
+    </section>
+
+    <section class="content">
+      <div class="intro-grid">
+        <div class="panel">
+          <h2>Executive Summary</h2>
+          <p>v5.0.0 established the practical packaging backbone: metadata collection, template-based package creation, build and test flow, and technician-driven execution. v6.0 takes that backbone and makes it feel complete. It adds a modern modular engine layout, a much richer validation story, live process visibility, cleaner state resets, and a report pipeline that actually tells the story of the package.</p>
+          <p>In short, v5 could package. v6 can package, validate, explain, and present the work with confidence.</p>
+        </div>
+        <div class="panel">
+          <h2>Why This Matters</h2>
+          <p>Packaging teams do not just need the tool to work. They need the output to be understandable, defensible, and repeatable.</p>
+          <div class="tags">
+            <span class="tag">Clearer validation</span>
+            <span class="tag">Better technician flow</span>
+            <span class="tag">Stronger evidence</span>
+            <span class="tag">Cleaner resets</span>
+            <span class="tag">Repo-ready narrative</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="callout">
+        <strong>Release credit:</strong> v6.0 reflects a substantial engineering lift: the workflow was hardened, validation was made presentation-worthy, and the tool now returns the operator to a clean starting point after completion.
+      </div>
+
+      <h2>Feature Comparison</h2>
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 17%">Area</th>
+            <th style="width: 32%">v5.0.0 Baseline</th>
+            <th style="width: 32%">v6.0 Current</th>
+            <th style="width: 19%">Why It Matters</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Packaging Flow</td>
+            <td>Working packaging backbone with template copy, metadata entry, Startup.pss updates, build, test, and copy behavior.</td>
+            <td>Same end-to-end flow, but with clearer orchestration, stronger cleanup, and better separation between operational tabs.</td>
+            <td class="why">Less friction for the operator and fewer state surprises.</td>
+          </tr>
+          <tr>
+            <td>Architecture</td>
+            <td>Main-launcher-centric workflow handling.</td>
+            <td>Modular engine-based architecture for detection, validation, reporting, capture, deployment, and custom commands.</td>
+            <td class="why">Easier to extend, test, and explain.</td>
+          </tr>
+          <tr>
+            <td>Metadata & Detection</td>
+            <td>Installer metadata and package folder population with technician review.</td>
+            <td>Improved installer detection, install-context prompting, and richer auto-population behavior.</td>
+            <td class="why">Less retyping and fewer avoidable mistakes.</td>
+          </tr>
+          <tr>
+            <td>Custom Commands</td>
+            <td>Custom command sections available for package-specific startup logic.</td>
+            <td>Deterministic load/rehydrate/expand behavior with more reliable technician editing.</td>
+            <td class="why">Safer reuse of package logic.</td>
+          </tr>
+          <tr>
+            <td>Validation</td>
+            <td>Core install/uninstall checks.</td>
+            <td>Dedicated validation report flow with application-open evidence and final docs copy/open behavior.</td>
+            <td class="why">Validation now produces a stronger evidence trail.</td>
+          </tr>
+          <tr>
+            <td>Reporting</td>
+            <td>Basic validation output.</td>
+            <td>Professional report generation with figure sequencing, vendor-only enrichment, and polished publish behavior.</td>
+            <td class="why">The report reads like a release artifact, not a log dump.</td>
+          </tr>
+          <tr>
+            <td>Operator Experience</td>
+            <td>Standard packaging UI.</td>
+            <td>Live process tab, better status updates, and automatic return to Main Settings after completion.</td>
+            <td class="why">Back-to-back package work is easier and cleaner.</td>
+          </tr>
+          <tr>
+            <td>Deployment</td>
+            <td>Network copy support for completed packages.</td>
+            <td>Same deployment direction with more explicit verification and continuity.</td>
+            <td class="why">Keeps the pipeline practical for real operations.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="section-grid">
+        <div class="card">
+          <h3>What v6.0 Adds</h3>
+          <ul>
+            <li>Dedicated validation report engine.</li>
+            <li>Application opened screenshot capture.</li>
+            <li>Vendor-documentation-only enrichment with fallback text.</li>
+            <li>Process tab for live logging and troubleshooting.</li>
+            <li>Cleaner return to Main Settings after completion.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>What Stayed Core</h3>
+          <ul>
+            <li>Template-based package creation.</li>
+            <li>Startup.pss editing and custom command insertion.</li>
+            <li>Build, install test, and uninstall test workflow.</li>
+            <li>Technician-guided packaging decisions.</li>
+            <li>Network share deployment for completed packages.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="release-note">
+        <div class="title">Engineering Credit</div>
+        <p>v6.0 is the version where the tool stopped feeling like a bundle of useful pieces and started feeling like a complete platform. The reporting path became more presentable, the workflow became easier to trust, and the validation evidence became something a reviewer can actually read and understand.</p>
+      </div>
+    </section>
+
+    <div class="footer">
+      FRB-Packaging-Tool Feature Comparison | Prepared for repository use and presentation review.
+    </div>
+  </main>
+</body>
+</html>

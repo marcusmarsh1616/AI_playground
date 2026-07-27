@@ -146,6 +146,8 @@ $script:IsLoadingExistingPackageData = $false
 $script:IsPopulatingMetadata = $false
 $script:LastExistingPackageLoadPath = ""
 $script:LastExistingPackageLoadTick = 0
+$script:GlobalsCommandNames = @()
+$script:GlobalsCommandLookup = @{}
 
 #region Configuration
 
@@ -351,7 +353,7 @@ function Update-PrerequisiteStatusInConfig {
         if (-not ($config.PSObject.Properties.Name -contains 'deployment')) {
             $config | Add-Member -NotePropertyName 'deployment' -NotePropertyValue ([PSCustomObject]@{}) -Force
         }
-        $config.deployment.networkSharePath = "\\rb.win.frb.org\k1\shared\DSC_Pkgs\Pkgxfer"
+        $config.deployment.networkSharePath = "\\rb.win.frb.org\k1\shared\DSC_Pkgs\Pkgmedia\Lss Packages\"
         $config.deployment.overwriteExisting = $true
 
         if (-not ($config.PSObject.Properties.Name -contains 'launcher')) {
@@ -793,6 +795,115 @@ function Start-ProcessSession {
     Write-ProcessOutputLine -Message "Packaging session started." -Level "INFO"
 }
 
+function Get-GlobalsReferencePath {
+    if ([string]::IsNullOrWhiteSpace($script:MasterTemplatePath)) {
+        return ""
+    }
+
+    return (Join-Path $script:MasterTemplatePath "_SourceFiles\Globals.ps1")
+}
+
+function Refresh-GlobalsCommandMetadata {
+    $script:GlobalsCommandNames = @()
+    $script:GlobalsCommandLookup = @{}
+
+    $globalsPath = Get-GlobalsReferencePath
+    if ([string]::IsNullOrWhiteSpace($globalsPath) -or -not (Test-Path $globalsPath)) {
+        return
+    }
+
+    try {
+        $functionMatches = Select-String -Path $globalsPath -Pattern '^(?:function|Function)\s+([A-Za-z0-9_-]+)' -Encoding UTF8
+        foreach ($match in @($functionMatches)) {
+            $functionName = $match.Matches[0].Groups[1].Value.Trim()
+            if ([string]::IsNullOrWhiteSpace($functionName)) { continue }
+            if (-not $script:GlobalsCommandLookup.ContainsKey($functionName)) {
+                $script:GlobalsCommandLookup[$functionName] = $true
+                $script:GlobalsCommandNames += $functionName
+            }
+        }
+    }
+    catch {
+    }
+}
+
+function Get-GlobalsCommandSummary {
+    param(
+        [string]$CodeText = ""
+    )
+
+    if (-not $script:GlobalsCommandNames -or $script:GlobalsCommandNames.Count -eq 0) {
+        Refresh-GlobalsCommandMetadata
+    }
+
+    if (-not $script:GlobalsCommandNames -or $script:GlobalsCommandNames.Count -eq 0) {
+        return ""
+    }
+
+    $detected = New-Object System.Collections.Generic.List[string]
+    if (-not [string]::IsNullOrWhiteSpace($CodeText)) {
+        foreach ($commandName in @($script:GlobalsCommandNames)) {
+            if ($CodeText -match ("(?<![A-Za-z0-9_-]){0}(?![A-Za-z0-9_-])" -f [regex]::Escape($commandName))) {
+                [void]$detected.Add($commandName)
+            }
+        }
+    }
+
+    if ($detected.Count -gt 0) {
+        $detectedList = @($detected | Select-Object -Unique)
+        return "Wrapper cmdlets detected from Globals.ps1: " + ($detectedList -join ', ')
+    }
+
+    $sample = @($script:GlobalsCommandNames | Select-Object -First 12)
+    return "Wrapper cmdlets available from Globals.ps1 include: " + ($sample -join ', ')
+}
+
+function Get-GlobalsReferenceContent {
+    Refresh-GlobalsCommandMetadata
+
+    $globalsPath = Join-Path $script:MasterTemplatePath "_SourceFiles\Globals.ps1"
+    if (-not (Test-Path $globalsPath)) {
+        return "Globals.ps1 reference was not found at: $globalsPath"
+    }
+
+    try {
+        return (Get-Content -Path $globalsPath -Raw -Encoding UTF8)
+    }
+    catch {
+        return "Failed to load Globals.ps1 reference: $($_.Exception.Message)"
+    }
+}
+
+function Remove-TemplateDocsFromPackage {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PackagePath
+    )
+
+    $docsPath = Join-Path $PackagePath "Docs"
+    if (-not (Test-Path $docsPath)) {
+        return
+    }
+
+    $filesToRemove = @(
+        "(APP-NAME_APP-VERSION) Validation.docx",
+        "User Acceptance Testing Guide.docx"
+    )
+
+    foreach ($fileName in $filesToRemove) {
+        $targetPath = Join-Path $docsPath $fileName
+        if (Test-Path $targetPath) {
+            try {
+                Remove-Item -Path $targetPath -Force -ErrorAction Stop
+                Write-ProcessOutputLine -Message ("Removed template docs artifact: {0}" -f $targetPath) -Level "INFO"
+            }
+            catch {
+                Write-ProcessOutputLine -Message ("Failed to remove template docs artifact {0}: {1}" -f $targetPath, $_.Exception.Message) -Level "WARN"
+            }
+        }
+    }
+}
+
 function Update-Status {
     param([string]$Message, [string]$Color = "Blue")
     $lblStatus.Text = $Message
@@ -1060,6 +1171,7 @@ function New-PackagingFolder {
         }
         $progressBar.Value = 70
         Update-Status "Template files copied: $($copyResult.FilesCopied) files"
+        Remove-TemplateDocsFromPackage -PackagePath $newFolderPath
         
         # Copy installation media if provided using FolderEngine
         if (-not [string]::IsNullOrWhiteSpace($script:InstallationMediaPath) -and (Test-Path $script:InstallationMediaPath)) {
@@ -1146,6 +1258,7 @@ function New-PackagingFolder {
             }
         }
         catch {
+            Write-ProcessOutputLine -Message ("Error updating custom commands: {0}" -f $_.Exception.Message) -Level "ERROR"
             Write-Warning "Error updating custom commands: $($_.Exception.Message)"
         }
         $progressBar.Value = 95
@@ -1210,6 +1323,7 @@ function New-PackagingFolder {
     catch {
         $progressBar.Value = 0
         $errorMsg = "Error: $($_.Exception.Message)"
+        Write-ProcessOutputLine -Message $errorMsg -Level "ERROR"
         Update-Status $errorMsg "Red"
         
         # Show error banner with reason
@@ -1378,6 +1492,14 @@ function Start-BuildTestDeployWorkflow {
     $form.Refresh()
     
     $buildResult = Invoke-ProjectBuild -ProjectPath $projPath
+
+    if (-not [string]::IsNullOrWhiteSpace($buildResult.BuildLog)) {
+        foreach ($buildLogLine in ($buildResult.BuildLog -split "`r?`n")) {
+            if (-not [string]::IsNullOrWhiteSpace($buildLogLine)) {
+                Write-ProcessOutputLine -Message $buildLogLine -Level "INFO"
+            }
+        }
+    }
     
     $progressBar.Value = 60
     
@@ -1475,6 +1597,17 @@ function Start-BuildTestDeployWorkflow {
         $form.Refresh()
         
         $installTestResult = Start-InstallationTest -InstallExePath $installExePath -AppName $script:SavedName -AppVersion $script:SavedVersion -Vendor $script:SavedVendor
+
+        if ($installTestResult.RemovedDesktopShortcuts -and $installTestResult.RemovedDesktopShortcuts.Count -gt 0) {
+            foreach ($shortcut in @($installTestResult.RemovedDesktopShortcuts)) {
+                Write-ProcessOutputLine -Message ("Removed desktop shortcut after install [{0}]: {1}" -f $shortcut.Scope, $shortcut.Path) -Level "INFO"
+            }
+        }
+        if ($installTestResult.FailedDesktopShortcutRemovals -and $installTestResult.FailedDesktopShortcutRemovals.Count -gt 0) {
+            foreach ($shortcutFailure in @($installTestResult.FailedDesktopShortcutRemovals)) {
+                Write-ProcessOutputLine -Message ("Failed to remove desktop shortcut [{0}] {1}: {2}" -f $shortcutFailure.Scope, $shortcutFailure.Path, $shortcutFailure.Error) -Level "WARN"
+            }
+        }
         
                 if (-not $installTestResult.Success) {
             Update-Status "Make any changes needed to make your package function in the fashion you would like" "Blue"
@@ -2012,8 +2145,17 @@ function Get-CodeEditorActionSummary {
     if ($code -match '(?i)Write-Log|Write-Verbose') { [void]$actions.Add('Writes status information for troubleshooting.') }
     if ($code -match '(?i)Show-InstallationPrompt|Show-InstallationProgress') { [void]$actions.Add('Shows technician-facing prompts or progress UI.') }
 
+    $globalsSummary = Get-GlobalsCommandSummary -CodeText $code
+    if (-not [string]::IsNullOrWhiteSpace($globalsSummary) -and $globalsSummary -like 'Wrapper cmdlets detected*') {
+        [void]$actions.Add($globalsSummary)
+    }
+
     if ($actions.Count -eq 0) {
-        [void]$actions.Add('General PowerShell code block. Review the section description for intent.')
+        $fallback = 'General PowerShell code block. Review the section description for intent.'
+        if (-not [string]::IsNullOrWhiteSpace($globalsSummary)) {
+            $fallback += ' ' + $globalsSummary
+        }
+        [void]$actions.Add($fallback)
     }
 
     return ($actions | Select-Object -Unique) -join [Environment]::NewLine
@@ -2032,6 +2174,7 @@ function Get-CodeEditorHelpText {
     )
 
     $summary = Get-CodeEditorActionSummary -Text $CodeText
+    $globalsSummary = Get-GlobalsCommandSummary -CodeText $CodeText
     return @(
         $SectionTitle,
         "",
@@ -2039,6 +2182,8 @@ function Get-CodeEditorHelpText {
         "",
         "What this code currently appears to do:",
         $summary,
+        "",
+        $globalsSummary,
         "",
         "Leave the box to hide this help."
     ) -join [Environment]::NewLine
@@ -2332,6 +2477,9 @@ function Set-PackageHelperTabContent {
 
     if ($script:lblPackageHelperContext -and $HelperData.Context) {
         $contextLine = "Package Helper ready for: {0} | Installer: {1} | Context: {2} | Preset: {3}" -f $HelperData.Context.ProductDisplayName, $HelperData.Context.InstallerType, $HelperData.Context.InstallContext, $HelperData.Context.Preset
+        if ($script:GlobalsCommandNames -and $script:GlobalsCommandNames.Count -gt 0) {
+            $contextLine += " | Globals.ps1 cmdlets loaded: $($script:GlobalsCommandNames.Count)"
+        }
         $script:lblPackageHelperContext.Text = $contextLine
         $script:lblPackageHelperContext.ForeColor = [System.Drawing.Color]::FromArgb(0, 110, 0)
     }
@@ -3253,9 +3401,43 @@ $btnApplyAllPackageHelper.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $btnApplyAllPackageHelper.FlatAppearance.BorderSize = 0
 $tabPackageHelper.Controls.Add($btnApplyAllPackageHelper)
 
+$groupGlobalsReference = New-Object System.Windows.Forms.GroupBox
+$groupGlobalsReference.Text = "Globals.ps1 Wrapper Reference"
+$groupGlobalsReference.Location = New-Object System.Drawing.Point(20, 58)
+$groupGlobalsReference.Size = New-Object System.Drawing.Size(820, 128)
+$groupGlobalsReference.BackColor = $Colors.GroupBackground
+$tabPackageHelper.Controls.Add($groupGlobalsReference)
+
+$lblGlobalsReference = New-Object System.Windows.Forms.Label
+$lblGlobalsReference.Text = "This reference comes from .\Master Template\_SourceFiles\Globals.ps1 so helper output can stay aligned with the wrapper."
+$lblGlobalsReference.Location = New-Object System.Drawing.Point(15, 24)
+$lblGlobalsReference.Size = New-Object System.Drawing.Size(790, 18)
+$lblGlobalsReference.ForeColor = [System.Drawing.Color]::FromArgb(80, 80, 80)
+$groupGlobalsReference.Controls.Add($lblGlobalsReference)
+
+$txtGlobalsReference = New-Object System.Windows.Forms.TextBox
+$txtGlobalsReference.Location = New-Object System.Drawing.Point(15, 48)
+$txtGlobalsReference.Size = New-Object System.Drawing.Size(790, 64)
+$txtGlobalsReference.Multiline = $true
+$txtGlobalsReference.ScrollBars = 'Both'
+$txtGlobalsReference.WordWrap = $false
+$txtGlobalsReference.Font = $FontCode
+$txtGlobalsReference.ReadOnly = $true
+$txtGlobalsReference.Text = Get-GlobalsReferenceContent
+$groupGlobalsReference.Controls.Add($txtGlobalsReference)
+$script:txtGlobalsReference = $txtGlobalsReference
+
+$lblGlobalsReferenceCount = New-Object System.Windows.Forms.Label
+$lblGlobalsReferenceCount.Location = New-Object System.Drawing.Point(520, 24)
+$lblGlobalsReferenceCount.Size = New-Object System.Drawing.Size(285, 18)
+$lblGlobalsReferenceCount.TextAlign = [System.Drawing.ContentAlignment]::MiddleRight
+$lblGlobalsReferenceCount.ForeColor = [System.Drawing.Color]::FromArgb(80, 80, 80)
+$lblGlobalsReferenceCount.Text = if ($script:GlobalsCommandNames -and $script:GlobalsCommandNames.Count -gt 0) { "Recognized wrapper cmdlets: $($script:GlobalsCommandNames.Count)" } else { "Recognized wrapper cmdlets: 0" }
+$groupGlobalsReference.Controls.Add($lblGlobalsReferenceCount)
+
 $panelPackageHelper = New-Object System.Windows.Forms.Panel
-$panelPackageHelper.Location = New-Object System.Drawing.Point(20, 58)
-$panelPackageHelper.Size = New-Object System.Drawing.Size(820, 540)
+$panelPackageHelper.Location = New-Object System.Drawing.Point(20, 194)
+$panelPackageHelper.Size = New-Object System.Drawing.Size(820, 404)
 $panelPackageHelper.AutoScroll = $true
 $panelPackageHelper.BackColor = $Colors.Background
 $tabPackageHelper.Controls.Add($panelPackageHelper)

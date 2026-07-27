@@ -43,6 +43,44 @@ function Start-ValidationReportCapture {
             return $result
         }
 
+        $docsFolder = Join-Path $PackagePath "docs"
+        if (-not (Test-Path $docsFolder)) {
+            New-Item -Path $docsFolder -ItemType Directory -Force | Out-Null
+        }
+
+        $nameParts = @($AppVendor, $AppName)
+        if (-not [string]::IsNullOrWhiteSpace($AppEdition)) {
+            $nameParts += $AppEdition
+        }
+        $nameParts += $AppVersion
+
+        $reportFileName = (($nameParts -join " ") + " Validation report.html")
+        $reportFileName = $reportFileName -replace '[<>:"/\\|?*]', '_'
+        $targetReportPath = Join-Path $docsFolder $reportFileName
+
+        if (Test-Path $targetReportPath) {
+            $promptResult = [System.Windows.Forms.MessageBox]::Show(
+                "A validation report already exists for this package.`n`nSelect Yes to generate a new report and replace it, or No to keep the existing report and skip validation report generation.",
+                "Validation Report Already Exists",
+                [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                [System.Windows.Forms.MessageBoxIcon]::Question
+            )
+
+            if ($promptResult -eq [System.Windows.Forms.DialogResult]::No) {
+                try {
+                    Start-Process -FilePath $targetReportPath | Out-Null
+                }
+                catch {
+                }
+
+                $result.Success = $true
+                $result.ReportCopied = $true
+                $result.CopiedReportPath = $targetReportPath
+                $result.Message = "Existing validation report retained and opened from package docs."
+                return $result
+            }
+        }
+
         $startTime = Get-Date
         $launcherResult = $null
         $previousLocation = Get-Location
@@ -50,7 +88,7 @@ function Start-ValidationReportCapture {
             Push-Location $engineRoot
             Import-Module $uiEnginePath -Force -ErrorAction Stop
             $result.Launched = $true
-            $launcherResult = Invoke-DocumentationCaptureFromContext -AppName $AppName -AppVersion $AppVersion
+            $launcherResult = Invoke-DocumentationCaptureFromContext -AppVendor $AppVendor -AppName $AppName -AppVersion $AppVersion
         }
         finally {
             Pop-Location
@@ -117,21 +155,6 @@ function Start-ValidationReportCapture {
             return $result
         }
 
-        $docsFolder = Join-Path $PackagePath "docs"
-        if (-not (Test-Path $docsFolder)) {
-            New-Item -Path $docsFolder -ItemType Directory -Force | Out-Null
-        }
-
-        $nameParts = @($AppVendor, $AppName)
-        if (-not [string]::IsNullOrWhiteSpace($AppEdition)) {
-            $nameParts += $AppEdition
-        }
-        $nameParts += $AppVersion
-
-        $reportFileName = (($nameParts -join " ") + " Validation report.html")
-        $reportFileName = $reportFileName -replace '[<>:"/\\|?*]', '_'
-
-        $targetReportPath = Join-Path $docsFolder $reportFileName
         Copy-Item -Path $sourceReportPath -Destination $targetReportPath -Force
 
         try {
