@@ -2713,50 +2713,47 @@ function Invoke-PackageHelperGeneration {
     if ([string]::IsNullOrWhiteSpace($txtVendor.Text) -or [string]::IsNullOrWhiteSpace($txtName.Text)) {
         [System.Windows.Forms.MessageBox]::Show(
             "Please enter at least App Vendor and App Name first.",
-            "Package Helper",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Information
-        )
+
+    $basePath = if (-not [string]::IsNullOrWhiteSpace($script:BasePackagingPath)) { $script:BasePackagingPath.Trim() } else { "" }
+    $vendor = if (-not [string]::IsNullOrWhiteSpace($txtVendor.Text)) { $txtVendor.Text.Trim() } else { "" }
+    $name = if (-not [string]::IsNullOrWhiteSpace($txtName.Text)) { $txtName.Text.Trim() } else { "" }
+    $version = if (-not [string]::IsNullOrWhiteSpace($txtVersion.Text)) { $txtVersion.Text.Trim() } else { "" }
+    $edition = if (-not [string]::IsNullOrWhiteSpace($txtEdition.Text)) { $txtEdition.Text.Trim() } else { "" }
+
+    if ([string]::IsNullOrWhiteSpace($basePath) -or
+        [string]::IsNullOrWhiteSpace($vendor) -or
+        [string]::IsNullOrWhiteSpace($name) -or
+        [string]::IsNullOrWhiteSpace($version)) {
+        [string]$Reason = ""
+    )
         return
     }
 
-    if ([string]::IsNullOrWhiteSpace($script:DetectedInstallerType)) {
-        $script:DetectedInstallerType = "Generic"
+    $vendorPath = Join-Path $basePath $vendor
+    $appPath = Join-Path $vendorPath $name
+
+    $candidatePaths = New-Object System.Collections.Generic.List[string]
+    if (-not [string]::IsNullOrWhiteSpace($edition)) {
+        $candidatePaths.Add((Join-Path (Join-Path $appPath $edition) $version))
+    }
+    $candidatePaths.Add((Join-Path $appPath $version))
+
+    $existingPath = ""
+    foreach ($candidatePath in @($candidatePaths | Select-Object -Unique)) {
+        if (Test-Path $candidatePath) {
+            $existingPath = $candidatePath
+            break
+        }
     }
 
-    try {
-        $helperData = Get-PackageHelpSections -InstallerType $script:DetectedInstallerType `
-                                              -Vendor $txtVendor.Text.Trim() `
-                                              -AppName $txtName.Text.Trim() `
-                                              -Edition $txtEdition.Text.Trim() `
-                                              -Version $txtVersion.Text.Trim() `
-                                              -InstallMediaPath $script:InstallationMediaPath `
-                                              -CurrentInstallSwitch $txtInstallSwitch.Text.Trim() `
-                                              -CurrentUninstallSwitch $txtUninstallSwitch.Text.Trim() `
-                                              -CurrentUninstallExecutable $txtUninstallExecutable.Text.Trim() `
-                                              -InstallContext $script:SelectedInstallContext `
-                                              -ContextRecommendation $script:ContextRecommendation
-
-        Set-PackageHelperTabContent -HelperData $helperData
-        $tabControl.SelectedTab = $tabPackageHelper
+    if (-not [string]::IsNullOrWhiteSpace($existingPath)) {
+        $lblFolderExistsFlag.Visible = $true
+        Load-ExistingPackageDataIfPresent -PackagePath $existingPath
+        Sync-CommandSectionExpansionState
     }
-    catch {
-        [System.Windows.Forms.MessageBox]::Show(
-            "Failed to generate package helper suggestions.`n`n$($_.Exception.Message)",
-            "Package Helper Error",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Error
-        )
-    }
-}
-
-function Set-InstallContextState {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Context,
-
-        [string]$Reason = ""
-    )
+    else {
+        $lblFolderExistsFlag.Visible = $false
+        $script:LastLoadedStartupPath = ""
 
     $normalized = if ($Context -eq "User") { "User" } else { "System" }
     $script:SelectedInstallContext = $normalized
@@ -4110,27 +4107,6 @@ function Load-ExistingPackageDataIfPresent {
 function Check-PackageFolderExists {
     if ($script:IsPopulatingMetadata) {
         return
-    }
-
-    # Recover packaging base path from config if runtime value is blank.
-    if ([string]::IsNullOrWhiteSpace($script:BasePackagingPath) -and (Test-Path $configPath)) {
-        try {
-            $configSnapshot = Get-Content $configPath -Raw | ConvertFrom-Json
-            $candidatePaths = @(
-                [string]$configSnapshot.paths.basePackagingPath,
-                [string]$configSnapshot.launcher.technicianPackagingFolder
-            ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-
-            foreach ($candidatePath in $candidatePaths) {
-                if (Test-Path $candidatePath) {
-                    $script:BasePackagingPath = $candidatePath
-                    break
-                }
-            }
-        }
-        catch {
-            Write-ProcessOutputLine -Message ("Packaging path recovery failed during existing-folder check: {0}" -f $_.Exception.Message) -Level "WARN"
-        }
     }
 
     if (-not [string]::IsNullOrWhiteSpace($txtVendor.Text) -and 
