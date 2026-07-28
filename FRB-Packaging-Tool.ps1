@@ -874,6 +874,78 @@ function Get-GlobalsReferenceContent {
     }
 }
 
+function Get-GlobalsCommandPreview {
+    Refresh-GlobalsCommandMetadata
+
+    if (-not $script:GlobalsCommandNames -or $script:GlobalsCommandNames.Count -eq 0) {
+        return "No wrapper cmdlets were detected from Globals.ps1."
+    }
+
+    return (($script:GlobalsCommandNames | Sort-Object | Select-Object -First 60) -join ', ')
+}
+
+function Get-GlobalsAssistantSuggestions {
+    param(
+        [string]$CodeText = ""
+    )
+
+    Refresh-GlobalsCommandMetadata
+
+    if ([string]::IsNullOrWhiteSpace($CodeText)) {
+        return "Paste your custom PowerShell code and click Analyze Code to receive wrapper-aligned suggestions."
+    }
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    [void]$lines.Add("Globals Assistant Analysis")
+    [void]$lines.Add("")
+
+    $summary = Get-GlobalsCommandSummary -CodeText $CodeText
+    if (-not [string]::IsNullOrWhiteSpace($summary)) {
+        [void]$lines.Add($summary)
+        [void]$lines.Add("")
+    }
+
+    $hasWriteLog = $CodeText -match '(?im)^\s*Write-Log\b'
+    if (-not $hasWriteLog) {
+        [void]$lines.Add("- Add Write-Log before and after key actions so technician intent and results are visible in package logs.")
+        [void]$lines.Add("  Example: Write-Log -Message 'Starting custom action.' -Source 'Custom Commands'")
+    }
+
+    if ($CodeText -match '(?im)^\s*Start-Process\b') {
+        [void]$lines.Add("- Replace Start-Process with Execute-Process where possible for wrapper-consistent execution and logging behavior.")
+    }
+
+    if ($CodeText -match '(?i)msiexec(\.exe)?\b' -or $CodeText -match '(?im)^\s*Start-Process\s+.*msi') {
+        [void]$lines.Add("- Replace direct msiexec calls with Execute-MSI so install/uninstall actions are standardized.")
+    }
+
+    if ($CodeText -match '(?im)^\s*(Get-Process|Stop-Process)\b') {
+        [void]$lines.Add("- Consider Block-AppExecution for process-handling flows that should align with wrapper behavior.")
+    }
+
+    if ($CodeText -match '(?im)^\s*Remove-Item\b') {
+        [void]$lines.Add("- For directory cleanup, prefer Remove-Folder where appropriate to stay consistent with wrapper cleanup patterns.")
+    }
+
+    if ($CodeText -match '(?im)^\s*(Set-ItemProperty|New-ItemProperty|Remove-ItemProperty)\b') {
+        [void]$lines.Add("- If registry helper cmdlets exist in Globals.ps1 for this action, prefer those for consistency and safer logging.")
+    }
+
+    if ($CodeText -match '(?im)^\s*Write-Host\b') {
+        [void]$lines.Add("- Replace Write-Host with Write-Log so output is captured in deployment logs.")
+    }
+
+    if ($lines.Count -le 4) {
+        [void]$lines.Add("- No obvious wrapper-alignment risks were detected. Validate command intent and error handling manually.")
+    }
+
+    [void]$lines.Add("")
+    [void]$lines.Add("Top wrapper cmdlets currently detected from Globals.ps1:")
+    [void]$lines.Add((Get-GlobalsCommandPreview))
+
+    return ($lines -join [Environment]::NewLine)
+}
+
 function Remove-TemplateDocsFromPackage {
     param(
         [Parameter(Mandatory = $true)]
@@ -1636,6 +1708,9 @@ function Start-BuildTestDeployWorkflow {
             $form.Refresh()
 
             $docResult = Start-IntegratedValidationDocumentation -PackagePath $script:LastCreatedPackagePath -AppVendor $script:SavedVendor -AppName $script:SavedName -AppEdition $script:SavedEdition -AppVersion $script:SavedVersion
+            if (-not [string]::IsNullOrWhiteSpace([string]$docResult.Mode)) {
+                Write-ProcessOutputLine -Message ("Validation mode selected by technician: {0}" -f $docResult.Mode) -Level "INFO"
+            }
             if (-not $docResult.Success) {
                 Update-Status "Validation documentation warning: $($docResult.Message)" "Orange"
                 $form.Refresh()
@@ -1929,16 +2004,27 @@ function Start-IntegratedValidationDocumentation {
     $result = @{
         Success = $false
         Launched = $false
+        Mode = ""
         ReportCopied = $false
         CopiedReportPath = ""
         Message = ""
     }
 
     try {
+        Write-ProcessOutputLine -Message ("Validation workflow started for {0} {1}. Awaiting mode selection." -f $AppName, $AppVersion) -Level "INFO"
         $result = Start-ValidationReportCapture -PackagePath $PackagePath -AppVendor $AppVendor -AppName $AppName -AppEdition $AppEdition -AppVersion $AppVersion
+
+        $modeLabel = if (-not [string]::IsNullOrWhiteSpace([string]$result.Mode)) { [string]$result.Mode } else { "Unknown" }
+        if ($result.Success) {
+            Write-ProcessOutputLine -Message ("Validation workflow completed. Mode={0}. {1}" -f $modeLabel, $result.Message) -Level "INFO"
+        }
+        else {
+            Write-ProcessOutputLine -Message ("Validation workflow warning. Mode={0}. {1}" -f $modeLabel, $result.Message) -Level "WARN"
+        }
     }
     catch {
         $result.Message = "Validation documentation integration error: $($_.Exception.Message)"
+        Write-ProcessOutputLine -Message $result.Message -Level "ERROR"
     }
 
     return $result
@@ -3401,42 +3487,8 @@ $btnApplyAllPackageHelper.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $btnApplyAllPackageHelper.FlatAppearance.BorderSize = 0
 $tabPackageHelper.Controls.Add($btnApplyAllPackageHelper)
 
-$groupGlobalsReference = New-Object System.Windows.Forms.GroupBox
-$groupGlobalsReference.Text = "Globals.ps1 Wrapper Reference"
-$groupGlobalsReference.Location = New-Object System.Drawing.Point(20, 58)
-$groupGlobalsReference.Size = New-Object System.Drawing.Size(820, 128)
-$groupGlobalsReference.BackColor = $Colors.GroupBackground
-$tabPackageHelper.Controls.Add($groupGlobalsReference)
-
-$lblGlobalsReference = New-Object System.Windows.Forms.Label
-$lblGlobalsReference.Text = "This reference comes from .\Master Template\_SourceFiles\Globals.ps1 so helper output can stay aligned with the wrapper."
-$lblGlobalsReference.Location = New-Object System.Drawing.Point(15, 24)
-$lblGlobalsReference.Size = New-Object System.Drawing.Size(790, 18)
-$lblGlobalsReference.ForeColor = [System.Drawing.Color]::FromArgb(80, 80, 80)
-$groupGlobalsReference.Controls.Add($lblGlobalsReference)
-
-$txtGlobalsReference = New-Object System.Windows.Forms.TextBox
-$txtGlobalsReference.Location = New-Object System.Drawing.Point(15, 48)
-$txtGlobalsReference.Size = New-Object System.Drawing.Size(790, 64)
-$txtGlobalsReference.Multiline = $true
-$txtGlobalsReference.ScrollBars = 'Both'
-$txtGlobalsReference.WordWrap = $false
-$txtGlobalsReference.Font = $FontCode
-$txtGlobalsReference.ReadOnly = $true
-$txtGlobalsReference.Text = Get-GlobalsReferenceContent
-$groupGlobalsReference.Controls.Add($txtGlobalsReference)
-$script:txtGlobalsReference = $txtGlobalsReference
-
-$lblGlobalsReferenceCount = New-Object System.Windows.Forms.Label
-$lblGlobalsReferenceCount.Location = New-Object System.Drawing.Point(520, 24)
-$lblGlobalsReferenceCount.Size = New-Object System.Drawing.Size(285, 18)
-$lblGlobalsReferenceCount.TextAlign = [System.Drawing.ContentAlignment]::MiddleRight
-$lblGlobalsReferenceCount.ForeColor = [System.Drawing.Color]::FromArgb(80, 80, 80)
-$lblGlobalsReferenceCount.Text = if ($script:GlobalsCommandNames -and $script:GlobalsCommandNames.Count -gt 0) { "Recognized wrapper cmdlets: $($script:GlobalsCommandNames.Count)" } else { "Recognized wrapper cmdlets: 0" }
-$groupGlobalsReference.Controls.Add($lblGlobalsReferenceCount)
-
 $panelPackageHelper = New-Object System.Windows.Forms.Panel
-$panelPackageHelper.Location = New-Object System.Drawing.Point(20, 194)
+$panelPackageHelper.Location = New-Object System.Drawing.Point(20, 58)
 $panelPackageHelper.Size = New-Object System.Drawing.Size(820, 404)
 $panelPackageHelper.AutoScroll = $true
 $panelPackageHelper.BackColor = $Colors.Background
@@ -3626,7 +3678,109 @@ $btnApplyAllPackageHelper.Add_Click({
 
 #endregion Tab 4
 
-#region Tab 5: Process
+#region Tab 5: Globals Assistant
+$tabGlobalsAssistant = New-Object System.Windows.Forms.TabPage
+$tabGlobalsAssistant.Text = "Globals Assistant"
+$tabGlobalsAssistant.BackColor = $Colors.Background
+$tabControl.Controls.Add($tabGlobalsAssistant)
+
+$lblGlobalsAssistantHeader = New-Object System.Windows.Forms.Label
+$lblGlobalsAssistantHeader.Text = "Globals Assistant - Compare Custom Code with Wrapper Cmdlets"
+$lblGlobalsAssistantHeader.Location = New-Object System.Drawing.Point(20, 10)
+$lblGlobalsAssistantHeader.Size = New-Object System.Drawing.Size(760, 22)
+$lblGlobalsAssistantHeader.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
+$tabGlobalsAssistant.Controls.Add($lblGlobalsAssistantHeader)
+
+$lblGlobalsAssistantHint = New-Object System.Windows.Forms.Label
+$lblGlobalsAssistantHint.Text = "Paste proposed custom command code, analyze it, and review wrapper-aligned suggestions focused on logging and standardized cmdlets."
+$lblGlobalsAssistantHint.Location = New-Object System.Drawing.Point(20, 34)
+$lblGlobalsAssistantHint.Size = New-Object System.Drawing.Size(820, 20)
+$lblGlobalsAssistantHint.ForeColor = [System.Drawing.Color]::FromArgb(80, 80, 80)
+$tabGlobalsAssistant.Controls.Add($lblGlobalsAssistantHint)
+
+$txtGlobalsAssistantInput = New-Object System.Windows.Forms.TextBox
+$txtGlobalsAssistantInput.Location = New-Object System.Drawing.Point(20, 62)
+$txtGlobalsAssistantInput.Size = New-Object System.Drawing.Size(400, 430)
+$txtGlobalsAssistantInput.Multiline = $true
+$txtGlobalsAssistantInput.ScrollBars = 'Both'
+$txtGlobalsAssistantInput.WordWrap = $false
+$txtGlobalsAssistantInput.Font = $FontCode
+$tabGlobalsAssistant.Controls.Add($txtGlobalsAssistantInput)
+
+$txtGlobalsAssistantOutput = New-Object System.Windows.Forms.TextBox
+$txtGlobalsAssistantOutput.Location = New-Object System.Drawing.Point(440, 62)
+$txtGlobalsAssistantOutput.Size = New-Object System.Drawing.Size(400, 430)
+$txtGlobalsAssistantOutput.Multiline = $true
+$txtGlobalsAssistantOutput.ScrollBars = 'Both'
+$txtGlobalsAssistantOutput.WordWrap = $false
+$txtGlobalsAssistantOutput.Font = $FontCode
+$txtGlobalsAssistantOutput.ReadOnly = $true
+$txtGlobalsAssistantOutput.Text = "Analyze results will appear here."
+$tabGlobalsAssistant.Controls.Add($txtGlobalsAssistantOutput)
+
+$btnGlobalsAssistantAnalyze = New-Object System.Windows.Forms.Button
+$btnGlobalsAssistantAnalyze.Text = "Analyze Code"
+$btnGlobalsAssistantAnalyze.Location = New-Object System.Drawing.Point(20, 502)
+$btnGlobalsAssistantAnalyze.Size = New-Object System.Drawing.Size(120, 30)
+$btnGlobalsAssistantAnalyze.BackColor = $Colors.AccentTeal
+$btnGlobalsAssistantAnalyze.ForeColor = [System.Drawing.Color]::White
+$btnGlobalsAssistantAnalyze.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+$btnGlobalsAssistantAnalyze.FlatAppearance.BorderSize = 0
+$tabGlobalsAssistant.Controls.Add($btnGlobalsAssistantAnalyze)
+
+$btnGlobalsAssistantClear = New-Object System.Windows.Forms.Button
+$btnGlobalsAssistantClear.Text = "Clear"
+$btnGlobalsAssistantClear.Location = New-Object System.Drawing.Point(150, 502)
+$btnGlobalsAssistantClear.Size = New-Object System.Drawing.Size(90, 30)
+$btnGlobalsAssistantClear.BackColor = [System.Drawing.Color]::FromArgb(140, 140, 140)
+$btnGlobalsAssistantClear.ForeColor = [System.Drawing.Color]::White
+$btnGlobalsAssistantClear.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+$btnGlobalsAssistantClear.FlatAppearance.BorderSize = 0
+$tabGlobalsAssistant.Controls.Add($btnGlobalsAssistantClear)
+
+$btnGlobalsAssistantCopy = New-Object System.Windows.Forms.Button
+$btnGlobalsAssistantCopy.Text = "Copy Suggestions"
+$btnGlobalsAssistantCopy.Location = New-Object System.Drawing.Point(250, 502)
+$btnGlobalsAssistantCopy.Size = New-Object System.Drawing.Size(170, 30)
+$btnGlobalsAssistantCopy.BackColor = [System.Drawing.Color]::FromArgb(0, 105, 160)
+$btnGlobalsAssistantCopy.ForeColor = [System.Drawing.Color]::White
+$btnGlobalsAssistantCopy.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+$btnGlobalsAssistantCopy.FlatAppearance.BorderSize = 0
+$tabGlobalsAssistant.Controls.Add($btnGlobalsAssistantCopy)
+
+$lblGlobalsAssistantCount = New-Object System.Windows.Forms.Label
+$lblGlobalsAssistantCount.Location = New-Object System.Drawing.Point(440, 502)
+$lblGlobalsAssistantCount.Size = New-Object System.Drawing.Size(400, 30)
+$lblGlobalsAssistantCount.TextAlign = [System.Drawing.ContentAlignment]::MiddleRight
+$lblGlobalsAssistantCount.ForeColor = [System.Drawing.Color]::FromArgb(80, 80, 80)
+$lblGlobalsAssistantCount.Text = if ($script:GlobalsCommandNames -and $script:GlobalsCommandNames.Count -gt 0) { "Recognized wrapper cmdlets: $($script:GlobalsCommandNames.Count)" } else { "Recognized wrapper cmdlets: 0" }
+$tabGlobalsAssistant.Controls.Add($lblGlobalsAssistantCount)
+
+$btnGlobalsAssistantAnalyze.Add_Click({
+    $analysis = Get-GlobalsAssistantSuggestions -CodeText $txtGlobalsAssistantInput.Text
+    $txtGlobalsAssistantOutput.Text = $analysis
+})
+
+$btnGlobalsAssistantClear.Add_Click({
+    $txtGlobalsAssistantInput.Clear()
+    $txtGlobalsAssistantOutput.Text = "Analyze results will appear here."
+})
+
+$btnGlobalsAssistantCopy.Add_Click({
+    if ([string]::IsNullOrWhiteSpace($txtGlobalsAssistantOutput.Text)) {
+        return
+    }
+
+    try {
+        [System.Windows.Forms.Clipboard]::SetText($txtGlobalsAssistantOutput.Text)
+    }
+    catch {
+    }
+})
+
+#endregion Tab 5
+
+#region Tab 6: Process
 $tabProcess = New-Object System.Windows.Forms.TabPage
 $tabProcess.Text = "Process"
 $tabProcess.BackColor = $Colors.Background

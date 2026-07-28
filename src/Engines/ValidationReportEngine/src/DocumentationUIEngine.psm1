@@ -43,6 +43,92 @@ function Write-UIStatus {
     }
 }
 
+function Show-CaptureNameOverrideDialog {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$InitialName,
+
+        [int]$CountdownSeconds = 20
+    )
+
+    $selectedName = $InitialName
+    $remaining = if ($CountdownSeconds -lt 5) { 5 } else { $CountdownSeconds }
+
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = "Validation Capture Name"
+    $form.Size = New-Object System.Drawing.Size(620, 220)
+    $form.StartPosition = "CenterScreen"
+    $form.FormBorderStyle = "FixedDialog"
+    $form.MaximizeBox = $false
+    $form.MinimizeBox = $false
+    $form.TopMost = $true
+
+    $lblPrompt = New-Object System.Windows.Forms.Label
+    $lblPrompt.Location = New-Object System.Drawing.Point(20, 20)
+    $lblPrompt.Size = New-Object System.Drawing.Size(560, 44)
+    $lblPrompt.Text = "If Installed Apps or Start Menu uses a different display name, update it now before capture begins."
+    $lblPrompt.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+    $form.Controls.Add($lblPrompt)
+
+    $txtName = New-Object System.Windows.Forms.TextBox
+    $txtName.Location = New-Object System.Drawing.Point(20, 72)
+    $txtName.Size = New-Object System.Drawing.Size(560, 28)
+    $txtName.Font = New-Object System.Drawing.Font("Segoe UI", 11)
+    $txtName.Text = $InitialName
+    $form.Controls.Add($txtName)
+
+    $lblCountdown = New-Object System.Windows.Forms.Label
+    $lblCountdown.Location = New-Object System.Drawing.Point(20, 110)
+    $lblCountdown.Size = New-Object System.Drawing.Size(560, 24)
+    $lblCountdown.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Italic)
+    $lblCountdown.ForeColor = [System.Drawing.Color]::FromArgb(100, 100, 100)
+    $lblCountdown.Text = "Capture begins automatically in $remaining seconds."
+    $form.Controls.Add($lblCountdown)
+
+    $btnStart = New-Object System.Windows.Forms.Button
+    $btnStart.Text = "Start Capture Now"
+    $btnStart.Location = New-Object System.Drawing.Point(420, 140)
+    $btnStart.Size = New-Object System.Drawing.Size(160, 32)
+    $btnStart.BackColor = [System.Drawing.Color]::FromArgb(0, 176, 80)
+    $btnStart.ForeColor = [System.Drawing.Color]::White
+    $btnStart.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnStart.Add_Click({
+        if (-not [string]::IsNullOrWhiteSpace($txtName.Text)) {
+            $selectedName = $txtName.Text.Trim()
+        }
+        $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $form.Close()
+    })
+    $form.Controls.Add($btnStart)
+
+    $timer = New-Object System.Windows.Forms.Timer
+    $timer.Interval = 1000
+    $timer.Add_Tick({
+        $remaining--
+        $lblCountdown.Text = "Capture begins automatically in $remaining seconds."
+        if ($remaining -le 0) {
+            $timer.Stop()
+            if (-not [string]::IsNullOrWhiteSpace($txtName.Text)) {
+                $selectedName = $txtName.Text.Trim()
+            }
+            $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
+            $form.Close()
+        }
+    })
+
+    $form.Add_Shown({ $timer.Start() })
+    $form.Add_FormClosed({ $timer.Stop(); $timer.Dispose() })
+
+    [void]$form.ShowDialog()
+
+    if ([string]::IsNullOrWhiteSpace($selectedName)) {
+        return $InitialName
+    }
+
+    return $selectedName
+}
+
 function Start-AutomatedDocumentation {
     # Validate inputs
     if ([string]::IsNullOrWhiteSpace($script:Controls.txtAppName.Text)) {
@@ -74,6 +160,13 @@ function Start-AutomatedDocumentation {
             -TechName $env:USERNAME
         
         Start-Sleep -Milliseconds 500
+
+        $captureAppName = Show-CaptureNameOverrideDialog -InitialName $script:CurrentSession.AppName -CountdownSeconds 20
+        if ([string]::IsNullOrWhiteSpace($captureAppName)) {
+            $captureAppName = $script:CurrentSession.AppName
+        }
+        Write-UIStatus "Capture name selected: $captureAppName" "Blue"
+        Start-Sleep -Milliseconds 500
         
         # Step 2: Capture Figure 2
         Write-UIStatus "Capturing Figure 2 (Programs & Features)..." "Blue"
@@ -81,7 +174,7 @@ function Start-AutomatedDocumentation {
         Start-Sleep -Milliseconds 500
         
         $outputPath2 = Join-Path $script:CurrentSession.WorkingDirectory "Figure2.jpg"
-        $result2 = Invoke-AutomatedInstalledAppsCapture -AppName $script:CurrentSession.AppName -OutputPath $outputPath2
+        $result2 = Invoke-AutomatedInstalledAppsCapture -AppName $captureAppName -OutputPath $outputPath2
         
         if ($result2.Success) {
             $script:CurrentSession = Update-DocumentationSessionCapture -Session $script:CurrentSession -FigureNumber 2 -FilePath $outputPath2
@@ -95,13 +188,33 @@ function Start-AutomatedDocumentation {
         $script:Form.BringToFront()
         Start-Sleep -Milliseconds 500
 
-        # Step 3.5: Capture Figure 4 (Application Opened)
-        Write-UIStatus "Capturing Figure 4 (Application Opened)" "Blue"
+        # Step 3: Capture Figure 3
+        Write-UIStatus "Capturing Figure 3 (Start Menu)..." "Blue"
+        $script:Form.WindowState = 'Minimized'
+        Start-Sleep -Milliseconds 500
+
+        $outputPath3 = Join-Path $script:CurrentSession.WorkingDirectory "Figure3.jpg"
+        $result3 = Invoke-AutomatedStartMenuCapture -AppName $captureAppName -OutputPath $outputPath3
+
+        if ($result3.Success) {
+            $script:CurrentSession = Update-DocumentationSessionCapture -Session $script:CurrentSession -FigureNumber 3 -FilePath $outputPath3
+            Write-UIStatus "Figure 3 captured successfully; launching application for Figure 4..." "Green"
+        } else {
+            throw "Figure 3 capture failed"
+        }
+
+        Start-Sleep -Milliseconds 500
+        $script:Form.WindowState = 'Normal'
+        $script:Form.BringToFront()
+        Start-Sleep -Milliseconds 500
+
+        # Step 4: Capture Figure 4 (Application Opened)
+        Write-UIStatus "Capturing Figure 4 (Application Opened)..." "Blue"
         $script:Form.WindowState = 'Minimized'
         Start-Sleep -Milliseconds 500
 
         $outputPath4 = Join-Path $script:CurrentSession.WorkingDirectory "Figure4.jpg"
-        $result4 = Invoke-AutomatedApplicationLaunchCapture -AppName $script:CurrentSession.AppName -OutputPath $outputPath4
+        $result4 = Invoke-AutomatedApplicationOpenedCapture -AppName $captureAppName -OutputPath $outputPath4
 
         if ($result4.Success) {
             $script:CurrentSession = Update-DocumentationSessionCapture -Session $script:CurrentSession -FigureNumber 4 -FilePath $outputPath4
@@ -109,93 +222,95 @@ function Start-AutomatedDocumentation {
         } else {
             throw "Figure 4 capture failed"
         }
-
-        Start-Sleep -Milliseconds 500
-        $script:Form.WindowState = 'Normal'
-        $script:Form.BringToFront()
-        Start-Sleep -Milliseconds 500
-        
-        # Step 3: Capture Figure 3
-        Write-UIStatus "Capturing Figure 3 (Start Menu)..." "Blue"
-        $script:Form.WindowState = 'Minimized'
-        Start-Sleep -Milliseconds 500
-        
-        $outputPath3 = Join-Path $script:CurrentSession.WorkingDirectory "Figure3.jpg"
-        $result3 = Invoke-AutomatedStartMenuCapture -AppName $script:CurrentSession.AppName -OutputPath $outputPath3
-        
-        if ($result3.Success) {
-            $script:CurrentSession = Update-DocumentationSessionCapture -Session $script:CurrentSession -FigureNumber 3 -FilePath $outputPath3
-            Write-UIStatus "Figure 3 captured successfully" "Green"
-        } else {
-            throw "Figure 3 capture failed"
-        }
         
         Start-Sleep -Milliseconds 500
         $script:Form.WindowState = 'Normal'
         $script:Form.BringToFront()
         Start-Sleep -Milliseconds 500
         
-        # Step 4: Collect installation details (elevated)
+        # Step 5: Collect installation details (elevated)
         Write-UIStatus "Collecting installation details (will prompt for elevation)..." "Blue"
-        
-        $tempFile = [System.IO.Path]::GetTempFileName()
-        $tempFile = $tempFile.Replace('.tmp', '.txt')
-        
+
         $helperScript = ".\scripts\Get-ElevatedInstallInfo.ps1"
-        
         if (-not (Test-Path $helperScript)) {
             throw "Helper script not found: $helperScript"
         }
-        
+
         $helperFullPath = (Resolve-Path $helperScript).Path
-        
-        $wrapperScript = [System.IO.Path]::GetTempFileName()
-        $wrapperScript = $wrapperScript.Replace('.tmp', '.ps1')
-        
-        $wrapperContent = @"
+        $detailsCollected = $false
+        $detailsAttempt = 0
+
+        while (-not $detailsCollected) {
+            $detailsAttempt++
+
+            $tempFile = [System.IO.Path]::GetTempFileName()
+            $tempFile = $tempFile.Replace('.tmp', '.txt')
+
+            $wrapperScript = [System.IO.Path]::GetTempFileName()
+            $wrapperScript = $wrapperScript.Replace('.tmp', '.ps1')
+
+            $wrapperContent = @"
 #Requires -Version 5.1
 `$helperScriptPath = '$($helperFullPath.Replace("'", "''"))'
-`$appName = '$($script:CurrentSession.AppName.Replace("'", "''"))'
+`$appName = '$($captureAppName.Replace("'", "''"))'
 `$outputFile = '$($tempFile.Replace("'", "''"))'
 
 & "`$helperScriptPath" -AppName "`$appName" -OutputFile "`$outputFile"
 exit `$LASTEXITCODE
 "@
-        
-        $utf8 = New-Object System.Text.UTF8Encoding $false
-        [System.IO.File]::WriteAllText($wrapperScript, $wrapperContent, $utf8)
-        
-        $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$wrapperScript`""
-        $process = Start-Process powershell.exe -Verb RunAs -ArgumentList $arguments -Wait -PassThru
-        
-        Remove-Item $wrapperScript -Force -ErrorAction SilentlyContinue
-        
-        if ($process.ExitCode -ne 0) {
-            throw "Installation details collection failed or was cancelled"
-        }
-        
-        if (Test-Path $tempFile) {
-            $rawOutput = Get-Content $tempFile -Raw -Encoding UTF8
+
+            $utf8 = New-Object System.Text.UTF8Encoding $false
+            [System.IO.File]::WriteAllText($wrapperScript, $wrapperContent, $utf8)
+
+            $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$wrapperScript`""
+            $process = Start-Process powershell.exe -Verb RunAs -ArgumentList $arguments -Wait -PassThru
+
+            Remove-Item $wrapperScript -Force -ErrorAction SilentlyContinue
+
+            if ($process.ExitCode -eq 0 -and (Test-Path $tempFile)) {
+                $rawOutput = Get-Content $tempFile -Raw -Encoding UTF8
+                Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+
+                # Parse the helper output into sections
+                $parsed = Parse-HelperOutput -RawOutput $rawOutput
+
+                $script:CurrentSession = Update-DocumentationSessionDetails `
+                    -Session $script:CurrentSession `
+                    -InstallDirectory $parsed.InstallDirs `
+                    -RegistryKeys $parsed.ConfigKeys `
+                    -ServicesCreated $parsed.Services `
+                    -UninstallKeys $parsed.UninstallKeys
+
+                $detailsCollected = $true
+                Write-UIStatus "Installation details collected successfully" "Green"
+                continue
+            }
+
             Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
-            
-            # Parse the helper output into sections
-            $parsed = Parse-HelperOutput -RawOutput $rawOutput
-            
-            $script:CurrentSession = Update-DocumentationSessionDetails `
-                -Session $script:CurrentSession `
-                -InstallDirectory $parsed.InstallDirs `
-                -RegistryKeys $parsed.ConfigKeys `
-                -ServicesCreated $parsed.Services `
-                -UninstallKeys $parsed.UninstallKeys
-            
-            Write-UIStatus "Installation details collected successfully" "Green"
-        } else {
-            throw "Installation details file not created"
+
+            $response = [System.Windows.Forms.MessageBox]::Show(
+                "Installation details collection failed or was cancelled.`n`nYes = Retry collection`nNo = Continue without details`nCancel = Stop validation workflow",
+                "Installation Details Collection",
+                [System.Windows.Forms.MessageBoxButtons]::YesNoCancel,
+                [System.Windows.Forms.MessageBoxIcon]::Warning
+            )
+
+            if ($response -eq [System.Windows.Forms.DialogResult]::Yes) {
+                Write-UIStatus "Retrying installation details collection..." "Orange"
+                continue
+            }
+
+            if ($response -eq [System.Windows.Forms.DialogResult]::No) {
+                Write-UIStatus "Installation details skipped by technician." "Orange"
+                break
+            }
+
+            throw "Installation details collection failed or was cancelled"
         }
         
         Start-Sleep -Milliseconds 500
         
-        # Step 5: Generate validation document
+        # Step 6: Generate validation document
         Write-UIStatus "Generating validation document..." "Blue"
         
         $doc = New-ValidationDocument `
@@ -490,7 +605,7 @@ function Show-DocumentationCaptureUI {
     $lblFooter = New-Object System.Windows.Forms.Label
     $lblFooter.Location = New-Object System.Drawing.Point(20, 320)
     $lblFooter.Size = New-Object System.Drawing.Size(560, 30)
-    $lblFooter.Text = "Automated workflow: Figure 2 -> Figure 3 -> Installation Details -> Report"
+    $lblFooter.Text = "Automated workflow: Figure 2 -> Figure 3 -> Figure 4 -> Installation Details -> Report"
     $lblFooter.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Italic)
     $lblFooter.ForeColor = [System.Drawing.Color]::Gray
     $lblFooter.TextAlign = "MiddleCenter"

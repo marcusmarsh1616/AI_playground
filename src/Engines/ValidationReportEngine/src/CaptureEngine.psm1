@@ -326,7 +326,13 @@ function Invoke-AutomatedStartMenuCapture {
         Write-Verbose "Ready for user to capture"
         
         # Step 3: Trigger Snagit capture
-        return Invoke-ScreenCapture -OutputPath $OutputPath -FigureNumber 3 -Description "Start Menu: $AppName"
+        $captureResult = Invoke-ScreenCapture -OutputPath $OutputPath -FigureNumber 3 -Description "Start Menu: $AppName"
+
+        # Step 4: Launch selected app so Figure 4 can capture opened UI.
+        [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+        Start-Sleep -Seconds 4
+
+        return $captureResult
         
     } catch {
         Write-Error "Automation error: $($_.Exception.Message)"
@@ -338,17 +344,17 @@ function Invoke-AutomatedStartMenuCapture {
     }
 }
 
-function Invoke-AutomatedApplicationLaunchCapture {
+function Invoke-AutomatedApplicationOpenedCapture {
     <#
     .SYNOPSIS
-        Automates launching an application and captures the opened UI
+        Captures the already opened application UI after Start Menu launch
 
     .DESCRIPTION
-        Uses Start Menu search to launch the target application, waits for the
-        window to appear, then triggers Snagit capture.
+        Assumes the application was launched from the Figure 3 workflow,
+        waits briefly for UI rendering, then triggers Snagit capture.
 
     .PARAMETER AppName
-        Application name to search and launch
+        Application name used for capture description
 
     .PARAMETER OutputPath
         Where to save the screenshot
@@ -362,20 +368,10 @@ function Invoke-AutomatedApplicationLaunchCapture {
         [string]$OutputPath
     )
 
-    Write-Verbose "Starting automated application launch capture for: $AppName"
+    Write-Verbose "Starting automated application opened capture for: $AppName"
 
     try {
-        Add-Type -AssemblyName System.Windows.Forms
-
-        # Open Start Menu and search for the app.
-        [System.Windows.Forms.SendKeys]::SendWait("^{ESC}")
-        Start-Sleep -Milliseconds 800
-        [System.Windows.Forms.SendKeys]::SendWait($AppName)
         Start-Sleep -Seconds 2
-
-        # Launch top result and allow UI to render.
-        [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
-        Start-Sleep -Seconds 5
 
         return Invoke-ScreenCapture -OutputPath $OutputPath -FigureNumber 4 -Description "Application Opened: $AppName"
     }
@@ -442,7 +438,7 @@ Export-ModuleMember -Function @(
     'Invoke-ScreenCapture',
     'Invoke-AutomatedInstalledAppsCapture',
     'Invoke-AutomatedStartMenuCapture',
-    'Invoke-AutomatedApplicationLaunchCapture',
+    'Invoke-AutomatedApplicationOpenedCapture',
     'Close-InstalledAppsWindow',
     'Test-SnagitAvailable'
 )

@@ -39,7 +39,7 @@ function Remove-InstalledDesktopShortcuts {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [string[]]$SearchTokens
+        [string]$AppName
     )
 
     $result = @{
@@ -47,35 +47,26 @@ function Remove-InstalledDesktopShortcuts {
         Failed = @()
     }
 
-    $desktopScopes = @(
-        @{ Path = "$env:PUBLIC\Desktop"; Scope = "Machine" },
-        @{ Path = "$env:USERPROFILE\Desktop"; Scope = "User" }
-    )
-
-    $normalizedTokens = @($SearchTokens | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
-    if ($normalizedTokens.Count -eq 0) {
+    if ([string]::IsNullOrWhiteSpace($AppName)) {
         return $result
     }
+
+    $publicDesktop = [Environment]::GetFolderPath("CommonDesktopDirectory")
+    $userDesktop = [Environment]::GetFolderPath("Desktop")
+    $desktopScopes = @(
+        @{ Path = $publicDesktop; Scope = "Machine" },
+        @{ Path = $userDesktop; Scope = "User" }
+    )
+
+    $searchPattern = "*$($AppName.Trim())*.lnk"
 
     foreach ($desktopScope in $desktopScopes) {
         if ([string]::IsNullOrWhiteSpace($desktopScope.Path) -or -not (Test-Path $desktopScope.Path)) {
             continue
         }
 
-        $shortcuts = Get-ChildItem -Path $desktopScope.Path -Filter "*.lnk" -File -ErrorAction SilentlyContinue
+        $shortcuts = Get-ChildItem -Path $desktopScope.Path -Filter $searchPattern -File -ErrorAction SilentlyContinue
         foreach ($shortcut in $shortcuts) {
-            $matched = $false
-            foreach ($token in $normalizedTokens) {
-                if ($shortcut.Name -like "*$token*") {
-                    $matched = $true
-                    break
-                }
-            }
-
-            if (-not $matched) {
-                continue
-            }
-
             try {
                 Remove-Item -Path $shortcut.FullName -Force -ErrorAction Stop
                 $result.Removed += [PSCustomObject]@{
@@ -179,7 +170,7 @@ function Start-InstallationTest {
             # Give system time to settle
             Start-Sleep -Seconds 2
 
-            $shortcutCleanup = Remove-InstalledDesktopShortcuts -SearchTokens @($AppName, $Vendor)
+            $shortcutCleanup = Remove-InstalledDesktopShortcuts -AppName $AppName
             $result.RemovedDesktopShortcuts = @($shortcutCleanup.Removed)
             $result.FailedDesktopShortcutRemovals = @($shortcutCleanup.Failed)
             

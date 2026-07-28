@@ -6,6 +6,97 @@
     Runs integrated validation documentation capture and saves the generated report to a package docs folder.
 #>
 
+Add-Type -AssemblyName System.Windows.Forms
+
+function Show-ValidationCaptureModeDialog {
+    [CmdletBinding()]
+    param(
+        [string]$AppName = "",
+        [string]$AppVersion = ""
+    )
+
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = "Validation Report Mode"
+    $form.Size = New-Object System.Drawing.Size(560, 250)
+    $form.StartPosition = "CenterScreen"
+    $form.FormBorderStyle = "FixedDialog"
+    $form.MaximizeBox = $false
+    $form.MinimizeBox = $false
+    $form.TopMost = $true
+
+    $title = New-Object System.Windows.Forms.Label
+    $title.Text = "Select validation report mode"
+    $title.Location = New-Object System.Drawing.Point(20, 15)
+    $title.Size = New-Object System.Drawing.Size(510, 28)
+    $title.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
+    $form.Controls.Add($title)
+
+    $appText = if (-not [string]::IsNullOrWhiteSpace($AppName)) {
+        "Application: $AppName $AppVersion"
+    } else {
+        "Application details are available from the current package context."
+    }
+
+    $prompt = New-Object System.Windows.Forms.Label
+    $prompt.Text = "Choose Automated, Manual, or skip report generation for now." + [Environment]::NewLine + $appText
+    $prompt.Location = New-Object System.Drawing.Point(20, 50)
+    $prompt.Size = New-Object System.Drawing.Size(510, 55)
+    $prompt.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+    $form.Controls.Add($prompt)
+
+    $script:ValidationModeSelection = ""
+
+    $btnAutomated = New-Object System.Windows.Forms.Button
+    $btnAutomated.Text = "Automated"
+    $btnAutomated.Location = New-Object System.Drawing.Point(20, 140)
+    $btnAutomated.Size = New-Object System.Drawing.Size(160, 35)
+    $btnAutomated.BackColor = [System.Drawing.Color]::FromArgb(0, 176, 80)
+    $btnAutomated.ForeColor = [System.Drawing.Color]::White
+    $btnAutomated.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnAutomated.Add_Click({
+        $script:ValidationModeSelection = "Automated"
+        $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $form.Close()
+    })
+    $form.Controls.Add($btnAutomated)
+
+    $btnManual = New-Object System.Windows.Forms.Button
+    $btnManual.Text = "Manual"
+    $btnManual.Location = New-Object System.Drawing.Point(195, 140)
+    $btnManual.Size = New-Object System.Drawing.Size(160, 35)
+    $btnManual.BackColor = [System.Drawing.Color]::FromArgb(0, 105, 160)
+    $btnManual.ForeColor = [System.Drawing.Color]::White
+    $btnManual.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnManual.Add_Click({
+        $script:ValidationModeSelection = "Manual"
+        $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $form.Close()
+    })
+    $form.Controls.Add($btnManual)
+
+    $btnNone = New-Object System.Windows.Forms.Button
+    $btnNone.Text = "No Report Now"
+    $btnNone.Location = New-Object System.Drawing.Point(370, 140)
+    $btnNone.Size = New-Object System.Drawing.Size(160, 35)
+    $btnNone.BackColor = [System.Drawing.Color]::FromArgb(145, 145, 145)
+    $btnNone.ForeColor = [System.Drawing.Color]::White
+    $btnNone.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnNone.Add_Click({
+        $script:ValidationModeSelection = "None"
+        $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $form.Close()
+    })
+    $form.Controls.Add($btnNone)
+
+    [void]$form.ShowDialog()
+
+    if ([string]::IsNullOrWhiteSpace($script:ValidationModeSelection)) {
+        return "None"
+    }
+
+    return $script:ValidationModeSelection
+}
+
 function Start-ValidationReportCapture {
     [CmdletBinding()]
     param(
@@ -28,6 +119,7 @@ function Start-ValidationReportCapture {
     $result = @{
         Success = $false
         Launched = $false
+        Mode = ""
         ReportCopied = $false
         CopiedReportPath = ""
         Message = ""
@@ -37,6 +129,21 @@ function Start-ValidationReportCapture {
         $engineRoot = $PSScriptRoot
         $uiEnginePath = Join-Path $engineRoot "src\DocumentationUIEngine.psm1"
         $outputFolder = Join-Path $engineRoot "documentation"
+
+        $mode = Show-ValidationCaptureModeDialog -AppName $AppName -AppVersion $AppVersion
+        $result.Mode = $mode
+        if ($mode -eq "None") {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Validation report generation was skipped.`n`nIf you want to capture this report later, you will need to reinstall the software so the full capture sequence can be performed again.",
+                "Validation Report Deferred",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Information
+            )
+
+            $result.Success = $true
+            $result.Message = "Validation report deferred by technician (Mode: None). Reinstall is required to capture later."
+            return $result
+        }
 
         if (-not (Test-Path $uiEnginePath)) {
             $result.Message = "Validation documentation UI engine not found: $uiEnginePath"
@@ -76,7 +183,7 @@ function Start-ValidationReportCapture {
                 $result.Success = $true
                 $result.ReportCopied = $true
                 $result.CopiedReportPath = $targetReportPath
-                $result.Message = "Existing validation report retained and opened from package docs."
+                $result.Message = "Existing validation report retained and opened from package docs (Mode: $mode)."
                 return $result
             }
         }
@@ -88,7 +195,12 @@ function Start-ValidationReportCapture {
             Push-Location $engineRoot
             Import-Module $uiEnginePath -Force -ErrorAction Stop
             $result.Launched = $true
-            $launcherResult = Invoke-DocumentationCaptureFromContext -AppVendor $AppVendor -AppName $AppName -AppVersion $AppVersion
+            if ($mode -eq "Manual") {
+                $launcherResult = Show-DocumentationCaptureUI -AppName $AppName -AppVersion $AppVersion
+            }
+            else {
+                $launcherResult = Invoke-DocumentationCaptureFromContext -AppVendor $AppVendor -AppName $AppName -AppVersion $AppVersion
+            }
         }
         finally {
             Pop-Location
@@ -167,7 +279,7 @@ function Start-ValidationReportCapture {
         $result.ReportCopied = $true
         $result.CopiedReportPath = $targetReportPath
         $result.Success = $true
-        $result.Message = "Validation report saved to package docs: $reportFileName"
+        $result.Message = "Validation report saved to package docs (Mode: $mode): $reportFileName"
     }
     catch {
         $result.Message = "Validation report engine error: $($_.Exception.Message)"
