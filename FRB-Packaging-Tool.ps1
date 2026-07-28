@@ -2713,47 +2713,50 @@ function Invoke-PackageHelperGeneration {
     if ([string]::IsNullOrWhiteSpace($txtVendor.Text) -or [string]::IsNullOrWhiteSpace($txtName.Text)) {
         [System.Windows.Forms.MessageBox]::Show(
             "Please enter at least App Vendor and App Name first.",
-
-    $basePath = if (-not [string]::IsNullOrWhiteSpace($script:BasePackagingPath)) { $script:BasePackagingPath.Trim() } else { "" }
-    $vendor = if (-not [string]::IsNullOrWhiteSpace($txtVendor.Text)) { $txtVendor.Text.Trim() } else { "" }
-    $name = if (-not [string]::IsNullOrWhiteSpace($txtName.Text)) { $txtName.Text.Trim() } else { "" }
-    $version = if (-not [string]::IsNullOrWhiteSpace($txtVersion.Text)) { $txtVersion.Text.Trim() } else { "" }
-    $edition = if (-not [string]::IsNullOrWhiteSpace($txtEdition.Text)) { $txtEdition.Text.Trim() } else { "" }
-
-    if ([string]::IsNullOrWhiteSpace($basePath) -or
-        [string]::IsNullOrWhiteSpace($vendor) -or
-        [string]::IsNullOrWhiteSpace($name) -or
-        [string]::IsNullOrWhiteSpace($version)) {
-        [string]$Reason = ""
-    )
+            "Package Helper",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information
+        )
         return
     }
 
-    $vendorPath = Join-Path $basePath $vendor
-    $appPath = Join-Path $vendorPath $name
-
-    $candidatePaths = New-Object System.Collections.Generic.List[string]
-    if (-not [string]::IsNullOrWhiteSpace($edition)) {
-        $candidatePaths.Add((Join-Path (Join-Path $appPath $edition) $version))
-    }
-    $candidatePaths.Add((Join-Path $appPath $version))
-
-    $existingPath = ""
-    foreach ($candidatePath in @($candidatePaths | Select-Object -Unique)) {
-        if (Test-Path $candidatePath) {
-            $existingPath = $candidatePath
-            break
-        }
+    if ([string]::IsNullOrWhiteSpace($script:DetectedInstallerType)) {
+        $script:DetectedInstallerType = "Generic"
     }
 
-    if (-not [string]::IsNullOrWhiteSpace($existingPath)) {
-        $lblFolderExistsFlag.Visible = $true
-        Load-ExistingPackageDataIfPresent -PackagePath $existingPath
-        Sync-CommandSectionExpansionState
+    try {
+        $helperData = Get-PackageHelpSections -InstallerType $script:DetectedInstallerType `
+                                              -Vendor $txtVendor.Text.Trim() `
+                                              -AppName $txtName.Text.Trim() `
+                                              -Edition $txtEdition.Text.Trim() `
+                                              -Version $txtVersion.Text.Trim() `
+                                              -InstallMediaPath $script:InstallationMediaPath `
+                                              -CurrentInstallSwitch $txtInstallSwitch.Text.Trim() `
+                                              -CurrentUninstallSwitch $txtUninstallSwitch.Text.Trim() `
+                                              -CurrentUninstallExecutable $txtUninstallExecutable.Text.Trim() `
+                                              -InstallContext $script:SelectedInstallContext `
+                                              -ContextRecommendation $script:ContextRecommendation
+
+        Set-PackageHelperTabContent -HelperData $helperData
+        $tabControl.SelectedTab = $tabPackageHelper
     }
-    else {
-        $lblFolderExistsFlag.Visible = $false
-        $script:LastLoadedStartupPath = ""
+    catch {
+        [System.Windows.Forms.MessageBox]::Show(
+            "Failed to generate package helper suggestions.`n`n$($_.Exception.Message)",
+            "Package Helper Error",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        )
+    }
+}
+
+function Set-InstallContextState {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Context,
+
+        [string]$Reason = ""
+    )
 
     $normalized = if ($Context -eq "User") { "User" } else { "System" }
     $script:SelectedInstallContext = $normalized
