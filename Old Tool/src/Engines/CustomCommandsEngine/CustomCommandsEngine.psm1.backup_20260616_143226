@@ -1,0 +1,226 @@
+<#
+.SYNOPSIS
+    Custom Commands Engine for PSADTWrapper Integration
+.DESCRIPTION
+    Handles insertion of custom PowerShell commands into Startup.pss at 6 defined insertion points
+.NOTES
+    Author: FRB Automation Team
+    Created: December 2024
+    Version: 1.0.0
+#>
+
+#region Functions
+
+function Add-CustomCommandsToStartupPss {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$StartupPssPath,
+        
+        [Parameter(Mandatory = $true)]
+        [hashtable]$CommandSections
+    )
+    
+    $result = @{
+        Success = $false
+        Message = ""
+        InsertedSections = @()
+    }
+    
+    try {
+        if (-not (Test-Path $StartupPssPath)) {
+            $result.Message = "Startup.pss not found at: $StartupPssPath"
+            return $result
+        }
+        
+        $content = Get-Content $StartupPssPath -Raw
+        
+        $insertionPoints = @(
+            @{
+                Marker = "## <Perform Pre-Installation tasks here>"
+                CommandKey = "PreInstall"
+                Description = "Pre-Installation Commands"
+            },
+            @{
+                Marker = "#region <Perform Installation tasks here>"
+                CommandKey = "CustomInstall"
+                Description = "Custom Installation Commands"
+            },
+            @{
+                Marker = "## <Perform Post-Installation tasks here>"
+                CommandKey = "PostInstall"
+                Description = "Post-Installation Commands"
+            },
+            @{
+                Marker = "## <Perform Pre-Uninstallation tasks here>"
+                CommandKey = "PreUninstall"
+                Description = "Pre-Uninstallation Commands"
+            },
+            @{
+                Marker = "## <Perform Custom Uninstallation tasks here>"
+                CommandKey = "CustomUninstall"
+                Description = "Custom Uninstallation Commands"
+            },
+            @{
+                Marker = "## <Perform Post-Uninstallation tasks here>"
+                CommandKey = "PostUninstall"
+                Description = "Post-Uninstallation Commands"
+            }
+        )
+        
+        foreach ($point in $insertionPoints) {
+            $commandKey = $point.CommandKey
+            $marker = $point.Marker
+            
+            if ($CommandSections.ContainsKey($commandKey)) {
+                $commands = $CommandSections[$commandKey]
+                
+                if ([string]::IsNullOrWhiteSpace($commands)) {
+                    continue
+                }
+                
+                if ($content -notmatch [regex]::Escape($marker)) {
+                    Write-Warning "Marker not found: $marker"
+                    continue
+                }
+                
+                $formattedCommands = Format-CommandSection -Commands $commands -IndentLevel 2
+                
+                $insertText = "$marker`r`n$formattedCommands"
+                $content = $content -replace [regex]::Escape($marker), $insertText
+                
+                $result.InsertedSections += $point.Description
+            }
+        }
+        
+        Set-Content -Path $StartupPssPath -Value $content -NoNewline -Force
+        
+        $result.Success = $true
+        if ($result.InsertedSections.Count -gt 0) {
+            $result.Message = "Successfully inserted custom commands into $($result.InsertedSections.Count) section(s):`n- " + ($result.InsertedSections -join "`n- ")
+        } else {
+            $result.Message = "No custom commands to insert (all sections were empty)"
+        }
+    }
+    catch {
+        $result.Message = "Error inserting custom commands: $($_.Exception.Message)"
+    }
+    
+    return $result
+}
+
+function Format-CommandSection {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Commands,
+        
+        [Parameter(Mandatory = $false)]
+        [int]$IndentLevel = 2
+    )
+    
+    $indent = "`t" * $IndentLevel
+    $lines = $Commands -split "`r?`n"
+    
+    $formattedLines = foreach ($line in $lines) {
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            ""
+        } else {
+            $trimmedLine = $line.TrimStart()
+            "$indent$trimmedLine"
+        }
+    }
+    
+    return ($formattedLines -join "`r`n")
+}
+
+function Test-StartupPssMarkers {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$StartupPssPath
+    )
+    
+    $result = @{
+        Valid = $false
+        MissingMarkers = @()
+        Message = ""
+    }
+    
+    try {
+        if (-not (Test-Path $StartupPssPath)) {
+            $result.Message = "Startup.pss not found at: $StartupPssPath"
+            return $result
+        }
+        
+        $content = Get-Content $StartupPssPath -Raw
+        
+        $requiredMarkers = @(
+            "## <Perform Pre-Installation tasks here>",
+            "#region <Perform Installation tasks here>",
+            "## <Perform Post-Installation tasks here>",
+            "## <Perform Pre-Uninstallation tasks here>",
+            "## <Perform Custom Uninstallation tasks here>",
+            "## <Perform Post-Uninstallation tasks here>"
+        )
+        
+        foreach ($marker in $requiredMarkers) {
+            if ($content -notmatch [regex]::Escape($marker)) {
+                $result.MissingMarkers += $marker
+            }
+        }
+        
+        if ($result.MissingMarkers.Count -eq 0) {
+            $result.Valid = $true
+            $result.Message = "All 6 custom command markers found in Startup.pss"
+        } else {
+            $result.Message = "Missing $($result.MissingMarkers.Count) marker(s) in Startup.pss:`n- " + ($result.MissingMarkers -join "`n- ")
+        }
+    }
+    catch {
+        $result.Message = "Error validating markers: $($_.Exception.Message)"
+    }
+    
+    return $result
+}
+
+function Save-StartupPss {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$StartupPssPath
+    )
+    
+    $result = @{
+        Success = $false
+        BackupPath = ""
+        Message = ""
+    }
+    
+    try {
+        if (-not (Test-Path $StartupPssPath)) {
+            $result.Message = "Startup.pss not found at: $StartupPssPath"
+            return $result
+        }
+        
+        $directory = Split-Path $StartupPssPath -Parent
+        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+        $backupFileName = "Startup_backup_$timestamp.pss"
+        $backupPath = Join-Path $directory $backupFileName
+        
+        Copy-Item -Path $StartupPssPath -Destination $backupPath -Force
+        
+        $result.Success = $true
+        $result.BackupPath = $backupPath
+        $result.Message = "Backup created: $backupFileName"
+    }
+    catch {
+        $result.Message = "Error creating backup: $($_.Exception.Message)"
+    }
+    
+    return $result
+}
+
+#endregion Functions
+
+Export-ModuleMember -Function Add-CustomCommandsToStartupPss, Format-CommandSection, Test-StartupPssMarkers, Save-StartupPss
