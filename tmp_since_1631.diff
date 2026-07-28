@@ -1,0 +1,209 @@
+diff --git a/FRB-Packaging-Tool.ps1 b/FRB-Packaging-Tool.ps1
+index c670305..9b75344 100644
+--- a/FRB-Packaging-Tool.ps1
++++ b/FRB-Packaging-Tool.ps1
+@@ -795,6 +795,111 @@ function Start-ProcessSession {
+     Write-ProcessOutputLine -Message "Packaging session started." -Level "INFO"
+ }
+ 
++function Write-TestExecutionDiagnostics {
++    param(
++        [Parameter(Mandatory = $true)]
++        [string]$Stage,
++
++        [Parameter(Mandatory = $true)]
++        [hashtable]$Result
++    )
++
++    if (-not $Result) {
++        return
++    }
++
++    $exitCodeLabel = if ($Result.ContainsKey('ExitCode')) { [string]$Result.ExitCode } else { 'N/A' }
++    $processLabel = if ($Result.ContainsKey('ProcessId') -and $Result.ProcessId) { [string]$Result.ProcessId } else { 'N/A' }
++    $commandLine = "{0} {1}" -f $Result.InstallExePath, $Result.Arguments
++    $commandLine = $commandLine.Trim()
++
++    Write-ProcessOutputLine -Message ("{0} execution summary | ProcessId={1} ExitCode={2} Command={3}" -f $Stage, $processLabel, $exitCodeLabel, $commandLine) -Level "INFO"
++
++    if ($Result.ContainsKey('CleanupResults') -and $Result.CleanupResults) {
++        $cleanup = $Result.CleanupResults
++        Write-ProcessOutputLine -Message ("{0} cleanup summary | Attempted={1} Cleaned={2} Failed={3} Preserved={4}" -f $Stage, $cleanup.Attempted, $cleanup.TotalCleaned, $cleanup.TotalFailed, $cleanup.PreservedCount) -Level "INFO"
++    }
++
++    if ($Result.ContainsKey('ReportPath') -and -not [string]::IsNullOrWhiteSpace([string]$Result.ReportPath)) {
++        Write-ProcessOutputLine -Message ("{0} report path: {1}" -f $Stage, $Result.ReportPath) -Level "INFO"
++    }
++
++    if ($Result.ContainsKey('Diagnostics') -and $Result.Diagnostics) {
++        if ($Result.Diagnostics.Files -and $Result.Diagnostics.Files.Count -gt 0) {
++            foreach ($diagFile in @($Result.Diagnostics.Files)) {
++                Write-ProcessOutputLine -Message ("{0} evidence file: {1} (LastWrite={2}, Size={3} bytes)" -f $Stage, $diagFile.Path, $diagFile.LastWriteTime, $diagFile.Size) -Level "INFO"
++            }
++        }
++        else {
++            Write-ProcessOutputLine -Message ("{0} diagnostics: no recent install/uninstall log files detected." -f $Stage) -Level "WARN"
++        }
++
++        if ($Result.Diagnostics.TailLines -and $Result.Diagnostics.TailLines.Count -gt 0) {
++            foreach ($tailLine in @($Result.Diagnostics.TailLines)) {
++                Write-ProcessOutputLine -Message ("{0} log tail: {1}" -f $Stage, $tailLine) -Level "INFO"
++            }
++        }
++    }
++
++    if (-not [string]::IsNullOrWhiteSpace([string]$Result.ErrorMessage)) {
++        Write-ProcessOutputLine -Message ("{0} error detail: {1}" -f $Stage, $Result.ErrorMessage) -Level "ERROR"
++    }
++}
++
++function Test-PackageDeploymentReadiness {
++    param(
++        [Parameter(Mandatory = $true)]
++        [string]$PackagePath,
++
++        [Parameter(Mandatory = $true)]
++        [string]$AppName
++    )
++
++    $readiness = @{
++        Ready = $true
++        MissingItems = @()
++    }
++
++    $docsFolder = Join-Path $PackagePath "Docs"
++    if (-not (Test-Path $docsFolder)) {
++        $readiness.Ready = $false
++        $readiness.MissingItems += "Docs folder"
++    }
++    else {
++        $installValidation = Get-ChildItem -Path $docsFolder -File -Filter "* Validation report.html" -ErrorAction SilentlyContinue
++        if (-not $installValidation -or $installValidation.Count -eq 0) {
++            $readiness.Ready = $false
++            $readiness.MissingItems += "Installation validation report (*. Validation report.html in Docs)"
++        }
++
++        $uninstallValidation = Get-ChildItem -Path $docsFolder -File -Filter "Uninstall_Report_*.html" -ErrorAction SilentlyContinue
++        if (-not $uninstallValidation -or $uninstallValidation.Count -eq 0) {
++            $readiness.Ready = $false
++            $readiness.MissingItems += "Uninstallation validation report (Uninstall_Report_*.html in Docs)"
++        }
++    }
++
++    $detectCandidates = @(
++        "{0}_Detect_R1.ps1" -f $AppName,
++        "{0}_Detect_R1.ps1" -f (($AppName -replace '\\s+', '_'))
++    ) | Select-Object -Unique
++
++    $detectFound = $false
++    foreach ($candidate in @($detectCandidates)) {
++        if (Test-Path (Join-Path $PackagePath $candidate)) {
++            $detectFound = $true
++            break
++        }
++    }
++
++    if (-not $detectFound) {
++        $readiness.Ready = $false
++        $readiness.MissingItems += ("Detection script ({0})" -f ($detectCandidates -join " or "))
++    }
++
++    return $readiness
++}
++
+ function Get-GlobalsReferencePath {
+     if ([string]::IsNullOrWhiteSpace($script:MasterTemplatePath)) {
+         return ""
+@@ -1667,8 +1772,10 @@ function Start-BuildTestDeployWorkflow {
+     :InstallLoop while ($true) {
+         Update-Status "Launching Install.exe for installation testing..." "Blue"
+         $form.Refresh()
++        Write-ProcessOutputLine -Message ("Install test started for {0} {1}." -f $script:SavedName, $script:SavedVersion) -Level "INFO"
+         
+         $installTestResult = Start-InstallationTest -InstallExePath $installExePath -AppName $script:SavedName -AppVersion $script:SavedVersion -Vendor $script:SavedVendor
++        Write-TestExecutionDiagnostics -Stage "Install" -Result $installTestResult
+ 
+         if ($installTestResult.RemovedDesktopShortcuts -and $installTestResult.RemovedDesktopShortcuts.Count -gt 0) {
+             foreach ($shortcut in @($installTestResult.RemovedDesktopShortcuts)) {
+@@ -1706,6 +1813,7 @@ function Start-BuildTestDeployWorkflow {
+         if ($installTestResult.UserConfirmed) {
+             Update-Status "Installation confirmed successful by technician!" "Green"
+             $form.Refresh()
++            Write-ProcessOutputLine -Message "Technician confirmed installation functioned as designed." -Level "INFO"
+ 
+             $docResult = Start-IntegratedValidationDocumentation -PackagePath $script:LastCreatedPackagePath -AppVendor $script:SavedVendor -AppName $script:SavedName -AppEdition $script:SavedEdition -AppVersion $script:SavedVersion
+             if (-not [string]::IsNullOrWhiteSpace([string]$docResult.Mode)) {
+@@ -1782,8 +1890,10 @@ function Start-BuildTestDeployWorkflow {
+     :UninstallLoop while ($true) {
+         Update-Status "Launching Install.exe /uninstall for uninstallation testing..." "Blue"
+         $form.Refresh()
++        Write-ProcessOutputLine -Message ("Uninstall test started for {0} {1}." -f $script:SavedName, $script:SavedVersion) -Level "INFO"
+         
+         $uninstallTestResult = Start-UninstallationTest -InstallExePath $installExePath -AppName $script:SavedName -AppVersion $script:SavedVersion -Vendor $script:SavedVendor -PackagePath $script:LastCreatedPackagePath
++        Write-TestExecutionDiagnostics -Stage "Uninstall" -Result $uninstallTestResult
+         
+                 if (-not $uninstallTestResult.Success) {
+             Update-Status "Make any changes needed to make your package function in the fashion you would like" "Blue"
+@@ -1810,6 +1920,7 @@ function Start-BuildTestDeployWorkflow {
+         if ($uninstallTestResult.UserConfirmed) {
+             Update-Status "Uninstallation confirmed successful by technician!" "Green"
+             $form.Refresh()
++            Write-ProcessOutputLine -Message "Technician confirmed uninstallation functioned as designed." -Level "INFO"
+             break :UninstallLoop
+         } else {
+             # User said NO - allow modification and retry
+@@ -1843,6 +1954,30 @@ function Start-BuildTestDeployWorkflow {
+         Write-Verbose "Network deployment: Starting final step..."
+         Update-Status "Checking network deployment settings..." "Blue"
+         $form.Refresh()
++        Write-ProcessOutputLine -Message "Deployment pre-check started." -Level "INFO"
++
++        $deploymentReadiness = Test-PackageDeploymentReadiness -PackagePath $script:LastCreatedPackagePath -AppName $script:SavedName
++        if (-not $deploymentReadiness.Ready) {
++            foreach ($missingItem in @($deploymentReadiness.MissingItems)) {
++                Write-ProcessOutputLine -Message ("Deployment pre-check missing item: {0}" -f $missingItem) -Level "ERROR"
++            }
++
++            Update-Status "Deployment blocked: required files are missing." "Red"
++            [System.Windows.Forms.MessageBox]::Show(
++                "Cannot copy package to the network until required validation artifacts are in place.`n`nMissing items:`n- " + ($deploymentReadiness.MissingItems -join "`n- ") + "`n`nAdd the missing files to the package folder and rerun packaging.",
++                "Deployment Blocked - Missing Required Files",
++                [System.Windows.Forms.MessageBoxButtons]::OK,
++                [System.Windows.Forms.MessageBoxIcon]::Warning
++            )
++
++            $btnCreate.Enabled = $true
++            $btnCreate.Visible = $true
++            $btnCancel.Enabled = $true
++            $btnCancel.Visible = $true
++            return
++        }
++
++        Write-ProcessOutputLine -Message "Deployment pre-check passed: required validation docs and detection script are present." -Level "INFO"
+         try {
+         # Load config to get deployment settings
+         $config = Get-Content $configPath -Raw | ConvertFrom-Json
+@@ -1850,6 +1985,7 @@ function Start-BuildTestDeployWorkflow {
+         if ($config.deployment.autoCopyEnabled) {
+             Update-Status "Deploying package to network share..." "Blue"
+             $form.Refresh()
++            Write-ProcessOutputLine -Message ("Network deployment started. Target root: {0}" -f $config.deployment.networkSharePath) -Level "INFO"
+             
+             $deployResult = Copy-PackageToNetworkShare -PackagePath $script:LastCreatedPackagePath `
+                                                            -NetworkSharePath $config.deployment.networkSharePath `
+@@ -1866,6 +2002,7 @@ function Start-BuildTestDeployWorkflow {
+                                                            }
+             
+             if ($deployResult.Success) {
++                Write-ProcessOutputLine -Message ("Network deployment succeeded. Target={0}; Files={1}; SizeMB={2}" -f $deployResult.TargetPath, $deployResult.FilesCopied, $deployResult.SizeMB) -Level "INFO"
+                 Update-Status "Package deployed successfully to network share!" "Green"
+                 [System.Windows.Forms.MessageBox]::Show(
+                     "Package deployed to network share!`n`nLocation: $($deployResult.TargetPath)`n`nFiles: $($deployResult.FilesCopied)`nSize: $($deployResult.SizeMB) MB", 
+@@ -1874,6 +2011,7 @@ function Start-BuildTestDeployWorkflow {
+                     [System.Windows.Forms.MessageBoxIcon]::Information
+                 )
+             } else {
++                Write-ProcessOutputLine -Message ("Network deployment failed: {0}" -f $deployResult.Message) -Level "ERROR"
+                 Update-Status "Network deployment failed: $($deployResult.Message)" "Red"
+                 [System.Windows.Forms.MessageBox]::Show(
+                     "Failed to deploy to network share!`n`nError: $($deployResult.Message)`n`nPackage remains in local folder.", 

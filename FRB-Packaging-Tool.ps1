@@ -4112,20 +4112,43 @@ function Check-PackageFolderExists {
         return
     }
 
-    if (-not [string]::IsNullOrWhiteSpace($txtVendor.Text) -and 
-        -not [string]::IsNullOrWhiteSpace($txtName.Text) -and 
-        -not [string]::IsNullOrWhiteSpace($txtVersion.Text)) {
+    if ([string]::IsNullOrWhiteSpace($script:BasePackagingPath)) {
+        $lblFolderExistsFlag.Visible = $false
+        $script:LastLoadedStartupPath = ""
+        return
+    }
+
+    $vendorValue = if ([string]::IsNullOrWhiteSpace($txtVendor.Text)) { "" } else { $txtVendor.Text.Trim() }
+    $nameValue = if ([string]::IsNullOrWhiteSpace($txtName.Text)) { "" } else { $txtName.Text.Trim() }
+    $editionValue = if ([string]::IsNullOrWhiteSpace($txtEdition.Text)) { "" } else { $txtEdition.Text.Trim() }
+    $versionValue = if ([string]::IsNullOrWhiteSpace($txtVersion.Text)) { "" } else { $txtVersion.Text.Trim() }
+
+    if (-not [string]::IsNullOrWhiteSpace($vendorValue) -and 
+        -not [string]::IsNullOrWhiteSpace($nameValue) -and 
+        -not [string]::IsNullOrWhiteSpace($versionValue)) {
         
-        $checkPath = Join-Path $script:BasePackagingPath $txtVendor.Text
-        $checkPath = Join-Path $checkPath $txtName.Text
-        if (-not [string]::IsNullOrWhiteSpace($txtEdition.Text)) {
-            $checkPath = Join-Path $checkPath $txtEdition.Text
+        $baseVendorPath = Join-Path $script:BasePackagingPath $vendorValue
+        $baseNamePath = Join-Path $baseVendorPath $nameValue
+        $checkPaths = @()
+
+        if (-not [string]::IsNullOrWhiteSpace($editionValue)) {
+            $checkPaths += (Join-Path (Join-Path $baseNamePath $editionValue) $versionValue)
         }
-        $checkPath = Join-Path $checkPath $txtVersion.Text
+
+        # Edition is optional, so always check non-edition path as well.
+        $checkPaths += (Join-Path $baseNamePath $versionValue)
+
+        $existingPath = $null
+        foreach ($candidatePath in $checkPaths) {
+            if (Test-Path $candidatePath) {
+                $existingPath = $candidatePath
+                break
+            }
+        }
         
-        if (Test-Path $checkPath) {
+        if (-not [string]::IsNullOrWhiteSpace($existingPath)) {
             $lblFolderExistsFlag.Visible = $true
-            Load-ExistingPackageDataIfPresent -PackagePath $checkPath
+            Load-ExistingPackageDataIfPresent -PackagePath $existingPath
             Sync-CommandSectionExpansionState
         } else {
             $lblFolderExistsFlag.Visible = $false

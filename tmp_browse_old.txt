@@ -1,0 +1,115 @@
+$btnBrowse.Add_Click({
+    $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
+    $openFileDialog.Title = "Select Installation Media"
+    $openFileDialog.Filter = "Installation Files (*.exe;*.msi)|*.exe;*.msi|EXE Files (*.exe)|*.exe|MSI Files (*.msi)|*.msi|All Files (*.*)|*.*"
+    $openFileDialog.FilterIndex = 1
+    
+    if ($openFileDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+        $script:InstallationMediaPath = $openFileDialog.FileName
+        $txtMedia.Text = [System.IO.Path]::GetFileName($script:InstallationMediaPath)
+        
+        # Use MetadataEngine to extract metadata
+        $lblMediaType.Text = "Using MetadataEngine to extract metadata..."
+        $lblMediaType.ForeColor = [System.Drawing.Color]::Blue
+        $form.Refresh()
+        
+        $metadata = Get-InstallerMetadata -FilePath $script:InstallationMediaPath
+
+        $script:IsPopulatingMetadata = $true
+        try {
+            # Auto-populate fields if metadata found
+            if (-not [string]::IsNullOrWhiteSpace($metadata.Vendor)) {
+                $txtVendor.Text = $metadata.Vendor
+            }
+            if (-not [string]::IsNullOrWhiteSpace($metadata.ProductName)) {
+                $txtName.Text = $metadata.ProductName
+            }
+            if (-not [string]::IsNullOrWhiteSpace($metadata.Version)) {
+                $txtVersion.Text = $metadata.Version
+            }
+        }
+        finally {
+            $script:IsPopulatingMetadata = $false
+        }
+        
+        # Folder recognition is the single trigger for Startup.pss rehydrate.
+        Check-PackageFolderExists
+        # Show Start Packaging button
+        $btnCreate.Visible = $true
+        
+        $extension = [System.IO.Path]::GetExtension($script:InstallationMediaPath).ToLower()
+        
+        if ($extension -eq ".exe") {
+            $lblMediaType.Text = "Type: EXE - Using DetectionEngine..."
+            $lblMediaType.ForeColor = [System.Drawing.Color]::Blue
+            $form.Refresh()
+            
+            try {
+                # Use DetectionEngine to detect installer type
+                $detectionResult = Get-InstallerType -FilePath $script:InstallationMediaPath
+                $script:DetectedInstallerType = $detectionResult
+            }
+            catch {
+                Write-Warning "DetectionEngine failed: $($_.Exception.Message)"
+                $script:DetectedInstallerType = "Generic"
+            }
+
+            Invoke-InstallContextDetectionPrompt -FilePath $script:InstallationMediaPath -InstallerType $script:DetectedInstallerType
+            $lblMediaType.Text = "Type: EXE ($($script:DetectedInstallerType) detected) | Context: $($script:SelectedInstallContext)"
+            $lblMediaType.ForeColor = [System.Drawing.Color]::Green
+            
+            # Show EXE-specific controls
+            $lblUninstallExecutable.Visible = $true
+            $lblInstallSwitch.Visible = $true
+            $lblUninstallSwitch.Visible = $true
+            $txtUninstallExecutable.Visible = $true
+            $txtInstallSwitch.Visible = $true
+            $txtUninstallSwitch.Visible = $true
+            $btnCopySearchTerms.Visible = $true
+
+        } elseif ($extension -eq ".msi") {
+            $lblMediaType.Text = "Type: MSI - Using DetectionEngine..."
+            $lblMediaType.ForeColor = [System.Drawing.Color]::Blue
+            $form.Refresh()
+            
+            try {
+                # Use DetectionEngine to detect MSI installer type
+                $detectionResult = Get-InstallerType -FilePath $script:InstallationMediaPath
+                $script:DetectedInstallerType = $detectionResult
+            }
+            catch {
+                Write-Warning "DetectionEngine failed: $($_.Exception.Message)"
+                $script:DetectedInstallerType = "Generic"
+            }
+
+            Invoke-InstallContextDetectionPrompt -FilePath $script:InstallationMediaPath -InstallerType $script:DetectedInstallerType
+            
+            # Show MSI-specific controls (same as EXE)
+            $lblUninstallExecutable.Visible = $true
+            $lblInstallSwitch.Visible = $true
+            $lblUninstallSwitch.Visible = $true
+            $txtUninstallExecutable.Visible = $true
+            $txtInstallSwitch.Visible = $true
+            $txtUninstallSwitch.Visible = $true
+            $btnCopySearchTerms.Visible = $true
+            
+            $lblMediaType.Text = "Type: MSI ($($script:DetectedInstallerType) detected)"
+            $lblMediaType.ForeColor = [System.Drawing.Color]::Green
+        }
+        else {
+            $lblMediaType.Text = "Type: Unknown - Manual entry required"
+            $lblMediaType.ForeColor = [System.Drawing.Color]::Orange
+            # Hide all switch controls
+            $lblInstallSwitch.Visible = $false
+            $lblUninstallSwitch.Visible = $false
+            $txtInstallSwitch.Visible = $false
+            $txtUninstallSwitch.Visible = $false
+            $btnCopySearchTerms.Visible = $false
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($txtVendor.Text) -and -not [string]::IsNullOrWhiteSpace($txtName.Text)) {
+            Invoke-PackageHelperGeneration
+        }
+    }
+
+})

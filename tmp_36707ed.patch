@@ -1,0 +1,38 @@
+commit 36707ed1e0aaafe408f2a879dbb8521e331e1fc9
+Author: marcusmarsh1616 <marcusmarsh1616@verizon.net>
+Date:   Tue Jul 28 18:36:21 2026 -0400
+
+    Update packaging base path recovery
+
+diff --git a/FRB-Packaging-Tool.ps1 b/FRB-Packaging-Tool.ps1
+index 9b75344..abf7a62 100644
+--- a/FRB-Packaging-Tool.ps1
++++ b/FRB-Packaging-Tool.ps1
+@@ -4112,6 +4112,27 @@ function Check-PackageFolderExists {
+         return
+     }
+ 
++    # Recover packaging base path from config if runtime value is blank.
++    if ([string]::IsNullOrWhiteSpace($script:BasePackagingPath) -and (Test-Path $configPath)) {
++        try {
++            $configSnapshot = Get-Content $configPath -Raw | ConvertFrom-Json
++            $candidatePaths = @(
++                [string]$configSnapshot.paths.basePackagingPath,
++                [string]$configSnapshot.launcher.technicianPackagingFolder
++            ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
++
++            foreach ($candidatePath in $candidatePaths) {
++                if (Test-Path $candidatePath) {
++                    $script:BasePackagingPath = $candidatePath
++                    break
++                }
++            }
++        }
++        catch {
++            Write-ProcessOutputLine -Message ("Packaging path recovery failed during existing-folder check: {0}" -f $_.Exception.Message) -Level "WARN"
++        }
++    }
++
+     if (-not [string]::IsNullOrWhiteSpace($txtVendor.Text) -and 
+         -not [string]::IsNullOrWhiteSpace($txtName.Text) -and 
+         -not [string]::IsNullOrWhiteSpace($txtVersion.Text)) {

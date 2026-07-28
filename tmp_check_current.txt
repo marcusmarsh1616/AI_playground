@@ -1,0 +1,46 @@
+function Check-PackageFolderExists {
+    if ($script:IsPopulatingMetadata) {
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($script:BasePackagingPath)) {
+        $lblFolderExistsFlag.Visible = $false
+        $script:LastLoadedStartupPath = ""
+        Write-ProcessOutputLine -Message "Existing package check skipped: Base packaging path is empty." -Level "WARN"
+        return
+    }
+
+    $vendorValue = if ([string]::IsNullOrWhiteSpace($txtVendor.Text)) { "" } else { $txtVendor.Text.Trim() }
+    $nameValue = if ([string]::IsNullOrWhiteSpace($txtName.Text)) { "" } else { $txtName.Text.Trim() }
+    $editionValue = if ([string]::IsNullOrWhiteSpace($txtEdition.Text)) { "" } else { $txtEdition.Text.Trim() }
+    $versionValue = if ([string]::IsNullOrWhiteSpace($txtVersion.Text)) { "" } else { $txtVersion.Text.Trim() }
+
+    if (-not [string]::IsNullOrWhiteSpace($vendorValue) -and 
+        -not [string]::IsNullOrWhiteSpace($nameValue) -and 
+        -not [string]::IsNullOrWhiteSpace($versionValue)) {
+        
+        $checkPath = Join-Path $script:BasePackagingPath $vendorValue
+        $checkPath = Join-Path $checkPath $nameValue
+        if (-not [string]::IsNullOrWhiteSpace($editionValue)) {
+            $checkPath = Join-Path $checkPath $editionValue
+        }
+        $checkPath = Join-Path $checkPath $versionValue
+        Write-ProcessOutputLine -Message ("Existing package check path: {0}" -f $checkPath) -Level "INFO"
+        
+        if (Test-Path $checkPath) {
+            $lblFolderExistsFlag.Visible = $true
+            Write-ProcessOutputLine -Message "Existing package folder detected; loading Startup.pss data." -Level "INFO"
+            Load-ExistingPackageDataIfPresent -PackagePath $checkPath
+            Sync-CommandSectionExpansionState
+        } else {
+            $lblFolderExistsFlag.Visible = $false
+            $script:LastLoadedStartupPath = ""
+            Write-ProcessOutputLine -Message "Existing package folder not found for current metadata values." -Level "INFO"
+        }
+    } else {
+        $lblFolderExistsFlag.Visible = $false
+        $script:LastLoadedStartupPath = ""
+        Write-ProcessOutputLine -Message "Existing package check skipped: Vendor/Name/Version not fully populated." -Level "INFO"
+    }
+}
+

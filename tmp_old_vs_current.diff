@@ -1,0 +1,657 @@
+diff --git "a/.\\Old Tool\\FRB-Packaging-Tool.ps1" "b/.\\FRB-Packaging-Tool.ps1"
+index 9172b4c..9b75344 100644
+--- "a/.\\Old Tool\\FRB-Packaging-Tool.ps1"	
++++ "b/.\\FRB-Packaging-Tool.ps1"
+@@ -146,6 +146,8 @@ $script:IsLoadingExistingPackageData = $false
+ $script:IsPopulatingMetadata = $false
+ $script:LastExistingPackageLoadPath = ""
+ $script:LastExistingPackageLoadTick = 0
++$script:GlobalsCommandNames = @()
++$script:GlobalsCommandLookup = @{}
+ 
+ #region Configuration
+ 
+@@ -351,7 +353,7 @@ function Update-PrerequisiteStatusInConfig {
+         if (-not ($config.PSObject.Properties.Name -contains 'deployment')) {
+             $config | Add-Member -NotePropertyName 'deployment' -NotePropertyValue ([PSCustomObject]@{}) -Force
+         }
+-        $config.deployment.networkSharePath = "\\rb.win.frb.org\k1\shared\DSC_Pkgs\Pkgxfer"
++        $config.deployment.networkSharePath = "\\rb.win.frb.org\k1\shared\DSC_Pkgs\Pkgmedia\Lss Packages\"
+         $config.deployment.overwriteExisting = $true
+ 
+         if (-not ($config.PSObject.Properties.Name -contains 'launcher')) {
+@@ -793,6 +795,292 @@ function Start-ProcessSession {
+     Write-ProcessOutputLine -Message "Packaging session started." -Level "INFO"
+ }
+ 
++function Write-TestExecutionDiagnostics {
++    param(
++        [Parameter(Mandatory = $true)]
++        [string]$Stage,
++
++        [Parameter(Mandatory = $true)]
++        [hashtable]$Result
++    )
++
++    if (-not $Result) {
++        return
++    }
++
++    $exitCodeLabel = if ($Result.ContainsKey('ExitCode')) { [string]$Result.ExitCode } else { 'N/A' }
++    $processLabel = if ($Result.ContainsKey('ProcessId') -and $Result.ProcessId) { [string]$Result.ProcessId } else { 'N/A' }
++    $commandLine = "{0} {1}" -f $Result.InstallExePath, $Result.Arguments
++    $commandLine = $commandLine.Trim()
++
++    Write-ProcessOutputLine -Message ("{0} execution summary | ProcessId={1} ExitCode={2} Command={3}" -f $Stage, $processLabel, $exitCodeLabel, $commandLine) -Level "INFO"
++
++    if ($Result.ContainsKey('CleanupResults') -and $Result.CleanupResults) {
++        $cleanup = $Result.CleanupResults
++        Write-ProcessOutputLine -Message ("{0} cleanup summary | Attempted={1} Cleaned={2} Failed={3} Preserved={4}" -f $Stage, $cleanup.Attempted, $cleanup.TotalCleaned, $cleanup.TotalFailed, $cleanup.PreservedCount) -Level "INFO"
++    }
++
++    if ($Result.ContainsKey('ReportPath') -and -not [string]::IsNullOrWhiteSpace([string]$Result.ReportPath)) {
++        Write-ProcessOutputLine -Message ("{0} report path: {1}" -f $Stage, $Result.ReportPath) -Level "INFO"
++    }
++
++    if ($Result.ContainsKey('Diagnostics') -and $Result.Diagnostics) {
++        if ($Result.Diagnostics.Files -and $Result.Diagnostics.Files.Count -gt 0) {
++            foreach ($diagFile in @($Result.Diagnostics.Files)) {
++                Write-ProcessOutputLine -Message ("{0} evidence file: {1} (LastWrite={2}, Size={3} bytes)" -f $Stage, $diagFile.Path, $diagFile.LastWriteTime, $diagFile.Size) -Level "INFO"
++            }
++        }
++        else {
++            Write-ProcessOutputLine -Message ("{0} diagnostics: no recent install/uninstall log files detected." -f $Stage) -Level "WARN"
++        }
++
++        if ($Result.Diagnostics.TailLines -and $Result.Diagnostics.TailLines.Count -gt 0) {
++            foreach ($tailLine in @($Result.Diagnostics.TailLines)) {
++                Write-ProcessOutputLine -Message ("{0} log tail: {1}" -f $Stage, $tailLine) -Level "INFO"
++            }
++        }
++    }
++
++    if (-not [string]::IsNullOrWhiteSpace([string]$Result.ErrorMessage)) {
++        Write-ProcessOutputLine -Message ("{0} error detail: {1}" -f $Stage, $Result.ErrorMessage) -Level "ERROR"
++    }
++}
++
++function Test-PackageDeploymentReadiness {
++    param(
++        [Parameter(Mandatory = $true)]
++        [string]$PackagePath,
++
++        [Parameter(Mandatory = $true)]
++        [string]$AppName
++    )
++
++    $readiness = @{
++        Ready = $true
++        MissingItems = @()
++    }
++
++    $docsFolder = Join-Path $PackagePath "Docs"
++    if (-not (Test-Path $docsFolder)) {
++        $readiness.Ready = $false
++        $readiness.MissingItems += "Docs folder"
++    }
++    else {
++        $installValidation = Get-ChildItem -Path $docsFolder -File -Filter "* Validation report.html" -ErrorAction SilentlyContinue
++        if (-not $installValidation -or $installValidation.Count -eq 0) {
++            $readiness.Ready = $false
++            $readiness.MissingItems += "Installation validation report (*. Validation report.html in Docs)"
++        }
++
++        $uninstallValidation = Get-ChildItem -Path $docsFolder -File -Filter "Uninstall_Report_*.html" -ErrorAction SilentlyContinue
++        if (-not $uninstallValidation -or $uninstallValidation.Count -eq 0) {
++            $readiness.Ready = $false
++            $readiness.MissingItems += "Uninstallation validation report (Uninstall_Report_*.html in Docs)"
++        }
++    }
++
++    $detectCandidates = @(
++        "{0}_Detect_R1.ps1" -f $AppName,
++        "{0}_Detect_R1.ps1" -f (($AppName -replace '\\s+', '_'))
++    ) | Select-Object -Unique
++
++    $detectFound = $false
++    foreach ($candidate in @($detectCandidates)) {
++        if (Test-Path (Join-Path $PackagePath $candidate)) {
++            $detectFound = $true
++            break
++        }
++    }
++
++    if (-not $detectFound) {
++        $readiness.Ready = $false
++        $readiness.MissingItems += ("Detection script ({0})" -f ($detectCandidates -join " or "))
++    }
++
++    return $readiness
++}
++
++function Get-GlobalsReferencePath {
++    if ([string]::IsNullOrWhiteSpace($script:MasterTemplatePath)) {
++        return ""
++    }
++
++    return (Join-Path $script:MasterTemplatePath "_SourceFiles\Globals.ps1")
++}
++
++function Refresh-GlobalsCommandMetadata {
++    $script:GlobalsCommandNames = @()
++    $script:GlobalsCommandLookup = @{}
++
++    $globalsPath = Get-GlobalsReferencePath
++    if ([string]::IsNullOrWhiteSpace($globalsPath) -or -not (Test-Path $globalsPath)) {
++        return
++    }
++
++    try {
++        $functionMatches = Select-String -Path $globalsPath -Pattern '^(?:function|Function)\s+([A-Za-z0-9_-]+)' -Encoding UTF8
++        foreach ($match in @($functionMatches)) {
++            $functionName = $match.Matches[0].Groups[1].Value.Trim()
++            if ([string]::IsNullOrWhiteSpace($functionName)) { continue }
++            if (-not $script:GlobalsCommandLookup.ContainsKey($functionName)) {
++                $script:GlobalsCommandLookup[$functionName] = $true
++                $script:GlobalsCommandNames += $functionName
++            }
++        }
++    }
++    catch {
++    }
++}
++
++function Get-GlobalsCommandSummary {
++    param(
++        [string]$CodeText = ""
++    )
++
++    if (-not $script:GlobalsCommandNames -or $script:GlobalsCommandNames.Count -eq 0) {
++        Refresh-GlobalsCommandMetadata
++    }
++
++    if (-not $script:GlobalsCommandNames -or $script:GlobalsCommandNames.Count -eq 0) {
++        return ""
++    }
++
++    $detected = New-Object System.Collections.Generic.List[string]
++    if (-not [string]::IsNullOrWhiteSpace($CodeText)) {
++        foreach ($commandName in @($script:GlobalsCommandNames)) {
++            if ($CodeText -match ("(?<![A-Za-z0-9_-]){0}(?![A-Za-z0-9_-])" -f [regex]::Escape($commandName))) {
++                [void]$detected.Add($commandName)
++            }
++        }
++    }
++
++    if ($detected.Count -gt 0) {
++        $detectedList = @($detected | Select-Object -Unique)
++        return "Wrapper cmdlets detected from Globals.ps1: " + ($detectedList -join ', ')
++    }
++
++    $sample = @($script:GlobalsCommandNames | Select-Object -First 12)
++    return "Wrapper cmdlets available from Globals.ps1 include: " + ($sample -join ', ')
++}
++
++function Get-GlobalsReferenceContent {
++    Refresh-GlobalsCommandMetadata
++
++    $globalsPath = Join-Path $script:MasterTemplatePath "_SourceFiles\Globals.ps1"
++    if (-not (Test-Path $globalsPath)) {
++        return "Globals.ps1 reference was not found at: $globalsPath"
++    }
++
++    try {
++        return (Get-Content -Path $globalsPath -Raw -Encoding UTF8)
++    }
++    catch {
++        return "Failed to load Globals.ps1 reference: $($_.Exception.Message)"
++    }
++}
++
++function Get-GlobalsCommandPreview {
++    Refresh-GlobalsCommandMetadata
++
++    if (-not $script:GlobalsCommandNames -or $script:GlobalsCommandNames.Count -eq 0) {
++        return "No wrapper cmdlets were detected from Globals.ps1."
++    }
++
++    return (($script:GlobalsCommandNames | Sort-Object | Select-Object -First 60) -join ', ')
++}
++
++function Get-GlobalsAssistantSuggestions {
++    param(
++        [string]$CodeText = ""
++    )
++
++    Refresh-GlobalsCommandMetadata
++
++    if ([string]::IsNullOrWhiteSpace($CodeText)) {
++        return "Paste your custom PowerShell code and click Analyze Code to receive wrapper-aligned suggestions."
++    }
++
++    $lines = New-Object System.Collections.Generic.List[string]
++    [void]$lines.Add("Globals Assistant Analysis")
++    [void]$lines.Add("")
++
++    $summary = Get-GlobalsCommandSummary -CodeText $CodeText
++    if (-not [string]::IsNullOrWhiteSpace($summary)) {
++        [void]$lines.Add($summary)
++        [void]$lines.Add("")
++    }
++
++    $hasWriteLog = $CodeText -match '(?im)^\s*Write-Log\b'
++    if (-not $hasWriteLog) {
++        [void]$lines.Add("- Add Write-Log before and after key actions so technician intent and results are visible in package logs.")
++        [void]$lines.Add("  Example: Write-Log -Message 'Starting custom action.' -Source 'Custom Commands'")
++    }
++
++    if ($CodeText -match '(?im)^\s*Start-Process\b') {
++        [void]$lines.Add("- Replace Start-Process with Execute-Process where possible for wrapper-consistent execution and logging behavior.")
++    }
++
++    if ($CodeText -match '(?i)msiexec(\.exe)?\b' -or $CodeText -match '(?im)^\s*Start-Process\s+.*msi') {
++        [void]$lines.Add("- Replace direct msiexec calls with Execute-MSI so install/uninstall actions are standardized.")
++    }
++
++    if ($CodeText -match '(?im)^\s*(Get-Process|Stop-Process)\b') {
++        [void]$lines.Add("- Consider Block-AppExecution for process-handling flows that should align with wrapper behavior.")
++    }
++
++    if ($CodeText -match '(?im)^\s*Remove-Item\b') {
++        [void]$lines.Add("- For directory cleanup, prefer Remove-Folder where appropriate to stay consistent with wrapper cleanup patterns.")
++    }
++
++    if ($CodeText -match '(?im)^\s*(Set-ItemProperty|New-ItemProperty|Remove-ItemProperty)\b') {
++        [void]$lines.Add("- If registry helper cmdlets exist in Globals.ps1 for this action, prefer those for consistency and safer logging.")
++    }
++
++    if ($CodeText -match '(?im)^\s*Write-Host\b') {
++        [void]$lines.Add("- Replace Write-Host with Write-Log so output is captured in deployment logs.")
++    }
++
++    if ($lines.Count -le 4) {
++        [void]$lines.Add("- No obvious wrapper-alignment risks were detected. Validate command intent and error handling manually.")
++    }
++
++    [void]$lines.Add("")
++    [void]$lines.Add("Top wrapper cmdlets currently detected from Globals.ps1:")
++    [void]$lines.Add((Get-GlobalsCommandPreview))
++
++    return ($lines -join [Environment]::NewLine)
++}
++
++function Remove-TemplateDocsFromPackage {
++    param(
++        [Parameter(Mandatory = $true)]
++        [string]$PackagePath
++    )
++
++    $docsPath = Join-Path $PackagePath "Docs"
++    if (-not (Test-Path $docsPath)) {
++        return
++    }
++
++    $filesToRemove = @(
++        "(APP-NAME_APP-VERSION) Validation.docx",
++        "User Acceptance Testing Guide.docx"
++    )
++
++    foreach ($fileName in $filesToRemove) {
++        $targetPath = Join-Path $docsPath $fileName
++        if (Test-Path $targetPath) {
++            try {
++                Remove-Item -Path $targetPath -Force -ErrorAction Stop
++                Write-ProcessOutputLine -Message ("Removed template docs artifact: {0}" -f $targetPath) -Level "INFO"
++            }
++            catch {
++                Write-ProcessOutputLine -Message ("Failed to remove template docs artifact {0}: {1}" -f $targetPath, $_.Exception.Message) -Level "WARN"
++            }
++        }
++    }
++}
++
+ function Update-Status {
+     param([string]$Message, [string]$Color = "Blue")
+     $lblStatus.Text = $Message
+@@ -1060,6 +1348,7 @@ function New-PackagingFolder {
+         }
+         $progressBar.Value = 70
+         Update-Status "Template files copied: $($copyResult.FilesCopied) files"
++        Remove-TemplateDocsFromPackage -PackagePath $newFolderPath
+         
+         # Copy installation media if provided using FolderEngine
+         if (-not [string]::IsNullOrWhiteSpace($script:InstallationMediaPath) -and (Test-Path $script:InstallationMediaPath)) {
+@@ -1146,6 +1435,7 @@ function New-PackagingFolder {
+             }
+         }
+         catch {
++            Write-ProcessOutputLine -Message ("Error updating custom commands: {0}" -f $_.Exception.Message) -Level "ERROR"
+             Write-Warning "Error updating custom commands: $($_.Exception.Message)"
+         }
+         $progressBar.Value = 95
+@@ -1210,6 +1500,7 @@ function New-PackagingFolder {
+     catch {
+         $progressBar.Value = 0
+         $errorMsg = "Error: $($_.Exception.Message)"
++        Write-ProcessOutputLine -Message $errorMsg -Level "ERROR"
+         Update-Status $errorMsg "Red"
+         
+         # Show error banner with reason
+@@ -1378,6 +1669,14 @@ function Start-BuildTestDeployWorkflow {
+     $form.Refresh()
+     
+     $buildResult = Invoke-ProjectBuild -ProjectPath $projPath
++
++    if (-not [string]::IsNullOrWhiteSpace($buildResult.BuildLog)) {
++        foreach ($buildLogLine in ($buildResult.BuildLog -split "`r?`n")) {
++            if (-not [string]::IsNullOrWhiteSpace($buildLogLine)) {
++                Write-ProcessOutputLine -Message $buildLogLine -Level "INFO"
++            }
++        }
++    }
+     
+     $progressBar.Value = 60
+     
+@@ -1473,8 +1772,21 @@ function Start-BuildTestDeployWorkflow {
+     :InstallLoop while ($true) {
+         Update-Status "Launching Install.exe for installation testing..." "Blue"
+         $form.Refresh()
++        Write-ProcessOutputLine -Message ("Install test started for {0} {1}." -f $script:SavedName, $script:SavedVersion) -Level "INFO"
+         
+         $installTestResult = Start-InstallationTest -InstallExePath $installExePath -AppName $script:SavedName -AppVersion $script:SavedVersion -Vendor $script:SavedVendor
++        Write-TestExecutionDiagnostics -Stage "Install" -Result $installTestResult
++
++        if ($installTestResult.RemovedDesktopShortcuts -and $installTestResult.RemovedDesktopShortcuts.Count -gt 0) {
++            foreach ($shortcut in @($installTestResult.RemovedDesktopShortcuts)) {
++                Write-ProcessOutputLine -Message ("Removed desktop shortcut after install [{0}]: {1}" -f $shortcut.Scope, $shortcut.Path) -Level "INFO"
++            }
++        }
++        if ($installTestResult.FailedDesktopShortcutRemovals -and $installTestResult.FailedDesktopShortcutRemovals.Count -gt 0) {
++            foreach ($shortcutFailure in @($installTestResult.FailedDesktopShortcutRemovals)) {
++                Write-ProcessOutputLine -Message ("Failed to remove desktop shortcut [{0}] {1}: {2}" -f $shortcutFailure.Scope, $shortcutFailure.Path, $shortcutFailure.Error) -Level "WARN"
++            }
++        }
+         
+                 if (-not $installTestResult.Success) {
+             Update-Status "Make any changes needed to make your package function in the fashion you would like" "Blue"
+@@ -1501,8 +1813,12 @@ function Start-BuildTestDeployWorkflow {
+         if ($installTestResult.UserConfirmed) {
+             Update-Status "Installation confirmed successful by technician!" "Green"
+             $form.Refresh()
++            Write-ProcessOutputLine -Message "Technician confirmed installation functioned as designed." -Level "INFO"
+ 
+             $docResult = Start-IntegratedValidationDocumentation -PackagePath $script:LastCreatedPackagePath -AppVendor $script:SavedVendor -AppName $script:SavedName -AppEdition $script:SavedEdition -AppVersion $script:SavedVersion
++            if (-not [string]::IsNullOrWhiteSpace([string]$docResult.Mode)) {
++                Write-ProcessOutputLine -Message ("Validation mode selected by technician: {0}" -f $docResult.Mode) -Level "INFO"
++            }
+             if (-not $docResult.Success) {
+                 Update-Status "Validation documentation warning: $($docResult.Message)" "Orange"
+                 $form.Refresh()
+@@ -1574,8 +1890,10 @@ function Start-BuildTestDeployWorkflow {
+     :UninstallLoop while ($true) {
+         Update-Status "Launching Install.exe /uninstall for uninstallation testing..." "Blue"
+         $form.Refresh()
++        Write-ProcessOutputLine -Message ("Uninstall test started for {0} {1}." -f $script:SavedName, $script:SavedVersion) -Level "INFO"
+         
+         $uninstallTestResult = Start-UninstallationTest -InstallExePath $installExePath -AppName $script:SavedName -AppVersion $script:SavedVersion -Vendor $script:SavedVendor -PackagePath $script:LastCreatedPackagePath
++        Write-TestExecutionDiagnostics -Stage "Uninstall" -Result $uninstallTestResult
+         
+                 if (-not $uninstallTestResult.Success) {
+             Update-Status "Make any changes needed to make your package function in the fashion you would like" "Blue"
+@@ -1602,6 +1920,7 @@ function Start-BuildTestDeployWorkflow {
+         if ($uninstallTestResult.UserConfirmed) {
+             Update-Status "Uninstallation confirmed successful by technician!" "Green"
+             $form.Refresh()
++            Write-ProcessOutputLine -Message "Technician confirmed uninstallation functioned as designed." -Level "INFO"
+             break :UninstallLoop
+         } else {
+             # User said NO - allow modification and retry
+@@ -1635,6 +1954,30 @@ function Start-BuildTestDeployWorkflow {
+         Write-Verbose "Network deployment: Starting final step..."
+         Update-Status "Checking network deployment settings..." "Blue"
+         $form.Refresh()
++        Write-ProcessOutputLine -Message "Deployment pre-check started." -Level "INFO"
++
++        $deploymentReadiness = Test-PackageDeploymentReadiness -PackagePath $script:LastCreatedPackagePath -AppName $script:SavedName
++        if (-not $deploymentReadiness.Ready) {
++            foreach ($missingItem in @($deploymentReadiness.MissingItems)) {
++                Write-ProcessOutputLine -Message ("Deployment pre-check missing item: {0}" -f $missingItem) -Level "ERROR"
++            }
++
++            Update-Status "Deployment blocked: required files are missing." "Red"
++            [System.Windows.Forms.MessageBox]::Show(
++                "Cannot copy package to the network until required validation artifacts are in place.`n`nMissing items:`n- " + ($deploymentReadiness.MissingItems -join "`n- ") + "`n`nAdd the missing files to the package folder and rerun packaging.",
++                "Deployment Blocked - Missing Required Files",
++                [System.Windows.Forms.MessageBoxButtons]::OK,
++                [System.Windows.Forms.MessageBoxIcon]::Warning
++            )
++
++            $btnCreate.Enabled = $true
++            $btnCreate.Visible = $true
++            $btnCancel.Enabled = $true
++            $btnCancel.Visible = $true
++            return
++        }
++
++        Write-ProcessOutputLine -Message "Deployment pre-check passed: required validation docs and detection script are present." -Level "INFO"
+         try {
+         # Load config to get deployment settings
+         $config = Get-Content $configPath -Raw | ConvertFrom-Json
+@@ -1642,6 +1985,7 @@ function Start-BuildTestDeployWorkflow {
+         if ($config.deployment.autoCopyEnabled) {
+             Update-Status "Deploying package to network share..." "Blue"
+             $form.Refresh()
++            Write-ProcessOutputLine -Message ("Network deployment started. Target root: {0}" -f $config.deployment.networkSharePath) -Level "INFO"
+             
+             $deployResult = Copy-PackageToNetworkShare -PackagePath $script:LastCreatedPackagePath `
+                                                            -NetworkSharePath $config.deployment.networkSharePath `
+@@ -1658,6 +2002,7 @@ function Start-BuildTestDeployWorkflow {
+                                                            }
+             
+             if ($deployResult.Success) {
++                Write-ProcessOutputLine -Message ("Network deployment succeeded. Target={0}; Files={1}; SizeMB={2}" -f $deployResult.TargetPath, $deployResult.FilesCopied, $deployResult.SizeMB) -Level "INFO"
+                 Update-Status "Package deployed successfully to network share!" "Green"
+                 [System.Windows.Forms.MessageBox]::Show(
+                     "Package deployed to network share!`n`nLocation: $($deployResult.TargetPath)`n`nFiles: $($deployResult.FilesCopied)`nSize: $($deployResult.SizeMB) MB", 
+@@ -1666,6 +2011,7 @@ function Start-BuildTestDeployWorkflow {
+                     [System.Windows.Forms.MessageBoxIcon]::Information
+                 )
+             } else {
++                Write-ProcessOutputLine -Message ("Network deployment failed: {0}" -f $deployResult.Message) -Level "ERROR"
+                 Update-Status "Network deployment failed: $($deployResult.Message)" "Red"
+                 [System.Windows.Forms.MessageBox]::Show(
+                     "Failed to deploy to network share!`n`nError: $($deployResult.Message)`n`nPackage remains in local folder.", 
+@@ -1796,16 +2142,27 @@ function Start-IntegratedValidationDocumentation {
+     $result = @{
+         Success = $false
+         Launched = $false
++        Mode = ""
+         ReportCopied = $false
+         CopiedReportPath = ""
+         Message = ""
+     }
+ 
+     try {
++        Write-ProcessOutputLine -Message ("Validation workflow started for {0} {1}. Awaiting mode selection." -f $AppName, $AppVersion) -Level "INFO"
+         $result = Start-ValidationReportCapture -PackagePath $PackagePath -AppVendor $AppVendor -AppName $AppName -AppEdition $AppEdition -AppVersion $AppVersion
++
++        $modeLabel = if (-not [string]::IsNullOrWhiteSpace([string]$result.Mode)) { [string]$result.Mode } else { "Unknown" }
++        if ($result.Success) {
++            Write-ProcessOutputLine -Message ("Validation workflow completed. Mode={0}. {1}" -f $modeLabel, $result.Message) -Level "INFO"
++        }
++        else {
++            Write-ProcessOutputLine -Message ("Validation workflow warning. Mode={0}. {1}" -f $modeLabel, $result.Message) -Level "WARN"
++        }
+     }
+     catch {
+         $result.Message = "Validation documentation integration error: $($_.Exception.Message)"
++        Write-ProcessOutputLine -Message $result.Message -Level "ERROR"
+     }
+ 
+     return $result
+@@ -2012,8 +2369,17 @@ function Get-CodeEditorActionSummary {
+     if ($code -match '(?i)Write-Log|Write-Verbose') { [void]$actions.Add('Writes status information for troubleshooting.') }
+     if ($code -match '(?i)Show-InstallationPrompt|Show-InstallationProgress') { [void]$actions.Add('Shows technician-facing prompts or progress UI.') }
+ 
++    $globalsSummary = Get-GlobalsCommandSummary -CodeText $code
++    if (-not [string]::IsNullOrWhiteSpace($globalsSummary) -and $globalsSummary -like 'Wrapper cmdlets detected*') {
++        [void]$actions.Add($globalsSummary)
++    }
++
+     if ($actions.Count -eq 0) {
+-        [void]$actions.Add('General PowerShell code block. Review the section description for intent.')
++        $fallback = 'General PowerShell code block. Review the section description for intent.'
++        if (-not [string]::IsNullOrWhiteSpace($globalsSummary)) {
++            $fallback += ' ' + $globalsSummary
++        }
++        [void]$actions.Add($fallback)
+     }
+ 
+     return ($actions | Select-Object -Unique) -join [Environment]::NewLine
+@@ -2032,6 +2398,7 @@ function Get-CodeEditorHelpText {
+     )
+ 
+     $summary = Get-CodeEditorActionSummary -Text $CodeText
++    $globalsSummary = Get-GlobalsCommandSummary -CodeText $CodeText
+     return @(
+         $SectionTitle,
+         "",
+@@ -2040,6 +2407,8 @@ function Get-CodeEditorHelpText {
+         "What this code currently appears to do:",
+         $summary,
+         "",
++        $globalsSummary,
++        "",
+         "Leave the box to hide this help."
+     ) -join [Environment]::NewLine
+ }
+@@ -2332,6 +2701,9 @@ function Set-PackageHelperTabContent {
+ 
+     if ($script:lblPackageHelperContext -and $HelperData.Context) {
+         $contextLine = "Package Helper ready for: {0} | Installer: {1} | Context: {2} | Preset: {3}" -f $HelperData.Context.ProductDisplayName, $HelperData.Context.InstallerType, $HelperData.Context.InstallContext, $HelperData.Context.Preset
++        if ($script:GlobalsCommandNames -and $script:GlobalsCommandNames.Count -gt 0) {
++            $contextLine += " | Globals.ps1 cmdlets loaded: $($script:GlobalsCommandNames.Count)"
++        }
+         $script:lblPackageHelperContext.Text = $contextLine
+         $script:lblPackageHelperContext.ForeColor = [System.Drawing.Color]::FromArgb(0, 110, 0)
+     }
+@@ -3255,7 +3627,7 @@ $tabPackageHelper.Controls.Add($btnApplyAllPackageHelper)
+ 
+ $panelPackageHelper = New-Object System.Windows.Forms.Panel
+ $panelPackageHelper.Location = New-Object System.Drawing.Point(20, 58)
+-$panelPackageHelper.Size = New-Object System.Drawing.Size(820, 540)
++$panelPackageHelper.Size = New-Object System.Drawing.Size(820, 404)
+ $panelPackageHelper.AutoScroll = $true
+ $panelPackageHelper.BackColor = $Colors.Background
+ $tabPackageHelper.Controls.Add($panelPackageHelper)
+@@ -3444,7 +3816,109 @@ $btnApplyAllPackageHelper.Add_Click({
+ 
+ #endregion Tab 4
+ 
+-#region Tab 5: Process
++#region Tab 5: Globals Assistant
++$tabGlobalsAssistant = New-Object System.Windows.Forms.TabPage
++$tabGlobalsAssistant.Text = "Globals Assistant"
++$tabGlobalsAssistant.BackColor = $Colors.Background
++$tabControl.Controls.Add($tabGlobalsAssistant)
++
++$lblGlobalsAssistantHeader = New-Object System.Windows.Forms.Label
++$lblGlobalsAssistantHeader.Text = "Globals Assistant - Compare Custom Code with Wrapper Cmdlets"
++$lblGlobalsAssistantHeader.Location = New-Object System.Drawing.Point(20, 10)
++$lblGlobalsAssistantHeader.Size = New-Object System.Drawing.Size(760, 22)
++$lblGlobalsAssistantHeader.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
++$tabGlobalsAssistant.Controls.Add($lblGlobalsAssistantHeader)
++
++$lblGlobalsAssistantHint = New-Object System.Windows.Forms.Label
++$lblGlobalsAssistantHint.Text = "Paste proposed custom command code, analyze it, and review wrapper-aligned suggestions focused on logging and standardized cmdlets."
++$lblGlobalsAssistantHint.Location = New-Object System.Drawing.Point(20, 34)
++$lblGlobalsAssistantHint.Size = New-Object System.Drawing.Size(820, 20)
++$lblGlobalsAssistantHint.ForeColor = [System.Drawing.Color]::FromArgb(80, 80, 80)
++$tabGlobalsAssistant.Controls.Add($lblGlobalsAssistantHint)
++
++$txtGlobalsAssistantInput = New-Object System.Windows.Forms.TextBox
++$txtGlobalsAssistantInput.Location = New-Object System.Drawing.Point(20, 62)
++$txtGlobalsAssistantInput.Size = New-Object System.Drawing.Size(400, 430)
++$txtGlobalsAssistantInput.Multiline = $true
++$txtGlobalsAssistantInput.ScrollBars = 'Both'
++$txtGlobalsAssistantInput.WordWrap = $false
++$txtGlobalsAssistantInput.Font = $FontCode
++$tabGlobalsAssistant.Controls.Add($txtGlobalsAssistantInput)
++
++$txtGlobalsAssistantOutput = New-Object System.Windows.Forms.TextBox
++$txtGlobalsAssistantOutput.Location = New-Object System.Drawing.Point(440, 62)
++$txtGlobalsAssistantOutput.Size = New-Object System.Drawing.Size(400, 430)
++$txtGlobalsAssistantOutput.Multiline = $true
++$txtGlobalsAssistantOutput.ScrollBars = 'Both'
++$txtGlobalsAssistantOutput.WordWrap = $false
++$txtGlobalsAssistantOutput.Font = $FontCode
++$txtGlobalsAssistantOutput.ReadOnly = $true
++$txtGlobalsAssistantOutput.Text = "Analyze results will appear here."
++$tabGlobalsAssistant.Controls.Add($txtGlobalsAssistantOutput)
++
++$btnGlobalsAssistantAnalyze = New-Object System.Windows.Forms.Button
++$btnGlobalsAssistantAnalyze.Text = "Analyze Code"
++$btnGlobalsAssistantAnalyze.Location = New-Object System.Drawing.Point(20, 502)
++$btnGlobalsAssistantAnalyze.Size = New-Object System.Drawing.Size(120, 30)
++$btnGlobalsAssistantAnalyze.BackColor = $Colors.AccentTeal
++$btnGlobalsAssistantAnalyze.ForeColor = [System.Drawing.Color]::White
++$btnGlobalsAssistantAnalyze.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
++$btnGlobalsAssistantAnalyze.FlatAppearance.BorderSize = 0
++$tabGlobalsAssistant.Controls.Add($btnGlobalsAssistantAnalyze)
++
++$btnGlobalsAssistantClear = New-Object System.Windows.Forms.Button
++$btnGlobalsAssistantClear.Text = "Clear"
++$btnGlobalsAssistantClear.Location = New-Object System.Drawing.Point(150, 502)
++$btnGlobalsAssistantClear.Size = New-Object System.Drawing.Size(90, 30)
++$btnGlobalsAssistantClear.BackColor = [System.Drawing.Color]::FromArgb(140, 140, 140)
++$btnGlobalsAssistantClear.ForeColor = [System.Drawing.Color]::White
++$btnGlobalsAssistantClear.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
++$btnGlobalsAssistantClear.FlatAppearance.BorderSize = 0
++$tabGlobalsAssistant.Controls.Add($btnGlobalsAssistantClear)
++
++$btnGlobalsAssistantCopy = New-Object System.Windows.Forms.Button
++$btnGlobalsAssistantCopy.Text = "Copy Suggestions"
++$btnGlobalsAssistantCopy.Location = New-Object System.Drawing.Point(250, 502)
++$btnGlobalsAssistantCopy.Size = New-Object System.Drawing.Size(170, 30)
++$btnGlobalsAssistantCopy.BackColor = [System.Drawing.Color]::FromArgb(0, 105, 160)
++$btnGlobalsAssistantCopy.ForeColor = [System.Drawing.Color]::White
++$btnGlobalsAssistantCopy.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
++$btnGlobalsAssistantCopy.FlatAppearance.BorderSize = 0
++$tabGlobalsAssistant.Controls.Add($btnGlobalsAssistantCopy)
++
++$lblGlobalsAssistantCount = New-Object System.Windows.Forms.Label
++$lblGlobalsAssistantCount.Location = New-Object System.Drawing.Point(440, 502)
++$lblGlobalsAssistantCount.Size = New-Object System.Drawing.Size(400, 30)
++$lblGlobalsAssistantCount.TextAlign = [System.Drawing.ContentAlignment]::MiddleRight
++$lblGlobalsAssistantCount.ForeColor = [System.Drawing.Color]::FromArgb(80, 80, 80)
++$lblGlobalsAssistantCount.Text = if ($script:GlobalsCommandNames -and $script:GlobalsCommandNames.Count -gt 0) { "Recognized wrapper cmdlets: $($script:GlobalsCommandNames.Count)" } else { "Recognized wrapper cmdlets: 0" }
++$tabGlobalsAssistant.Controls.Add($lblGlobalsAssistantCount)
++
++$btnGlobalsAssistantAnalyze.Add_Click({
++    $analysis = Get-GlobalsAssistantSuggestions -CodeText $txtGlobalsAssistantInput.Text
++    $txtGlobalsAssistantOutput.Text = $analysis
++})
++
++$btnGlobalsAssistantClear.Add_Click({
++    $txtGlobalsAssistantInput.Clear()
++    $txtGlobalsAssistantOutput.Text = "Analyze results will appear here."
++})
++
++$btnGlobalsAssistantCopy.Add_Click({
++    if ([string]::IsNullOrWhiteSpace($txtGlobalsAssistantOutput.Text)) {
++        return
++    }
++
++    try {
++        [System.Windows.Forms.Clipboard]::SetText($txtGlobalsAssistantOutput.Text)
++    }
++    catch {
++    }
++})
++
++#endregion Tab 5
++
++#region Tab 6: Process
+ $tabProcess = New-Object System.Windows.Forms.TabPage
+ $tabProcess.Text = "Process"
+ $tabProcess.BackColor = $Colors.Background

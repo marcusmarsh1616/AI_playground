@@ -1,0 +1,123 @@
+commit 2918dfba9180dda83601652dc2f86be2401f5608
+Author: marcusmarsh1616 <marcusmarsh1616@verizon.net>
+Date:   Tue Jul 28 19:00:54 2026 -0400
+
+    Update packaging recovery flow
+
+diff --git a/FRB-Packaging-Tool.ps1 b/FRB-Packaging-Tool.ps1
+index abf7a62..dd525d0 100644
+--- a/FRB-Packaging-Tool.ps1
++++ b/FRB-Packaging-Tool.ps1
+@@ -2713,50 +2713,47 @@ function Invoke-PackageHelperGeneration {
+     if ([string]::IsNullOrWhiteSpace($txtVendor.Text) -or [string]::IsNullOrWhiteSpace($txtName.Text)) {
+         [System.Windows.Forms.MessageBox]::Show(
+             "Please enter at least App Vendor and App Name first.",
+-            "Package Helper",
+-            [System.Windows.Forms.MessageBoxButtons]::OK,
+-            [System.Windows.Forms.MessageBoxIcon]::Information
+-        )
++
++    $basePath = if (-not [string]::IsNullOrWhiteSpace($script:BasePackagingPath)) { $script:BasePackagingPath.Trim() } else { "" }
++    $vendor = if (-not [string]::IsNullOrWhiteSpace($txtVendor.Text)) { $txtVendor.Text.Trim() } else { "" }
++    $name = if (-not [string]::IsNullOrWhiteSpace($txtName.Text)) { $txtName.Text.Trim() } else { "" }
++    $version = if (-not [string]::IsNullOrWhiteSpace($txtVersion.Text)) { $txtVersion.Text.Trim() } else { "" }
++    $edition = if (-not [string]::IsNullOrWhiteSpace($txtEdition.Text)) { $txtEdition.Text.Trim() } else { "" }
++
++    if ([string]::IsNullOrWhiteSpace($basePath) -or
++        [string]::IsNullOrWhiteSpace($vendor) -or
++        [string]::IsNullOrWhiteSpace($name) -or
++        [string]::IsNullOrWhiteSpace($version)) {
++        [string]$Reason = ""
++    )
+         return
+     }
+ 
+-    if ([string]::IsNullOrWhiteSpace($script:DetectedInstallerType)) {
+-        $script:DetectedInstallerType = "Generic"
+-    }
++    $vendorPath = Join-Path $basePath $vendor
++    $appPath = Join-Path $vendorPath $name
+ 
+-    try {
+-        $helperData = Get-PackageHelpSections -InstallerType $script:DetectedInstallerType `
+-                                              -Vendor $txtVendor.Text.Trim() `
+-                                              -AppName $txtName.Text.Trim() `
+-                                              -Edition $txtEdition.Text.Trim() `
+-                                              -Version $txtVersion.Text.Trim() `
+-                                              -InstallMediaPath $script:InstallationMediaPath `
+-                                              -CurrentInstallSwitch $txtInstallSwitch.Text.Trim() `
+-                                              -CurrentUninstallSwitch $txtUninstallSwitch.Text.Trim() `
+-                                              -CurrentUninstallExecutable $txtUninstallExecutable.Text.Trim() `
+-                                              -InstallContext $script:SelectedInstallContext `
+-                                              -ContextRecommendation $script:ContextRecommendation
+-
+-        Set-PackageHelperTabContent -HelperData $helperData
+-        $tabControl.SelectedTab = $tabPackageHelper
+-    }
+-    catch {
+-        [System.Windows.Forms.MessageBox]::Show(
+-            "Failed to generate package helper suggestions.`n`n$($_.Exception.Message)",
+-            "Package Helper Error",
+-            [System.Windows.Forms.MessageBoxButtons]::OK,
+-            [System.Windows.Forms.MessageBoxIcon]::Error
+-        )
++    $candidatePaths = New-Object System.Collections.Generic.List[string]
++    if (-not [string]::IsNullOrWhiteSpace($edition)) {
++        $candidatePaths.Add((Join-Path (Join-Path $appPath $edition) $version))
+     }
+-}
++    $candidatePaths.Add((Join-Path $appPath $version))
+ 
+-function Set-InstallContextState {
+-    param(
+-        [Parameter(Mandatory = $true)]
+-        [string]$Context,
++    $existingPath = ""
++    foreach ($candidatePath in @($candidatePaths | Select-Object -Unique)) {
++        if (Test-Path $candidatePath) {
++            $existingPath = $candidatePath
++            break
++        }
++    }
+ 
+-        [string]$Reason = ""
+-    )
++    if (-not [string]::IsNullOrWhiteSpace($existingPath)) {
++        $lblFolderExistsFlag.Visible = $true
++        Load-ExistingPackageDataIfPresent -PackagePath $existingPath
++        Sync-CommandSectionExpansionState
++    }
++    else {
++        $lblFolderExistsFlag.Visible = $false
++        $script:LastLoadedStartupPath = ""
+ 
+     $normalized = if ($Context -eq "User") { "User" } else { "System" }
+     $script:SelectedInstallContext = $normalized
+@@ -4112,27 +4109,6 @@ function Check-PackageFolderExists {
+         return
+     }
+ 
+-    # Recover packaging base path from config if runtime value is blank.
+-    if ([string]::IsNullOrWhiteSpace($script:BasePackagingPath) -and (Test-Path $configPath)) {
+-        try {
+-            $configSnapshot = Get-Content $configPath -Raw | ConvertFrom-Json
+-            $candidatePaths = @(
+-                [string]$configSnapshot.paths.basePackagingPath,
+-                [string]$configSnapshot.launcher.technicianPackagingFolder
+-            ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+-
+-            foreach ($candidatePath in $candidatePaths) {
+-                if (Test-Path $candidatePath) {
+-                    $script:BasePackagingPath = $candidatePath
+-                    break
+-                }
+-            }
+-        }
+-        catch {
+-            Write-ProcessOutputLine -Message ("Packaging path recovery failed during existing-folder check: {0}" -f $_.Exception.Message) -Level "WARN"
+-        }
+-    }
+-
+     if (-not [string]::IsNullOrWhiteSpace($txtVendor.Text) -and 
+         -not [string]::IsNullOrWhiteSpace($txtName.Text) -and 
+         -not [string]::IsNullOrWhiteSpace($txtVersion.Text)) {
