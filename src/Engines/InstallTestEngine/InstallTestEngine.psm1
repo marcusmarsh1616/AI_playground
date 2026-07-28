@@ -51,35 +51,34 @@ function Remove-InstalledDesktopShortcuts {
         return $result
     }
 
-    $publicDesktop = [Environment]::GetFolderPath("CommonDesktopDirectory")
-    $userDesktop = [Environment]::GetFolderPath("Desktop")
-    $desktopScopes = @(
-        @{ Path = $publicDesktop; Scope = "Machine" },
-        @{ Path = $userDesktop; Scope = "User" }
-    )
+    # AppName is passed from GUI app name during Start-InstallationTest.
+    $AppName = $AppName.Trim()
+    $PublicDesktop = [Environment]::GetFolderPath("CommonDesktopDirectory")
+    $UserDesktop = [Environment]::GetFolderPath("Desktop")
+    $DesktopPaths = @($PublicDesktop, $UserDesktop)
 
-    $searchPattern = "*$($AppName.Trim())*.lnk"
-
-    foreach ($desktopScope in $desktopScopes) {
-        if ([string]::IsNullOrWhiteSpace($desktopScope.Path) -or -not (Test-Path $desktopScope.Path)) {
+    foreach ($DesktopPath in $DesktopPaths) {
+        if ([string]::IsNullOrWhiteSpace($DesktopPath) -or -not (Test-Path $DesktopPath)) {
             continue
         }
 
-        $shortcuts = Get-ChildItem -Path $desktopScope.Path -Filter $searchPattern -File -ErrorAction SilentlyContinue
-        foreach ($shortcut in $shortcuts) {
+        $scope = if ($DesktopPath -eq $PublicDesktop) { "Machine" } else { "User" }
+        $Shortcuts = Get-ChildItem -Path $DesktopPath -Filter "*$AppName*.lnk" -File -ErrorAction SilentlyContinue
+
+        foreach ($Shortcut in $Shortcuts) {
             try {
-                Remove-Item -Path $shortcut.FullName -Force -ErrorAction Stop
+                Remove-Item -Path $Shortcut.FullName -Force -ErrorAction Stop
                 $result.Removed += [PSCustomObject]@{
-                    Path = $shortcut.FullName
-                    Scope = $desktopScope.Scope
-                    Name = $shortcut.Name
+                    Path = $Shortcut.FullName
+                    Scope = $scope
+                    Name = $Shortcut.Name
                 }
             }
             catch {
                 $result.Failed += [PSCustomObject]@{
-                    Path = $shortcut.FullName
-                    Scope = $desktopScope.Scope
-                    Name = $shortcut.Name
+                    Path = $Shortcut.FullName
+                    Scope = $scope
+                    Name = $Shortcut.Name
                     Error = $_.Exception.Message
                 }
             }
