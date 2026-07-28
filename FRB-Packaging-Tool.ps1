@@ -4112,6 +4112,27 @@ function Check-PackageFolderExists {
         return
     }
 
+    # Recover packaging base path from config if runtime value is blank.
+    if ([string]::IsNullOrWhiteSpace($script:BasePackagingPath) -and (Test-Path $configPath)) {
+        try {
+            $configSnapshot = Get-Content $configPath -Raw | ConvertFrom-Json
+            $candidatePaths = @(
+                [string]$configSnapshot.paths.basePackagingPath,
+                [string]$configSnapshot.launcher.technicianPackagingFolder
+            ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+
+            foreach ($candidatePath in $candidatePaths) {
+                if (Test-Path $candidatePath) {
+                    $script:BasePackagingPath = $candidatePath
+                    break
+                }
+            }
+        }
+        catch {
+            Write-ProcessOutputLine -Message ("Packaging path recovery failed during existing-folder check: {0}" -f $_.Exception.Message) -Level "WARN"
+        }
+    }
+
     if (-not [string]::IsNullOrWhiteSpace($txtVendor.Text) -and 
         -not [string]::IsNullOrWhiteSpace($txtName.Text) -and 
         -not [string]::IsNullOrWhiteSpace($txtVersion.Text)) {
