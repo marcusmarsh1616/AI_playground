@@ -52,12 +52,13 @@ function Show-CaptureNameOverrideDialog {
         [int]$CountdownSeconds = 20
     )
 
-    $selectedName = $InitialName
+    $selectedInstalledAppsName = $InitialName
+    $selectedStartMenuName = $InitialName
     $remaining = if ($CountdownSeconds -lt 5) { 5 } else { $CountdownSeconds }
 
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "Validation Capture Name"
-    $form.Size = New-Object System.Drawing.Size(620, 220)
+    $form.Size = New-Object System.Drawing.Size(620, 300)
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedDialog"
     $form.MaximizeBox = $false
@@ -66,20 +67,41 @@ function Show-CaptureNameOverrideDialog {
 
     $lblPrompt = New-Object System.Windows.Forms.Label
     $lblPrompt.Location = New-Object System.Drawing.Point(20, 20)
-    $lblPrompt.Size = New-Object System.Drawing.Size(560, 44)
-    $lblPrompt.Text = "If Installed Apps or Start Menu uses a different display name, update it now before capture begins."
+    $lblPrompt.Size = New-Object System.Drawing.Size(560, 48)
+    $lblPrompt.Text = "Set names independently for each capture target. Use only the boxes that need changes."
     $lblPrompt.Font = New-Object System.Drawing.Font("Segoe UI", 10)
     $form.Controls.Add($lblPrompt)
 
-    $txtName = New-Object System.Windows.Forms.TextBox
-    $txtName.Location = New-Object System.Drawing.Point(20, 72)
-    $txtName.Size = New-Object System.Drawing.Size(560, 28)
-    $txtName.Font = New-Object System.Drawing.Font("Segoe UI", 11)
-    $txtName.Text = $InitialName
-    $form.Controls.Add($txtName)
+    $lblInstalledApps = New-Object System.Windows.Forms.Label
+    $lblInstalledApps.Location = New-Object System.Drawing.Point(20, 76)
+    $lblInstalledApps.Size = New-Object System.Drawing.Size(560, 20)
+    $lblInstalledApps.Text = "Installed Apps Name (Figure 2):"
+    $lblInstalledApps.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+    $form.Controls.Add($lblInstalledApps)
+
+    $txtInstalledAppsName = New-Object System.Windows.Forms.TextBox
+    $txtInstalledAppsName.Location = New-Object System.Drawing.Point(20, 98)
+    $txtInstalledAppsName.Size = New-Object System.Drawing.Size(560, 28)
+    $txtInstalledAppsName.Font = New-Object System.Drawing.Font("Segoe UI", 11)
+    $txtInstalledAppsName.Text = $InitialName
+    $form.Controls.Add($txtInstalledAppsName)
+
+    $lblStartMenu = New-Object System.Windows.Forms.Label
+    $lblStartMenu.Location = New-Object System.Drawing.Point(20, 136)
+    $lblStartMenu.Size = New-Object System.Drawing.Size(560, 20)
+    $lblStartMenu.Text = "Start Menu Name (Figure 3 / Figure 4):"
+    $lblStartMenu.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+    $form.Controls.Add($lblStartMenu)
+
+    $txtStartMenuName = New-Object System.Windows.Forms.TextBox
+    $txtStartMenuName.Location = New-Object System.Drawing.Point(20, 158)
+    $txtStartMenuName.Size = New-Object System.Drawing.Size(560, 28)
+    $txtStartMenuName.Font = New-Object System.Drawing.Font("Segoe UI", 11)
+    $txtStartMenuName.Text = $InitialName
+    $form.Controls.Add($txtStartMenuName)
 
     $lblCountdown = New-Object System.Windows.Forms.Label
-    $lblCountdown.Location = New-Object System.Drawing.Point(20, 110)
+    $lblCountdown.Location = New-Object System.Drawing.Point(20, 196)
     $lblCountdown.Size = New-Object System.Drawing.Size(560, 24)
     $lblCountdown.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Italic)
     $lblCountdown.ForeColor = [System.Drawing.Color]::FromArgb(100, 100, 100)
@@ -88,14 +110,17 @@ function Show-CaptureNameOverrideDialog {
 
     $btnStart = New-Object System.Windows.Forms.Button
     $btnStart.Text = "Start Capture Now"
-    $btnStart.Location = New-Object System.Drawing.Point(420, 140)
+    $btnStart.Location = New-Object System.Drawing.Point(420, 226)
     $btnStart.Size = New-Object System.Drawing.Size(160, 32)
     $btnStart.BackColor = [System.Drawing.Color]::FromArgb(0, 176, 80)
     $btnStart.ForeColor = [System.Drawing.Color]::White
     $btnStart.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $btnStart.Add_Click({
-        if (-not [string]::IsNullOrWhiteSpace($txtName.Text)) {
-            $selectedName = $txtName.Text.Trim()
+        if (-not [string]::IsNullOrWhiteSpace($txtInstalledAppsName.Text)) {
+            $selectedInstalledAppsName = $txtInstalledAppsName.Text.Trim()
+        }
+        if (-not [string]::IsNullOrWhiteSpace($txtStartMenuName.Text)) {
+            $selectedStartMenuName = $txtStartMenuName.Text.Trim()
         }
         $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
         $form.Close()
@@ -109,8 +134,11 @@ function Show-CaptureNameOverrideDialog {
         $lblCountdown.Text = "Capture begins automatically in $remaining seconds."
         if ($remaining -le 0) {
             $timer.Stop()
-            if (-not [string]::IsNullOrWhiteSpace($txtName.Text)) {
-                $selectedName = $txtName.Text.Trim()
+            if (-not [string]::IsNullOrWhiteSpace($txtInstalledAppsName.Text)) {
+                $selectedInstalledAppsName = $txtInstalledAppsName.Text.Trim()
+            }
+            if (-not [string]::IsNullOrWhiteSpace($txtStartMenuName.Text)) {
+                $selectedStartMenuName = $txtStartMenuName.Text.Trim()
             }
             $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
             $form.Close()
@@ -122,11 +150,17 @@ function Show-CaptureNameOverrideDialog {
 
     [void]$form.ShowDialog()
 
-    if ([string]::IsNullOrWhiteSpace($selectedName)) {
-        return $InitialName
+    if ([string]::IsNullOrWhiteSpace($selectedInstalledAppsName)) {
+        $selectedInstalledAppsName = $InitialName
+    }
+    if ([string]::IsNullOrWhiteSpace($selectedStartMenuName)) {
+        $selectedStartMenuName = $InitialName
     }
 
-    return $selectedName
+    return @{
+        InstalledAppsName = $selectedInstalledAppsName
+        StartMenuName = $selectedStartMenuName
+    }
 }
 
 function Start-AutomatedDocumentation {
@@ -161,11 +195,18 @@ function Start-AutomatedDocumentation {
         
         Start-Sleep -Milliseconds 500
 
-        $captureAppName = Show-CaptureNameOverrideDialog -InitialName $script:CurrentSession.AppName -CountdownSeconds 20
-        if ([string]::IsNullOrWhiteSpace($captureAppName)) {
-            $captureAppName = $script:CurrentSession.AppName
+        $captureNames = Show-CaptureNameOverrideDialog -InitialName $script:CurrentSession.AppName -CountdownSeconds 20
+        $captureInstalledAppsName = if ($captureNames -and -not [string]::IsNullOrWhiteSpace([string]$captureNames.InstalledAppsName)) {
+            [string]$captureNames.InstalledAppsName
+        } else {
+            $script:CurrentSession.AppName
         }
-        Write-UIStatus "Capture name selected: $captureAppName" "Blue"
+        $captureStartMenuName = if ($captureNames -and -not [string]::IsNullOrWhiteSpace([string]$captureNames.StartMenuName)) {
+            [string]$captureNames.StartMenuName
+        } else {
+            $script:CurrentSession.AppName
+        }
+        Write-UIStatus "Capture names set. Figure2='$captureInstalledAppsName' Figure3/4='$captureStartMenuName'" "Blue"
         Start-Sleep -Milliseconds 500
         
         # Step 2: Capture Figure 2
@@ -174,7 +215,7 @@ function Start-AutomatedDocumentation {
         Start-Sleep -Milliseconds 500
         
         $outputPath2 = Join-Path $script:CurrentSession.WorkingDirectory "Figure2.jpg"
-        $result2 = Invoke-AutomatedInstalledAppsCapture -AppName $captureAppName -OutputPath $outputPath2
+        $result2 = Invoke-AutomatedInstalledAppsCapture -AppName $captureInstalledAppsName -OutputPath $outputPath2
         
         if ($result2.Success) {
             $script:CurrentSession = Update-DocumentationSessionCapture -Session $script:CurrentSession -FigureNumber 2 -FilePath $outputPath2
@@ -194,7 +235,7 @@ function Start-AutomatedDocumentation {
         Start-Sleep -Milliseconds 500
 
         $outputPath3 = Join-Path $script:CurrentSession.WorkingDirectory "Figure3.jpg"
-        $result3 = Invoke-AutomatedStartMenuCapture -AppName $captureAppName -OutputPath $outputPath3
+        $result3 = Invoke-AutomatedStartMenuCapture -AppName $captureStartMenuName -OutputPath $outputPath3
 
         if ($result3.Success) {
             $script:CurrentSession = Update-DocumentationSessionCapture -Session $script:CurrentSession -FigureNumber 3 -FilePath $outputPath3
@@ -214,7 +255,7 @@ function Start-AutomatedDocumentation {
         Start-Sleep -Milliseconds 500
 
         $outputPath4 = Join-Path $script:CurrentSession.WorkingDirectory "Figure4.jpg"
-        $result4 = Invoke-AutomatedApplicationOpenedCapture -AppName $captureAppName -OutputPath $outputPath4
+        $result4 = Invoke-AutomatedApplicationOpenedCapture -AppName $captureStartMenuName -OutputPath $outputPath4
 
         if ($result4.Success) {
             $script:CurrentSession = Update-DocumentationSessionCapture -Session $script:CurrentSession -FigureNumber 4 -FilePath $outputPath4
@@ -252,7 +293,7 @@ function Start-AutomatedDocumentation {
             $wrapperContent = @"
 #Requires -Version 5.1
 `$helperScriptPath = '$($helperFullPath.Replace("'", "''"))'
-`$appName = '$($captureAppName.Replace("'", "''"))'
+`$appName = '$($captureInstalledAppsName.Replace("'", "''"))'
 `$outputFile = '$($tempFile.Replace("'", "''"))'
 
 & "`$helperScriptPath" -AppName "`$appName" -OutputFile "`$outputFile"

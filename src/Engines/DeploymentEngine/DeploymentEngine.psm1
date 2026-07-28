@@ -343,38 +343,72 @@ function Test-PackageCopyIntegrity {
     Write-Verbose "DeploymentEngine: Verifying copy integrity"
     
     try {
-        # Get file counts
-        $sourceFiles = Get-ChildItem -Path $SourcePath -Recurse -File
-        $targetFiles = Get-ChildItem -Path $TargetPath -Recurse -File
-        
-        $sourceCount = $sourceFiles.Count
-        $targetCount = $targetFiles.Count
-        
+        # Ignore known non-blocking metadata files during integrity checks.
+        $sourceFiles = Get-ChildItem -Path $SourcePath -Recurse -File |
+            Where-Object { $_.Name -ne '.gitattributes' }
+        $targetFiles = Get-ChildItem -Path $TargetPath -Recurse -File |
+            Where-Object { $_.Name -ne '.gitattributes' }
+
+        $sourceMap = @{}
+        foreach ($file in @($sourceFiles)) {
+            $relativePath = $file.FullName.Substring($SourcePath.Length).TrimStart('\\', '/')
+            $sourceMap[$relativePath.ToLowerInvariant()] = $file
+        }
+
+        $targetMap = @{}
+        foreach ($file in @($targetFiles)) {
+            $relativePath = $file.FullName.Substring($TargetPath.Length).TrimStart('\\', '/')
+            $targetMap[$relativePath.ToLowerInvariant()] = $file
+        }
+
+        $sourceCount = $sourceMap.Count
+        $targetCount = $targetMap.Count
         Write-Verbose "DeploymentEngine: Source files: $sourceCount, Target files: $targetCount"
-        
-        if ($sourceCount -ne $targetCount) {
+
+        $missingInTarget = @($sourceMap.Keys | Where-Object { -not $targetMap.ContainsKey($_) } | Sort-Object)
+        if ($missingInTarget.Count -gt 0) {
+            $sample = ($missingInTarget | Select-Object -First 5) -join ', '
             return @{
                 IntegrityValid = $false
                 SourceFiles = $sourceCount
                 TargetFiles = $targetCount
-                Message = "File count mismatch: Source=$sourceCount, Target=$targetCount"
+                Message = "Target is missing $($missingInTarget.Count) files. Examples: $sample"
             }
         }
-        
-        # Get total sizes
-        $sourceSize = ($sourceFiles | Measure-Object -Property Length -Sum).Sum
-        $targetSize = ($targetFiles | Measure-Object -Property Length -Sum).Sum
-        
+
+        $extraInTarget = @($targetMap.Keys | Where-Object { -not $sourceMap.ContainsKey($_) } | Sort-Object)
+        if ($extraInTarget.Count -gt 0) {
+            $sample = ($extraInTarget | Select-Object -First 5) -join ', '
+            return @{
+                IntegrityValid = $false
+                SourceFiles = $sourceCount
+                TargetFiles = $targetCount
+                Message = "Target has $($extraInTarget.Count) unexpected files. Examples: $sample"
+            }
+        }
+
+        $sizeMismatches = New-Object System.Collections.Generic.List[string]
+        foreach ($key in @($sourceMap.Keys)) {
+            if ($targetMap.ContainsKey($key)) {
+                if ($sourceMap[$key].Length -ne $targetMap[$key].Length) {
+                    [void]$sizeMismatches.Add("$key (source=$($sourceMap[$key].Length), target=$($targetMap[$key].Length))")
+                }
+            }
+        }
+
+        if ($sizeMismatches.Count -gt 0) {
+            $sample = ($sizeMismatches | Select-Object -First 5) -join '; '
+            return @{
+                IntegrityValid = $false
+                SourceFiles = $sourceCount
+                TargetFiles = $targetCount
+                Message = "File size mismatch for $($sizeMismatches.Count) files. Examples: $sample"
+            }
+        }
+
+        $sourceSize = (@($sourceMap.Values) | Measure-Object -Property Length -Sum).Sum
+        $targetSize = (@($targetMap.Values) | Measure-Object -Property Length -Sum).Sum
         Write-Verbose "DeploymentEngine: Source size: $sourceSize bytes, Target size: $targetSize bytes"
-        
-        if ($sourceSize -ne $targetSize) {
-            return @{
-                IntegrityValid = $false
-                SourceFiles = $sourceCount
-                TargetFiles = $targetCount
-                Message = "Total size mismatch: Source=$sourceSize bytes, Target=$targetSize bytes"
-            }
-        }
         
         # Verify critical files exist (Install.exe)
         $installExeSource = Join-Path $SourcePath "Install.exe"

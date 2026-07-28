@@ -89,6 +89,63 @@ function Remove-InstalledDesktopShortcuts {
     return $result
 }
 
+function Get-ExecutionEvidence {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SearchRoot,
+
+        [Parameter(Mandatory = $true)]
+        [datetime]$OperationStart,
+
+        [Parameter(Mandatory = $true)]
+        [string]$OperationName
+    )
+
+    $result = @{
+        Files = @()
+        TailLines = @()
+    }
+
+    if ([string]::IsNullOrWhiteSpace($SearchRoot) -or -not (Test-Path $SearchRoot)) {
+        return $result
+    }
+
+    try {
+        $cutoff = $OperationStart.AddMinutes(-2)
+        $candidateFiles = Get-ChildItem -Path $SearchRoot -Recurse -File -Include *.log, *.txt -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.LastWriteTime -ge $cutoff -and
+                $_.Name -match '(?i)(install|uninstall|setup|error|fail|msi|process|log)'
+            } |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 6
+
+        foreach ($file in @($candidateFiles)) {
+            $result.Files += [PSCustomObject]@{
+                Path = $file.FullName
+                LastWriteTime = $file.LastWriteTime
+                Size = $file.Length
+            }
+
+            try {
+                $tail = Get-Content -Path $file.FullName -Tail 4 -ErrorAction Stop
+                foreach ($line in @($tail)) {
+                    if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
+                        $result.TailLines += "[$OperationName] $($file.Name): $line"
+                    }
+                }
+            }
+            catch {
+            }
+        }
+    }
+    catch {
+    }
+
+    return $result
+}
+
 function Start-InstallationTest {
     <#
     .SYNOPSIS
@@ -126,6 +183,11 @@ function Start-InstallationTest {
         UserConfirmed = $false
         ExitCode = -1
         ErrorMessage = ""
+        InstallExePath = $InstallExePath
+        Arguments = ""
+        WorkingDirectory = ""
+        ProcessId = $null
+        Diagnostics = $null
         RemovedDesktopShortcuts = @()
         FailedDesktopShortcutRemovals = @()
     }
@@ -140,6 +202,8 @@ function Start-InstallationTest {
         
         Write-Verbose "InstallTestEngine: Launching Install.exe (using embedded manifest)..."
         $installWorkingDirectory = Split-Path -Path $InstallExePath -Parent
+        $result.WorkingDirectory = $installWorkingDirectory
+        $operationStart = Get-Date
         
         # Create process start info for UAC elevation  
         $processInfo = New-Object System.Diagnostics.ProcessStartInfo
@@ -160,6 +224,7 @@ function Start-InstallationTest {
         
         if ($installProcess) {
             Write-Verbose "InstallTestEngine: Found Install.exe process (PID: $($installProcess.Id))"
+            $result.ProcessId = $installProcess.Id
             
             # Wait for the ACTUAL Install.exe process to complete
             $installProcess.WaitForExit()
@@ -169,6 +234,8 @@ function Start-InstallationTest {
             
             # Give system time to settle
             Start-Sleep -Seconds 2
+
+            $result.Diagnostics = Get-ExecutionEvidence -SearchRoot $installWorkingDirectory -OperationStart $operationStart -OperationName "Install"
 
             $shortcutCleanup = Remove-InstalledDesktopShortcuts -AppName $AppName
             $result.RemovedDesktopShortcuts = @($shortcutCleanup.Removed)
@@ -250,6 +317,12 @@ function Start-UninstallationTest {
         LeftoverDetails = @()
         CleanupPerformed = $false
         CleanupResults = $null
+        InstallExePath = $InstallExePath
+        Arguments = "/uninstall"
+        WorkingDirectory = ""
+        ProcessId = $null
+        ReportPath = ""
+        Diagnostics = $null
         ErrorMessage = ""
     }
     
@@ -263,6 +336,8 @@ function Start-UninstallationTest {
         
         Write-Verbose "InstallTestEngine: Launching Install.exe /uninstall (using embedded manifest)..."
         $installWorkingDirectory = Split-Path -Path $InstallExePath -Parent
+        $result.WorkingDirectory = $installWorkingDirectory
+        $operationStart = Get-Date
         
         # Use Start-Process (no elevation - use embedded manifest)
         $uninstallProcess = Start-Process -FilePath $InstallExePath `
@@ -273,6 +348,7 @@ function Start-UninstallationTest {
         
         if ($uninstallProcess) {
             Write-Verbose "InstallTestEngine: Uninstallation process completed"
+            $result.ProcessId = $uninstallProcess.Id
             $result.ExitCode = $uninstallProcess.ExitCode
             Write-Verbose "InstallTestEngine: Uninstallation completed (Exit Code: $($result.ExitCode))"
             
@@ -291,89 +367,100 @@ function Start-UninstallationTest {
             $cleanupResults = Remove-UninstallLeftovers -LeftoverData $leftovers -PreserveUserLevel $true
             $result.CleanupPerformed = $cleanupResults.Attempted
             $result.CleanupResults = $cleanupResults
-            
-            # Prompt technician for verification (leftovers should be handled in Custom Post-Uninstall commands)
+
+            # Delay to allow post-uninstall command windows/processes to close before final scan/report generation.
+            Write-Verbose "InstallTestEngine: Waiting 10 seconds before generating uninstall validation report..."
+            Start-Sleep -Seconds 10
+
+            # Perform final verification scan and generate report BEFORE technician confirmation prompt.
+            Write-Verbose "InstallTestEngine: Performing final verification scan..."
+            $finalScan = Get-UninstallLeftovers -AppName $AppName -Vendor $Vendor
+
+            if (-not [string]::IsNullOrWhiteSpace($PackagePath)) {
+                try {
+                    $docsFolder = Join-Path $PackagePath "Docs"
+                    if (-not (Test-Path $docsFolder)) {
+                        New-Item -Path $docsFolder -ItemType Directory -Force | Out-Null
+                    }
+
+                    $reportFileName = "Uninstall_Report_" + $Vendor + "_" + $AppName + "_" + $AppVersion + ".html"
+                    $reportFileName = $reportFileName -replace '[<>:"/\|?*]', '_'
+                    $reportPath = Join-Path $docsFolder $reportFileName
+
+                    $reportParams = @{
+                        AppName = $AppName
+                        AppVersion = $AppVersion
+                        Vendor = $Vendor
+                        LeftoverData = $finalScan
+                        UninstallCommand = "$InstallExePath /uninstall"
+                        OutputPath = $reportPath
+                    }
+
+                    if ($result.CleanupPerformed -and $result.CleanupResults) {
+                        $reportParams.CleanupResults = $result.CleanupResults
+                    }
+
+                    $reportResult = New-HTMLUninstallReport @reportParams
+
+                    if ($reportResult.Success) {
+                        $result.ReportPath = $reportPath
+                        Write-Verbose "InstallTestEngine: Uninstall report generated at $reportPath"
+                        Start-Process $reportPath
+                        Start-Sleep -Milliseconds 500
+                    }
+                }
+                catch {
+                    Write-Warning "InstallTestEngine: Failed to generate uninstall report: $($_.Exception.Message)"
+                }
+            }
+
+            $result.Diagnostics = Get-ExecutionEvidence -SearchRoot $installWorkingDirectory -OperationStart $operationStart -OperationName "Uninstall"
+
+            $remainingMachineItems = @($finalScan.Details | Where-Object { $_.Scope -eq "Machine" })
+
+            if ($remainingMachineItems.Count -gt 0) {
+                $finalParts = @(
+                    "Final verification scan detected machine-level leftover items:",
+                    "",
+                    (($remainingMachineItems | ForEach-Object { "--- $($_.Type): $($_.Location)" }) -join [Environment]::NewLine),
+                    "",
+                    "Review report/leftovers before confirming. User-level items are preserved by policy.",
+                    "",
+                    "Did the uninstallation of $AppName $AppVersion function as designed?"
+                )
+            }
+            else {
+                $finalParts = @(
+                    "Uninstall validation report is ready.",
+                    "",
+                    "No machine-level leftovers were detected in final verification.",
+                    "",
+                    "Did the uninstallation of $AppName $AppVersion function as designed?"
+                )
+            }
+
             $userResponse = [System.Windows.Forms.MessageBox]::Show(
-                "Did the uninstallation of $AppName $AppVersion function as designed?",
+                ($finalParts -join [Environment]::NewLine),
                 "Uninstallation Verification",
                 [System.Windows.Forms.MessageBoxButtons]::YesNo,
                 [System.Windows.Forms.MessageBoxIcon]::Question
             )
-            
-            if ($userResponse -eq 'Yes') {
-                # User confirmed - NOW do final verification scan
-                Write-Verbose "InstallTestEngine: Performing final verification scan..."
-                $finalScan = Get-UninstallLeftovers -AppName $AppName -Vendor $Vendor
-                
-                # ALWAYS generate uninstall report (whether clean or with leftovers)
-                if (-not [string]::IsNullOrWhiteSpace($PackagePath)) {
-                    try {
-                        $docsFolder = Join-Path $PackagePath "Docs"
-                        if (-not (Test-Path $docsFolder)) {
-                            New-Item -Path $docsFolder -ItemType Directory -Force | Out-Null
-                        }
-                        
-                        $reportFileName = "Uninstall_Report_" + $Vendor + "_" + $AppName + "_" + $AppVersion + ".html"
-                        $reportFileName = $reportFileName -replace '[<>:"/\|?*]', '_'
-                        $reportPath = Join-Path $docsFolder $reportFileName
-                        
-                        # Generate report with uninstall command info and cleanup results
-                        $reportParams = @{
-                            AppName = $AppName
-                            AppVersion = $AppVersion
-                            Vendor = $Vendor
-                            LeftoverData = $finalScan
-                            UninstallCommand = "$InstallExePath /uninstall"
-                            OutputPath = $reportPath
-                        }
-                        
-                        # Add cleanup results if cleanup was performed
-                        if ($result.CleanupPerformed -and $result.CleanupResults) {
-                            $reportParams.CleanupResults = $result.CleanupResults
-                        }
-                        
-                        $reportResult = New-HTMLUninstallReport @reportParams
-                        
-                        if ($reportResult.Success) {
-                            Write-Verbose "InstallTestEngine: Uninstall report generated at $reportPath"
-                            Start-Process $reportPath
-                            Start-Sleep -Milliseconds 500
-                        }
-                    } catch {
-                        Write-Warning "InstallTestEngine: Failed to generate uninstall report: $($_.Exception.Message)"
-                    }
-                }
-                
-                $remainingMachineItems = @($finalScan.Details | Where-Object { $_.Scope -eq "Machine" })
 
+            if ($userResponse -eq 'Yes') {
                 if ($remainingMachineItems.Count -gt 0) {
-                    # Still have machine-level leftovers after confirmation
-                    $finalParts = @(
-                        "Warning: Final verification scan detected remaining machine-level leftover items:",
-                        "",
-                        (($remainingMachineItems | ForEach-Object { "--- $($_.Type): $($_.Location)" }) -join [Environment]::NewLine),
-                        "",
-                        "Packaging will proceed. Review these items and consider manual cleanup. User-level items are preserved by policy."
-                    )
-                    $finalMsg = $finalParts -join [Environment]::NewLine
-                    [System.Windows.Forms.MessageBox]::Show(
-                        $finalMsg,
-                        "Leftovers Detected",
-                        [System.Windows.Forms.MessageBoxButtons]::OK,
-                        [System.Windows.Forms.MessageBoxIcon]::Warning
-                    )
                     Write-Warning "InstallTestEngine: Machine-level leftovers remain after uninstallation"
-                } else {
-                    # Clean uninstall verified for machine scope. User scope may intentionally remain.
+                }
+                else {
                     Write-Verbose "InstallTestEngine: Final verification scan clean for machine-level leftovers"
                 }
-                
+
                 $result.Success = $true
                 $result.UserConfirmed = $true
                 $result.LeftoversFound = ($remainingMachineItems.Count -gt 0)
                 $result.LeftoverDetails = $finalScan.Details
                 Write-Verbose "InstallTestEngine: Uninstallation confirmed by technician"
-            } else {
+            }
+            else {
                 $result.Success = $false
                 $result.UserConfirmed = $false
                 $result.ErrorMessage = "Technician indicated uninstallation did not function as designed"

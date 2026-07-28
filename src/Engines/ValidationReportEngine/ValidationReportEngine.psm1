@@ -75,7 +75,7 @@ function Show-ValidationCaptureModeDialog {
     $form.Controls.Add($btnManual)
 
     $btnNone = New-Object System.Windows.Forms.Button
-    $btnNone.Text = "No Report Now"
+    $btnNone.Text = "No Report or One Already Exists"
     $btnNone.Location = New-Object System.Drawing.Point(370, 140)
     $btnNone.Size = New-Object System.Drawing.Size(160, 35)
     $btnNone.BackColor = [System.Drawing.Color]::FromArgb(145, 145, 145)
