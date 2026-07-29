@@ -989,6 +989,74 @@ function Get-GlobalsCommandPreview {
     return (($script:GlobalsCommandNames | Sort-Object | Select-Object -First 60) -join ', ')
 }
 
+function Convert-GlobalsAssistantLine {
+    param(
+        [string]$Line
+    )
+
+    $result = @{
+        UpdatedLine = $Line
+        Changed = $false
+        Reason = ""
+    }
+
+    if ([string]::IsNullOrWhiteSpace($Line)) {
+        return $result
+    }
+
+    # Preserve indentation while converting direct registry key deletes to wrapper-aligned cmdlets.
+    $removeItemMatch = [regex]::Match($Line, '^(?<indent>\s*)Remove-Item\s+(?<args>.+)$')
+    if ($removeItemMatch.Success) {
+        $indent = $removeItemMatch.Groups['indent'].Value
+        $args = $removeItemMatch.Groups['args'].Value
+        $pathMatch = [regex]::Match($args, '(?i)-(?:LiteralPath|Path)\s+(?<path>"[^"]+"|''[^'']+''|[^\s]+)')
+
+        if ($pathMatch.Success) {
+            $rawPathToken = $pathMatch.Groups['path'].Value
+            $pathValue = $rawPathToken.Trim("'")
+            $pathValue = $pathValue.Trim('"')
+            if ($pathValue -match '^(?i)HK(LM|CU|CR|U|CC):') {
+                $hasRecurse = $args -match '(?i)(?:^|\s)-Recurse(?:\s|$)'
+                $updated = "$indent" + "Remove-RegistryKey -Key $rawPathToken"
+                if ($hasRecurse) {
+                    $updated += " -Recurse"
+                }
+                $updated += " -ContinueOnError `$true"
+
+                $result.UpdatedLine = $updated
+                $result.Changed = $true
+                $result.Reason = "Converted direct registry Remove-Item call to Remove-RegistryKey for wrapper-aligned safety and logging."
+                return $result
+            }
+        }
+    }
+
+    return $result
+}
+
+function Get-GlobalsAssistantRewriteResult {
+    param(
+        [string]$CodeText = ""
+    )
+
+    $inputLines = $CodeText -split "`r?`n", -1
+    $rewrittenLines = New-Object System.Collections.Generic.List[string]
+    $appliedChanges = New-Object System.Collections.Generic.List[string]
+
+    for ($index = 0; $index -lt $inputLines.Count; $index++) {
+        $lineResult = Convert-GlobalsAssistantLine -Line $inputLines[$index]
+        [void]$rewrittenLines.Add([string]$lineResult.UpdatedLine)
+        if ($lineResult.Changed) {
+            [void]$appliedChanges.Add(("Line {0}: {1}" -f ($index + 1), $lineResult.Reason))
+        }
+    }
+
+    return @{
+        RewrittenCode = [string]::Join([Environment]::NewLine, $rewrittenLines)
+        AppliedChanges = @($appliedChanges)
+    }
+}
+
 function Get-GlobalsAssistantSuggestions {
     param(
         [string]$CodeText = ""
@@ -1000,6 +1068,10 @@ function Get-GlobalsAssistantSuggestions {
         return "Paste your custom PowerShell code and click Analyze Code to receive wrapper-aligned suggestions."
     }
 
+    $rewriteResult = Get-GlobalsAssistantRewriteResult -CodeText $CodeText
+    $rewrittenCode = [string]$rewriteResult.RewrittenCode
+    $appliedChanges = @($rewriteResult.AppliedChanges)
+
     $lines = New-Object System.Collections.Generic.List[string]
     [void]$lines.Add("Globals Assistant Analysis")
     [void]$lines.Add("")
@@ -1010,43 +1082,26 @@ function Get-GlobalsAssistantSuggestions {
         [void]$lines.Add("")
     }
 
-    $hasWriteLog = $CodeText -match '(?im)^\s*Write-Log\b'
-    if (-not $hasWriteLog) {
-        [void]$lines.Add("- Add Write-Log before and after key actions so technician intent and results are visible in package logs.")
-        [void]$lines.Add("  Example: Write-Log -Message 'Starting custom action.' -Source 'Custom Commands'")
+    if ($appliedChanges.Count -gt 0) {
+        [void]$lines.Add("Applied Changes:")
+        foreach ($change in @($appliedChanges)) {
+            [void]$lines.Add("- $change")
+        }
     }
-
-    if ($CodeText -match '(?im)^\s*Start-Process\b') {
-        [void]$lines.Add("- Replace Start-Process with Execute-Process where possible for wrapper-consistent execution and logging behavior.")
-    }
-
-    if ($CodeText -match '(?i)msiexec(\.exe)?\b' -or $CodeText -match '(?im)^\s*Start-Process\s+.*msi') {
-        [void]$lines.Add("- Replace direct msiexec calls with Execute-MSI so install/uninstall actions are standardized.")
-    }
-
-    if ($CodeText -match '(?im)^\s*(Get-Process|Stop-Process)\b') {
-        [void]$lines.Add("- Consider Block-AppExecution for process-handling flows that should align with wrapper behavior.")
-    }
-
-    if ($CodeText -match '(?im)^\s*Remove-Item\b') {
-        [void]$lines.Add("- For directory cleanup, prefer Remove-Folder where appropriate to stay consistent with wrapper cleanup patterns.")
-    }
-
-    if ($CodeText -match '(?im)^\s*(Set-ItemProperty|New-ItemProperty|Remove-ItemProperty)\b') {
-        [void]$lines.Add("- If registry helper cmdlets exist in Globals.ps1 for this action, prefer those for consistency and safer logging.")
-    }
-
-    if ($CodeText -match '(?im)^\s*Write-Host\b') {
-        [void]$lines.Add("- Replace Write-Host with Write-Log so output is captured in deployment logs.")
-    }
-
-    if ($lines.Count -le 4) {
-        [void]$lines.Add("- No obvious wrapper-alignment risks were detected. Validate command intent and error handling manually.")
+    else {
+        [void]$lines.Add("Applied Changes:")
+        [void]$lines.Add("- No automatic wrapper substitutions were required for the submitted lines.")
     }
 
     [void]$lines.Add("")
-    [void]$lines.Add("Top wrapper cmdlets currently detected from Globals.ps1:")
-    [void]$lines.Add((Get-GlobalsCommandPreview))
+    [void]$lines.Add("Copy/Paste Replacement Code:")
+    [void]$lines.Add($rewrittenCode)
+
+    if ($CodeText -match '(?im)^\s*Write-Host\b') {
+        [void]$lines.Add("")
+        [void]$lines.Add("Additional Suggestion:")
+        [void]$lines.Add("- Replace Write-Host with Write-Log so output is captured in deployment logs.")
+    }
 
     return ($lines -join [Environment]::NewLine)
 }
@@ -3905,12 +3960,18 @@ $btnGlobalsAssistantClear.Add_Click({
 })
 
 $btnGlobalsAssistantCopy.Add_Click({
-    if ([string]::IsNullOrWhiteSpace($txtGlobalsAssistantOutput.Text)) {
+    if ([string]::IsNullOrWhiteSpace($txtGlobalsAssistantInput.Text) -and [string]::IsNullOrWhiteSpace($txtGlobalsAssistantOutput.Text)) {
         return
     }
 
     try {
-        [System.Windows.Forms.Clipboard]::SetText($txtGlobalsAssistantOutput.Text)
+        if (-not [string]::IsNullOrWhiteSpace($txtGlobalsAssistantInput.Text)) {
+            $rewriteResult = Get-GlobalsAssistantRewriteResult -CodeText $txtGlobalsAssistantInput.Text
+            [System.Windows.Forms.Clipboard]::SetText([string]$rewriteResult.RewrittenCode)
+        }
+        else {
+            [System.Windows.Forms.Clipboard]::SetText($txtGlobalsAssistantOutput.Text)
+        }
     }
     catch {
     }
