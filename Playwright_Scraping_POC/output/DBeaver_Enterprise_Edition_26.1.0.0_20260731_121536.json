@@ -1,0 +1,347 @@
+﻿[
+    {
+        "Summary":  "User or System installation context",
+        "Title":  "Context Selection",
+        "SectionNumber":  1,
+        "Suggestions":  [
+                            {
+                                "Confidence":  0.86,
+                                "Text":  "$ErrorActionPreference = \u0027Stop\u0027 $toolsDir = \"$(Split-Path -parent $MyInvocation.MyCommand.Definition)\" # Old Camtasia versions can be found at https://www.techsmith.com/download/oldversions $url64 = \u0027https://download.techsmith.com/camtasiastudio/releases/2525/camtasia.msi\u0027 $packageArgs = @{ packageName = $env:ChocolateyPackageName fileType = \u0027MSI\u0027 url64bit = $url64 checksum64 = \u0027af53588939ec33efd48501d015de5d09e3a4fb1c98e1fce1f345bba74911e537\u0027 checksumType64= \u0027sha256\u0027 silentArgs = \"/qn /norestart /l*v `\"$($env:TEMP)\\$($packageName).$($env:chocolateyPackageVersion).MsiInstall.log`\"\" # ALLUSERS=1 DISABLEDESKTOPSHORTCUT=1 ADDDESKTOPICON=0 ADDSTARTMENU=0 validExitCodes= @(0, 3010, 1641) } write-debug \"OS Name: $($env:OS_NAME)\" if ($env:OS_NAME -like \"*Server*\") { throw \"Cannot be installed on a Server operating system ($($env:OS_NAME)).\" } $arguments = Get-PackageParameters -Parameter $env:chocolateyPackageParameters foreach ($param in $arguments.Keys) { switch ($param) { \"licensekey\" { $l",
+                                "Source":  "Chocolatey - Camtasia Package - https://community.chocolatey.org/packages/camtasia",
+                                "Context":  "Extracted from code/pre block",
+                                "SourceType":  "code_block",
+                                "WhySelected":  "source=code_block; is_command=True; hints=context_selection,install_command_line,post_install_commands"
+                            },
+                            {
+                                "Confidence":  0.86,
+                                "Text":  "$ErrorActionPreference = \u0027Stop\u0027 $toolsDir = \"$(Split-Path -parent $MyInvocation.MyCommand.Definition)\" # Old Camtasia versions can be found at https://www.techsmith.com/download/oldversions $url64 = \u0027https://download.techsmith.com/camtasiastudio/releases/2524/camtasia.msi\u0027 $packageArgs = @{ packageName = $env:ChocolateyPackageName fileType = \u0027MSI\u0027 url64bit = $url64 checksum64 = \u00275c03645e6309268a8c3a67e6537ab262f1997af211a6f0f6398e5a9026f3ebcf\u0027 checksumType64= \u0027sha256\u0027 silentArgs = \"/qn /norestart /l*v `\"$($env:TEMP)\\$($packageName).$($env:chocolateyPackageVersion).MsiInstall.log`\"\" # ALLUSERS=1 DISABLEDESKTOPSHORTCUT=1 ADDDESKTOPICON=0 ADDSTARTMENU=0 validExitCodes= @(0, 3010, 1641) } write-debug \"OS Name: $($env:OS_NAME)\" if ($env:OS_NAME -like \"*Server*\") { throw \"Cannot be installed on a Server operating system ($($env:OS_NAME)).\" } $arguments = Get-PackageParameters -Parameter $env:chocolateyPackageParameters foreach ($param in $arguments.Keys) { switch ($param) { \"licensekey\" { $l",
+                                "Source":  "Chocolatey - Camtasia Package - https://community.chocolatey.org/packages/camtasia",
+                                "Context":  "Extracted from code/pre block",
+                                "SourceType":  "code_block",
+                                "WhySelected":  "source=code_block; is_command=True; hints=context_selection,install_command_line,post_install_commands"
+                            },
+                            {
+                                "Confidence":  0.86,
+                                "Text":  "$ErrorActionPreference = \u0027Stop\u0027 $toolsDir = \"$(Split-Path -parent $MyInvocation.MyCommand.Definition)\" # Old Camtasia versions can be found at https://www.techsmith.com/download/oldversions $url64 = \u0027https://download.techsmith.com/camtasiastudio/releases/2601/camtasia.msi\u0027 $packageArgs = @{ packageName = $env:ChocolateyPackageName fileType = \u0027MSI\u0027 url64bit = $url64 checksum64 = \u0027eca9daaadaae951835a46d76f781a58e8df43031e03d85823d2c11b356553371\u0027 checksumType64= \u0027sha256\u0027 silentArgs = \"/qn /norestart /l*v `\"$($env:TEMP)\\$($packageName).$($env:chocolateyPackageVersion).MsiInstall.log`\"\" # ALLUSERS=1 DISABLEDESKTOPSHORTCUT=1 ADDDESKTOPICON=0 ADDSTARTMENU=0 validExitCodes= @(0, 3010, 1641) } write-debug \"OS Name: $($env:OS_NAME)\" if ($env:OS_NAME -like \"*Server*\") { throw \"Cannot be installed on a Server operating system ($($env:OS_NAME)).\" } $arguments = Get-PackageParameters -Parameter $env:chocolateyPackageParameters foreach ($param in $arguments.Keys) { switch ($param) { \"licensekey\" { $l",
+                                "Source":  "Chocolatey - Camtasia Package - https://community.chocolatey.org/packages/camtasia",
+                                "Context":  "Extracted from code/pre block",
+                                "SourceType":  "code_block",
+                                "WhySelected":  "source=code_block; is_command=True; hints=context_selection,install_command_line,post_install_commands"
+                            },
+                            {
+                                "Confidence":  0.86,
+                                "Text":  "$ErrorActionPreference = \u0027Stop\u0027 $toolsDir = \"$(Split-Path -parent $MyInvocation.MyCommand.Definition)\" # Old Camtasia versions can be found at https://www.techsmith.com/download/oldversions $url64 = \u0027https://download.techsmith.com/camtasiastudio/releases/2600/camtasia.msi\u0027 $packageArgs = @{ packageName = $env:ChocolateyPackageName fileType = \u0027MSI\u0027 url64bit = $url64 checksum64 = \u0027749fa288b055154c4a7aeab8189b9b710d79b2ef936b0fa02f35e00da44d01be\u0027 checksumType64= \u0027sha256\u0027 silentArgs = \"/qn /norestart /l*v `\"$($env:TEMP)\\$($packageName).$($env:chocolateyPackageVersion).MsiInstall.log`\"\" # ALLUSERS=1 DISABLEDESKTOPSHORTCUT=1 ADDDESKTOPICON=0 ADDSTARTMENU=0 validExitCodes= @(0, 3010, 1641) } write-debug \"OS Name: $($env:OS_NAME)\" if ($env:OS_NAME -like \"*Server*\") { throw \"Cannot be installed on a Server operating system ($($env:OS_NAME)).\" } $arguments = Get-PackageParameters -Parameter $env:chocolateyPackageParameters foreach ($param in $arguments.Keys) { switch ($param) { \"licensekey\" { $l",
+                                "Source":  "Chocolatey - Camtasia Package - https://community.chocolatey.org/packages/camtasia",
+                                "Context":  "Extracted from code/pre block",
+                                "SourceType":  "code_block",
+                                "WhySelected":  "source=code_block; is_command=True; hints=context_selection,install_command_line,post_install_commands"
+                            }
+                        ]
+    },
+    {
+        "Summary":  "Silent installation command line switches",
+        "Title":  "Install Command Line",
+        "SectionNumber":  2,
+        "Suggestions":  [
+                            {
+                                "Confidence":  0.93,
+                                "Text":  "choco upgrade camtasia -y --source=\"\u0027http://internal/odata/repo\u0027\" $exitCode = $LASTEXITCODE Write-Verbose \"Exit code was $exitCode\" $validExitCodes = @(0, 1605, 1614, 1641, 3010) if ($validExitCodes -contains $exitCode) { Exit 0 } Exit $exitCode",
+                                "Source":  "Chocolatey - Camtasia Package - https://community.chocolatey.org/packages/camtasia",
+                                "Context":  "Extracted from code/pre block",
+                                "SourceType":  "code_block",
+                                "WhySelected":  "source=code_block; is_command=True; hints=install_command_line"
+                            },
+                            {
+                                "Confidence":  0.93,
+                                "Text":  "choco upgrade camtasia -y --source=\"\u0027http://internal/odata/repo\u0027\" [other options]",
+                                "Source":  "Chocolatey - Camtasia Package - https://community.chocolatey.org/packages/camtasia",
+                                "Context":  "Extracted from code/pre block",
+                                "SourceType":  "code_block",
+                                "WhySelected":  "source=code_block; is_command=True; hints=install_command_line"
+                            },
+                            {
+                                "Confidence":  0.93,
+                                "Text":  "choco upgrade camtasia -y --source=\"\u0027http://internal/odata/repo\u0027\" --version=\"\u00272026.0.0\u0027\" [other options]",
+                                "Source":  "Chocolatey - Camtasia Package - https://community.chocolatey.org/packages/camtasia",
+                                "Context":  "Extracted from code/pre block",
+                                "SourceType":  "code_block",
+                                "WhySelected":  "source=code_block; is_command=True; hints=install_command_line"
+                            },
+                            {
+                                "Confidence":  0.93,
+                                "Text":  "choco upgrade camtasia -y --source=\"\u0027http://internal/odata/repo\u0027\" --version=\"\u00272026.0.0\u0027\" $exitCode = $LASTEXITCODE Write-Verbose \"Exit code was $exitCode\" $validExitCodes = @(0, 1605, 1614, 1641, 3010) if ($validExitCodes -contains $exitCode) { Exit 0 } Exit $exitCode",
+                                "Source":  "Chocolatey - Camtasia Package - https://community.chocolatey.org/packages/camtasia",
+                                "Context":  "Extracted from code/pre block",
+                                "SourceType":  "code_block",
+                                "WhySelected":  "source=code_block; is_command=True; hints=install_command_line"
+                            },
+                            {
+                                "Confidence":  0.96,
+                                "Text":  "choco upgrade camtasia --version=2025.2.5",
+                                "Source":  "Chocolatey - Camtasia Package - https://community.chocolatey.org/packages/camtasia",
+                                "Context":  "Extracted from HTML input field",
+                                "SourceType":  "input_field",
+                                "WhySelected":  "source=input_field; is_command=True; hints=install_command_line"
+                            },
+                            {
+                                "Confidence":  0.96,
+                                "Text":  "choco install camtasia --version=2025.2.5",
+                                "Source":  "Chocolatey - Camtasia Package - https://community.chocolatey.org/packages/camtasia",
+                                "Context":  "Extracted from HTML input field",
+                                "SourceType":  "input_field",
+                                "WhySelected":  "source=input_field; is_command=True; hints=install_command_line"
+                            },
+                            {
+                                "Confidence":  0.96,
+                                "Text":  "choco install camtasia --version=2025.2.4",
+                                "Source":  "Chocolatey - Camtasia Package - https://community.chocolatey.org/packages/camtasia",
+                                "Context":  "Extracted from HTML input field",
+                                "SourceType":  "input_field",
+                                "WhySelected":  "source=input_field; is_command=True; hints=install_command_line"
+                            }
+                        ]
+    },
+    {
+        "Summary":  "Silent uninstallation switches",
+        "Title":  "Uninstall Command Line",
+        "SectionNumber":  3,
+        "Suggestions":  [
+                            {
+                                "Confidence":  0.31,
+                                "Text":  "Adobe Systems, Inc Adobe Flash Player Uninstall Strings DETAILS",
+                                "Source":  "Silent Install HQ - Camtasia - https://silentinstallhq.com/camtasia-silent-install/",
+                                "Context":  "Adobe Systems, Inc Adobe Dreamweaver Creative Cloud DETAILS | Adobe Systems, Inc Adobe Dynamic Media Classic DETAILS | Adobe Systems, Inc Adobe Flash Player Uninstall Strings DETAILS | Adobe Systems, Inc Adobe Genuine Service Uninstall DETAILS | Adobe Systems, Inc Adobe Illustrator Creative Cloud DETAILS",
+                                "SourceType":  "page_text",
+                                "WhySelected":  "source=page_text; is_command=False; hints=uninstall_command_line"
+                            },
+                            {
+                                "Confidence":  0.96,
+                                "Text":  "choco uninstall camtasia",
+                                "Source":  "Chocolatey - Camtasia Package - https://community.chocolatey.org/packages/camtasia",
+                                "Context":  "Extracted from HTML input field",
+                                "SourceType":  "input_field",
+                                "WhySelected":  "source=input_field; is_command=True; hints=uninstall_command_line"
+                            },
+                            {
+                                "Confidence":  0.31,
+                                "Text":  "FortiClient VPN Install and Uninstall (PSADT v4)",
+                                "Source":  "Silent Install HQ - Camtasia - https://silentinstallhq.com/camtasia-silent-install/",
+                                "Context":  "PSADT, PSADT v4 | Leave a comment | FortiClient VPN Install and Uninstall (PSADT v4) | Published on: May 26, 2026 | Last Updated on: May 29, 2026 by Jason Bergner",
+                                "SourceType":  "page_text",
+                                "WhySelected":  "source=page_text; is_command=False; hints=uninstall_command_line"
+                            },
+                            {
+                                "Confidence":  0.31,
+                                "Text":  "This article will serve as an informative guide and give you a clear understanding of how to perform silent or interactive installs and uninstalls of FortiClient VPN using the PowerShell App Deployment Toolkit v4. The PowerShell App Deployment Toolkit (PSADT) is a collection of PowerShell scripts and functions designed to simplify the deployment of software … Read more",
+                                "Source":  "Silent Install HQ - Camtasia - https://silentinstallhq.com/camtasia-silent-install/",
+                                "Context":  "Published on: May 26, 2026 | Last Updated on: May 29, 2026 by Jason Bergner | This article will serve as an informative guide and give you a clear understanding of how to perform silent or interactive installs and uninstalls of FortiClient VPN using the PowerShell App Deployment Toolkit v4. The PowerShell App Deployment Toolkit (PSADT) is a collection of PowerShell scripts and functions designed to simplify the deployment of software … Read more | Categories",
+                                "SourceType":  "page_text",
+                                "WhySelected":  "source=page_text; is_command=False; hints=uninstall_command_line,install_command_line,custom_install_commands"
+                            },
+                            {
+                                "Confidence":  0.31,
+                                "Text":  "Adobe Systems, Inc Adobe Acrobat Uninstall Strings DETAILS",
+                                "Source":  "Silent Install HQ - Camtasia - https://silentinstallhq.com/camtasia-silent-install/",
+                                "Context":  "Adobe Systems, Inc Adobe Acrobat Creative Cloud DETAILS | Adobe Systems, Inc Adobe Acrobat DC DETAILS | Adobe Systems, Inc Adobe Acrobat Uninstall Strings DETAILS | Adobe Systems, Inc Adobe After Effects Creative Cloud DETAILS | Adobe Systems, Inc Adobe AIR 15 DETAILS",
+                                "SourceType":  "page_text",
+                                "WhySelected":  "source=page_text; is_command=False; hints=uninstall_command_line"
+                            },
+                            {
+                                "Confidence":  0.96,
+                                "Text":  "choco uninstall camtasia --version=2025.2.5",
+                                "Source":  "Chocolatey - Camtasia Package - https://community.chocolatey.org/packages/camtasia",
+                                "Context":  "Extracted from HTML input field",
+                                "SourceType":  "input_field",
+                                "WhySelected":  "source=input_field; is_command=True; hints=uninstall_command_line"
+                            },
+                            {
+                                "Confidence":  0.96,
+                                "Text":  "choco uninstall camtasia --version=2025.2.4",
+                                "Source":  "Chocolatey - Camtasia Package - https://community.chocolatey.org/packages/camtasia",
+                                "Context":  "Extracted from HTML input field",
+                                "SourceType":  "input_field",
+                                "WhySelected":  "source=input_field; is_command=True; hints=uninstall_command_line"
+                            }
+                        ]
+    },
+    {
+        "Summary":  "Location of uninstaller",
+        "Title":  "Uninstall Executable",
+        "SectionNumber":  4,
+        "Suggestions":  [
+                            {
+                                "Confidence":  0.3,
+                                "Text":  "Get-ItemProperty \u0027HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*\u0027 | Where-Object { 4.DisplayName -like \u0027*DBeaver Enterprise Edition*\u0027 } | Select-Object DisplayName, UninstallString",
+                                "Source":  "Local Template",
+                                "Context":  "Template to locate uninstall command",
+                                "SourceType":  "template",
+                                "WhySelected":  "fallback_template"
+                            }
+                        ]
+    },
+    {
+        "Summary":  "PowerShell to run before installation",
+        "Title":  "Pre-Install Commands",
+        "SectionNumber":  5,
+        "Suggestions":  [
+                            {
+                                "Confidence":  0.86,
+                                "Text":  "$ErrorActionPreference = \u0027Stop\u0027 $toolsDir = \"$(Split-Path -parent $MyInvocation.MyCommand.Definition)\" # Old Camtasia versions can be found at https://www.techsmith.com/download/oldversions $url64 = \u0027https://download.techsmith.com/camtasiastudio/releases/2525/camtasia.msi\u0027 $packageArgs = @{ packageName = $env:ChocolateyPackageName fileType = \u0027MSI\u0027 url64bit = $url64 checksum64 = \u0027af53588939ec33efd48501d015de5d09e3a4fb1c98e1fce1f345bba74911e537\u0027 checksumType64= \u0027sha256\u0027 silentArgs = \"/qn /norestart /l*v `\"$($env:TEMP)\\$($packageName).$($env:chocolateyPackageVersion).MsiInstall.log`\"\" # ALLUSERS=1 DISABLEDESKTOPSHORTCUT=1 ADDDESKTOPICON=0 ADDSTARTMENU=0 validExitCodes= @(0, 3010, 1641) } write-debug \"OS Name: $($env:OS_NAME)\" if ($env:OS_NAME -like \"*Server*\") { throw \"Cannot be installed on a Server operating system ($($env:OS_NAME)).\" } $arguments = Get-PackageParameters -Parameter $env:chocolateyPackageParameters foreach ($param in $arguments.Keys) { switch ($param) { \"licensekey\" { $l",
+                                "Source":  "Chocolatey - Camtasia Package - https://community.chocolatey.org/packages/camtasia",
+                                "Context":  "Extracted from code/pre block",
+                                "SourceType":  "code_block",
+                                "WhySelected":  "source=code_block; is_command=True; hints=context_selection,install_command_line,post_install_commands"
+                            },
+                            {
+                                "Confidence":  0.86,
+                                "Text":  "$ErrorActionPreference = \u0027Stop\u0027 $toolsDir = \"$(Split-Path -parent $MyInvocation.MyCommand.Definition)\" # Old Camtasia versions can be found at https://www.techsmith.com/download/oldversions $url64 = \u0027https://download.techsmith.com/camtasiastudio/releases/2524/camtasia.msi\u0027 $packageArgs = @{ packageName = $env:ChocolateyPackageName fileType = \u0027MSI\u0027 url64bit = $url64 checksum64 = \u00275c03645e6309268a8c3a67e6537ab262f1997af211a6f0f6398e5a9026f3ebcf\u0027 checksumType64= \u0027sha256\u0027 silentArgs = \"/qn /norestart /l*v `\"$($env:TEMP)\\$($packageName).$($env:chocolateyPackageVersion).MsiInstall.log`\"\" # ALLUSERS=1 DISABLEDESKTOPSHORTCUT=1 ADDDESKTOPICON=0 ADDSTARTMENU=0 validExitCodes= @(0, 3010, 1641) } write-debug \"OS Name: $($env:OS_NAME)\" if ($env:OS_NAME -like \"*Server*\") { throw \"Cannot be installed on a Server operating system ($($env:OS_NAME)).\" } $arguments = Get-PackageParameters -Parameter $env:chocolateyPackageParameters foreach ($param in $arguments.Keys) { switch ($param) { \"licensekey\" { $l",
+                                "Source":  "Chocolatey - Camtasia Package - https://community.chocolatey.org/packages/camtasia",
+                                "Context":  "Extracted from code/pre block",
+                                "SourceType":  "code_block",
+                                "WhySelected":  "source=code_block; is_command=True; hints=context_selection,install_command_line,post_install_commands"
+                            },
+                            {
+                                "Confidence":  0.86,
+                                "Text":  "$ErrorActionPreference = \u0027Stop\u0027 $toolsDir = \"$(Split-Path -parent $MyInvocation.MyCommand.Definition)\" # Old Camtasia versions can be found at https://www.techsmith.com/download/oldversions $url64 = \u0027https://download.techsmith.com/camtasiastudio/releases/2601/camtasia.msi\u0027 $packageArgs = @{ packageName = $env:ChocolateyPackageName fileType = \u0027MSI\u0027 url64bit = $url64 checksum64 = \u0027eca9daaadaae951835a46d76f781a58e8df43031e03d85823d2c11b356553371\u0027 checksumType64= \u0027sha256\u0027 silentArgs = \"/qn /norestart /l*v `\"$($env:TEMP)\\$($packageName).$($env:chocolateyPackageVersion).MsiInstall.log`\"\" # ALLUSERS=1 DISABLEDESKTOPSHORTCUT=1 ADDDESKTOPICON=0 ADDSTARTMENU=0 validExitCodes= @(0, 3010, 1641) } write-debug \"OS Name: $($env:OS_NAME)\" if ($env:OS_NAME -like \"*Server*\") { throw \"Cannot be installed on a Server operating system ($($env:OS_NAME)).\" } $arguments = Get-PackageParameters -Parameter $env:chocolateyPackageParameters foreach ($param in $arguments.Keys) { switch ($param) { \"licensekey\" { $l",
+                                "Source":  "Chocolatey - Camtasia Package - https://community.chocolatey.org/packages/camtasia",
+                                "Context":  "Extracted from code/pre block",
+                                "SourceType":  "code_block",
+                                "WhySelected":  "source=code_block; is_command=True; hints=context_selection,install_command_line,post_install_commands"
+                            },
+                            {
+                                "Confidence":  0.86,
+                                "Text":  "$ErrorActionPreference = \u0027Stop\u0027 $toolsDir = \"$(Split-Path -parent $MyInvocation.MyCommand.Definition)\" # Old Camtasia versions can be found at https://www.techsmith.com/download/oldversions $url64 = \u0027https://download.techsmith.com/camtasiastudio/releases/2600/camtasia.msi\u0027 $packageArgs = @{ packageName = $env:ChocolateyPackageName fileType = \u0027MSI\u0027 url64bit = $url64 checksum64 = \u0027749fa288b055154c4a7aeab8189b9b710d79b2ef936b0fa02f35e00da44d01be\u0027 checksumType64= \u0027sha256\u0027 silentArgs = \"/qn /norestart /l*v `\"$($env:TEMP)\\$($packageName).$($env:chocolateyPackageVersion).MsiInstall.log`\"\" # ALLUSERS=1 DISABLEDESKTOPSHORTCUT=1 ADDDESKTOPICON=0 ADDSTARTMENU=0 validExitCodes= @(0, 3010, 1641) } write-debug \"OS Name: $($env:OS_NAME)\" if ($env:OS_NAME -like \"*Server*\") { throw \"Cannot be installed on a Server operating system ($($env:OS_NAME)).\" } $arguments = Get-PackageParameters -Parameter $env:chocolateyPackageParameters foreach ($param in $arguments.Keys) { switch ($param) { \"licensekey\" { $l",
+                                "Source":  "Chocolatey - Camtasia Package - https://community.chocolatey.org/packages/camtasia",
+                                "Context":  "Extracted from code/pre block",
+                                "SourceType":  "code_block",
+                                "WhySelected":  "source=code_block; is_command=True; hints=context_selection,install_command_line,post_install_commands"
+                            }
+                        ]
+    },
+    {
+        "Summary":  "PowerShell to run during installation",
+        "Title":  "Custom Install Commands",
+        "SectionNumber":  6,
+        "Suggestions":  [
+                            {
+                                "Confidence":  0.31,
+                                "Text":  "This article will serve as an informative guide and give you a clear understanding of how to perform silent or interactive installs and uninstalls of GlobalProtect using the PowerShell App Deployment Toolkit v4. The PowerShell App Deployment Toolkit (PSADT) is a collection of PowerShell scripts and functions designed to simplify the deployment of software applications. … Read more",
+                                "Source":  "Silent Install HQ - Camtasia - https://silentinstallhq.com/camtasia-silent-install/",
+                                "Context":  "Published on: May 28, 2026 | Last Updated on: May 29, 2026 by Jason Bergner | This article will serve as an informative guide and give you a clear understanding of how to perform silent or interactive installs and uninstalls of GlobalProtect using the PowerShell App Deployment Toolkit v4. The PowerShell App Deployment Toolkit (PSADT) is a collection of PowerShell scripts and functions designed to simplify the deployment of software applications. … Read more | Categories",
+                                "SourceType":  "page_text",
+                                "WhySelected":  "source=page_text; is_command=False; hints=uninstall_command_line,install_command_line,custom_install_commands"
+                            },
+                            {
+                                "Confidence":  0.31,
+                                "Text":  "This article will serve as an informative guide and give you a clear understanding of how to perform silent or interactive installs and uninstalls of Cisco AnyConnect using the PowerShell App Deployment Toolkit v4. The PowerShell App Deployment Toolkit (PSADT) is a collection of PowerShell scripts and functions designed to simplify the deployment of software … Read more",
+                                "Source":  "Silent Install HQ - Camtasia - https://silentinstallhq.com/camtasia-silent-install/",
+                                "Context":  "Published on: May 29, 2026 | Last Updated on: May 30, 2026 by Jason Bergner | This article will serve as an informative guide and give you a clear understanding of how to perform silent or interactive installs and uninstalls of Cisco AnyConnect using the PowerShell App Deployment Toolkit v4. The PowerShell App Deployment Toolkit (PSADT) is a collection of PowerShell scripts and functions designed to simplify the deployment of software … Read more | Categories",
+                                "SourceType":  "page_text",
+                                "WhySelected":  "source=page_text; is_command=False; hints=uninstall_command_line,install_command_line,custom_install_commands"
+                            },
+                            {
+                                "Confidence":  0.31,
+                                "Text":  "This article will serve as an informative guide and give you a clear understanding of how to perform silent or interactive installs and uninstalls of Cisco Secure Client using the PowerShell App Deployment Toolkit v4. The PowerShell App Deployment Toolkit (PSADT) is a collection of PowerShell scripts and functions designed to simplify the deployment of … Read more",
+                                "Source":  "Silent Install HQ - Camtasia - https://silentinstallhq.com/camtasia-silent-install/",
+                                "Context":  "Published on: June 1, 2026 | Last Updated on: June 2, 2026 by Jason Bergner | This article will serve as an informative guide and give you a clear understanding of how to perform silent or interactive installs and uninstalls of Cisco Secure Client using the PowerShell App Deployment Toolkit v4. The PowerShell App Deployment Toolkit (PSADT) is a collection of PowerShell scripts and functions designed to simplify the deployment of … Read more | Categories",
+                                "SourceType":  "page_text",
+                                "WhySelected":  "source=page_text; is_command=False; hints=uninstall_command_line,install_command_line,custom_install_commands"
+                            },
+                            {
+                                "Confidence":  0.31,
+                                "Text":  "This article will serve as an informative guide and give you a clear understanding of how to perform silent or interactive installs and uninstalls of FortiClient VPN using the PowerShell App Deployment Toolkit v4. The PowerShell App Deployment Toolkit (PSADT) is a collection of PowerShell scripts and functions designed to simplify the deployment of software … Read more",
+                                "Source":  "Silent Install HQ - Camtasia - https://silentinstallhq.com/camtasia-silent-install/",
+                                "Context":  "Published on: May 26, 2026 | Last Updated on: May 29, 2026 by Jason Bergner | This article will serve as an informative guide and give you a clear understanding of how to perform silent or interactive installs and uninstalls of FortiClient VPN using the PowerShell App Deployment Toolkit v4. The PowerShell App Deployment Toolkit (PSADT) is a collection of PowerShell scripts and functions designed to simplify the deployment of software … Read more | Categories",
+                                "SourceType":  "page_text",
+                                "WhySelected":  "source=page_text; is_command=False; hints=uninstall_command_line,install_command_line,custom_install_commands"
+                            },
+                            {
+                                "Confidence":  0.31,
+                                "Text":  "Silent Install HQ Custom Detection Scripts DETAILS",
+                                "Source":  "Silent Install HQ - Camtasia - https://silentinstallhq.com/camtasia-silent-install/",
+                                "Context":  "Post Link | Silent Install HQ PowerShell Scripts DETAILS | Silent Install HQ Custom Detection Scripts DETAILS | Microsoft Corporation .NET Core Desktop Runtime 3.0 DETAILS | Microsoft Corporation .NET Core Desktop Runtime 3.1 DETAILS",
+                                "SourceType":  "page_text",
+                                "WhySelected":  "source=page_text; is_command=False; hints=install_command_line,custom_install_commands"
+                            },
+                            {
+                                "Confidence":  0.31,
+                                "Text":  "Silent Install HQ PowerShell Scripts DETAILS",
+                                "Source":  "Silent Install HQ - Camtasia - https://silentinstallhq.com/camtasia-silent-install/",
+                                "Context":  "Software Title | Post Link | Silent Install HQ PowerShell Scripts DETAILS | Silent Install HQ Custom Detection Scripts DETAILS | Microsoft Corporation .NET Core Desktop Runtime 3.0 DETAILS",
+                                "SourceType":  "page_text",
+                                "WhySelected":  "source=page_text; is_command=False; hints=install_command_line,custom_install_commands"
+                            },
+                            {
+                                "Confidence":  0.31,
+                                "Text":  "PowerShell Scripts",
+                                "Source":  "Silent Install HQ - Camtasia - https://silentinstallhq.com/camtasia-silent-install/",
+                                "Context":  "Skip to content | Search KB | PowerShell Scripts | Detection Scripts | About Jason",
+                                "SourceType":  "page_text",
+                                "WhySelected":  "source=page_text; is_command=False; hints=custom_install_commands"
+                            }
+                        ]
+    },
+    {
+        "Summary":  "PowerShell to run after installation",
+        "Title":  "Post-Install Commands",
+        "SectionNumber":  7,
+        "Suggestions":  [
+                            {
+                                "Confidence":  0.86,
+                                "Text":  "$ErrorActionPreference = \u0027Stop\u0027 $toolsDir = \"$(Split-Path -parent $MyInvocation.MyCommand.Definition)\" # Old Camtasia versions can be found at https://www.techsmith.com/download/oldversions $url64 = \u0027https://download.techsmith.com/camtasiastudio/releases/2525/camtasia.msi\u0027 $packageArgs = @{ packageName = $env:ChocolateyPackageName fileType = \u0027MSI\u0027 url64bit = $url64 checksum64 = \u0027af53588939ec33efd48501d015de5d09e3a4fb1c98e1fce1f345bba74911e537\u0027 checksumType64= \u0027sha256\u0027 silentArgs = \"/qn /norestart /l*v `\"$($env:TEMP)\\$($packageName).$($env:chocolateyPackageVersion).MsiInstall.log`\"\" # ALLUSERS=1 DISABLEDESKTOPSHORTCUT=1 ADDDESKTOPICON=0 ADDSTARTMENU=0 validExitCodes= @(0, 3010, 1641) } write-debug \"OS Name: $($env:OS_NAME)\" if ($env:OS_NAME -like \"*Server*\") { throw \"Cannot be installed on a Server operating system ($($env:OS_NAME)).\" } $arguments = Get-PackageParameters -Parameter $env:chocolateyPackageParameters foreach ($param in $arguments.Keys) { switch ($param) { \"licensekey\" { $l",
+                                "Source":  "Chocolatey - Camtasia Package - https://community.chocolatey.org/packages/camtasia",
+                                "Context":  "Extracted from code/pre block",
+                                "SourceType":  "code_block",
+                                "WhySelected":  "source=code_block; is_command=True; hints=context_selection,install_command_line,post_install_commands"
+                            },
+                            {
+                                "Confidence":  0.86,
+                                "Text":  "$ErrorActionPreference = \u0027Stop\u0027 $toolsDir = \"$(Split-Path -parent $MyInvocation.MyCommand.Definition)\" # Old Camtasia versions can be found at https://www.techsmith.com/download/oldversions $url64 = \u0027https://download.techsmith.com/camtasiastudio/releases/2524/camtasia.msi\u0027 $packageArgs = @{ packageName = $env:ChocolateyPackageName fileType = \u0027MSI\u0027 url64bit = $url64 checksum64 = \u00275c03645e6309268a8c3a67e6537ab262f1997af211a6f0f6398e5a9026f3ebcf\u0027 checksumType64= \u0027sha256\u0027 silentArgs = \"/qn /norestart /l*v `\"$($env:TEMP)\\$($packageName).$($env:chocolateyPackageVersion).MsiInstall.log`\"\" # ALLUSERS=1 DISABLEDESKTOPSHORTCUT=1 ADDDESKTOPICON=0 ADDSTARTMENU=0 validExitCodes= @(0, 3010, 1641) } write-debug \"OS Name: $($env:OS_NAME)\" if ($env:OS_NAME -like \"*Server*\") { throw \"Cannot be installed on a Server operating system ($($env:OS_NAME)).\" } $arguments = Get-PackageParameters -Parameter $env:chocolateyPackageParameters foreach ($param in $arguments.Keys) { switch ($param) { \"licensekey\" { $l",
+                                "Source":  "Chocolatey - Camtasia Package - https://community.chocolatey.org/packages/camtasia",
+                                "Context":  "Extracted from code/pre block",
+                                "SourceType":  "code_block",
+                                "WhySelected":  "source=code_block; is_command=True; hints=context_selection,install_command_line,post_install_commands"
+                            },
+                            {
+                                "Confidence":  0.86,
+                                "Text":  "$ErrorActionPreference = \u0027Stop\u0027 $toolsDir = \"$(Split-Path -parent $MyInvocation.MyCommand.Definition)\" # Old Camtasia versions can be found at https://www.techsmith.com/download/oldversions $url64 = \u0027https://download.techsmith.com/camtasiastudio/releases/2601/camtasia.msi\u0027 $packageArgs = @{ packageName = $env:ChocolateyPackageName fileType = \u0027MSI\u0027 url64bit = $url64 checksum64 = \u0027eca9daaadaae951835a46d76f781a58e8df43031e03d85823d2c11b356553371\u0027 checksumType64= \u0027sha256\u0027 silentArgs = \"/qn /norestart /l*v `\"$($env:TEMP)\\$($packageName).$($env:chocolateyPackageVersion).MsiInstall.log`\"\" # ALLUSERS=1 DISABLEDESKTOPSHORTCUT=1 ADDDESKTOPICON=0 ADDSTARTMENU=0 validExitCodes= @(0, 3010, 1641) } write-debug \"OS Name: $($env:OS_NAME)\" if ($env:OS_NAME -like \"*Server*\") { throw \"Cannot be installed on a Server operating system ($($env:OS_NAME)).\" } $arguments = Get-PackageParameters -Parameter $env:chocolateyPackageParameters foreach ($param in $arguments.Keys) { switch ($param) { \"licensekey\" { $l",
+                                "Source":  "Chocolatey - Camtasia Package - https://community.chocolatey.org/packages/camtasia",
+                                "Context":  "Extracted from code/pre block",
+                                "SourceType":  "code_block",
+                                "WhySelected":  "source=code_block; is_command=True; hints=context_selection,install_command_line,post_install_commands"
+                            },
+                            {
+                                "Confidence":  0.86,
+                                "Text":  "$ErrorActionPreference = \u0027Stop\u0027 $toolsDir = \"$(Split-Path -parent $MyInvocation.MyCommand.Definition)\" # Old Camtasia versions can be found at https://www.techsmith.com/download/oldversions $url64 = \u0027https://download.techsmith.com/camtasiastudio/releases/2600/camtasia.msi\u0027 $packageArgs = @{ packageName = $env:ChocolateyPackageName fileType = \u0027MSI\u0027 url64bit = $url64 checksum64 = \u0027749fa288b055154c4a7aeab8189b9b710d79b2ef936b0fa02f35e00da44d01be\u0027 checksumType64= \u0027sha256\u0027 silentArgs = \"/qn /norestart /l*v `\"$($env:TEMP)\\$($packageName).$($env:chocolateyPackageVersion).MsiInstall.log`\"\" # ALLUSERS=1 DISABLEDESKTOPSHORTCUT=1 ADDDESKTOPICON=0 ADDSTARTMENU=0 validExitCodes= @(0, 3010, 1641) } write-debug \"OS Name: $($env:OS_NAME)\" if ($env:OS_NAME -like \"*Server*\") { throw \"Cannot be installed on a Server operating system ($($env:OS_NAME)).\" } $arguments = Get-PackageParameters -Parameter $env:chocolateyPackageParameters foreach ($param in $arguments.Keys) { switch ($param) { \"licensekey\" { $l",
+                                "Source":  "Chocolatey - Camtasia Package - https://community.chocolatey.org/packages/camtasia",
+                                "Context":  "Extracted from code/pre block",
+                                "SourceType":  "code_block",
+                                "WhySelected":  "source=code_block; is_command=True; hints=context_selection,install_command_line,post_install_commands"
+                            }
+                        ]
+    },
+    {
+        "Summary":  "PowerShell to run before uninstallation",
+        "Title":  "Pre-Uninstall Commands",
+        "SectionNumber":  8,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "PowerShell to run during uninstallation",
+        "Title":  "Custom Uninstall Commands",
+        "SectionNumber":  9,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "PowerShell to run after uninstallation",
+        "Title":  "Post-Uninstall Commands",
+        "SectionNumber":  10,
+        "Suggestions":  [
+
+                        ]
+    }
+]
