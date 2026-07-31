@@ -4,6 +4,12 @@
     <meta charset="UTF-8">
     <title>Installation Validation Document</title>
     <style>
+        :root {
+            --heading-blue: #2E74B5;
+            --subtitle-gray: #5A5A5A;
+            --table-border: #cfcfcf;
+            --soft-gray: #f3f3f3;
+        }
         body {
             font-family: 'Segoe UI', Arial, sans-serif;
             max-width: 800px;
@@ -11,18 +17,19 @@
             padding: 20px;
             line-height: 1.6;
             color: #000;
+            background: #fff;
         }
         .title {
             text-align: center;
             font-size: 32px;
             font-weight: bold;
-            color: #7030A0;
+            color: #1f1f1f;
             margin-bottom: 10px;
         }
         .subtitle {
             text-align: center;
             font-size: 20px;
-            color: #404040;
+            color: var(--subtitle-gray);
             margin-bottom: 30px;
         }
         .metadata-table {
@@ -31,12 +38,13 @@
             margin: 30px 0;
         }
         .metadata-table td {
-            border: 1px solid #ccc;
+            border: 1px solid var(--table-border);
             padding: 10px;
+            vertical-align: top;
         }
         .metadata-table td:first-child {
             font-weight: bold;
-            background-color: #f0f0f0;
+            background-color: var(--soft-gray);
             width: 200px;
         }
         .status-pass {
@@ -46,16 +54,16 @@
         h1 {
             font-size: 20px;
             font-weight: bold;
-            color: #2E75B6;
+            color: var(--heading-blue);
             margin-top: 40px;
             margin-bottom: 15px;
-            border-bottom: 2px solid #2E75B6;
+            border-bottom: 2px solid var(--heading-blue);
             padding-bottom: 5px;
         }
         h2 {
             font-size: 16px;
             font-weight: bold;
-            color: #000;
+            color: var(--heading-blue);
             margin-top: 25px;
             margin-bottom: 10px;
         }
@@ -66,7 +74,7 @@
         .figure-container img {
             max-width: 100%;
             height: auto;
-            border: 1px solid #ccc;
+            border: 1px solid var(--table-border);
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
         .figure-caption {
@@ -83,31 +91,95 @@
             margin: 20px 0;
             padding: 40px;
             background-color: #f9f9f9;
-            border: 1px dashed #ccc;
+            border: 1px dashed var(--table-border);
         }
         .details-table {
             width: 100%;
             border-collapse: collapse;
             margin: 15px 0;
+            table-layout: fixed;
         }
         .details-table td {
-            border: 1px solid #ccc;
+            border: 1px solid var(--table-border);
             padding: 8px;
+            vertical-align: top;
+            word-wrap: break-word;
         }
         .details-table td:first-child {
             font-weight: bold;
-            background-color: #f0f0f0;
+            background-color: var(--soft-gray);
             width: 250px;
         }
         .code-block {
-            background-color: #f0f0f0;
+            background-color: var(--soft-gray);
             padding: 10px;
             font-family: 'Consolas', 'Courier New', monospace;
             font-size: 11px;
-            border: 1px solid #ccc;
+            border: 1px solid var(--table-border);
             margin: 10px 0;
+            white-space: pre-wrap;
+            word-break: break-word;
         }
         .checkmark { color: #00B050; }
+
+        @page {
+            size: auto;
+            margin: 0.6in;
+        }
+
+        @media print {
+            body {
+                max-width: none;
+                margin: 0;
+                padding: 0;
+                font-size: 11pt;
+                line-height: 1.45;
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
+
+            .title {
+                font-size: 24pt;
+                margin-bottom: 4pt;
+            }
+
+            .subtitle {
+                font-size: 14pt;
+                margin-bottom: 14pt;
+            }
+
+            h1, h2 {
+                break-after: avoid-page;
+            }
+
+            h1 {
+                font-size: 15pt;
+                margin-top: 18pt;
+                margin-bottom: 8pt;
+            }
+
+            h2 {
+                font-size: 12pt;
+                margin-top: 12pt;
+                margin-bottom: 6pt;
+            }
+
+            p, ul, table, .figure-container, .figure-placeholder, .code-block {
+                break-inside: avoid-page;
+            }
+
+            table {
+                page-break-inside: avoid;
+            }
+
+            tr, td {
+                page-break-inside: avoid;
+            }
+
+            .figure-container img {
+                box-shadow: none;
+            }
+        }
     </style>
 </head>
 <body>

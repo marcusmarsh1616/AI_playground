@@ -131,6 +131,11 @@ function Build-VersionAwareConfig {
             max_results_per_site = 10
             headless = $true
             user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            follow_secondary_links = $true
+            max_secondary_pages = 4
+            max_candidates_per_page = 30
+            min_confidence = 0.30
+            include_page_text_fallback = $true
         }
     }
     
@@ -182,8 +187,116 @@ function Invoke-Scraper {
     }
 }
 
+function Get-FallbackSuggestions {
+    param(
+        [int]$SectionNumber,
+        [string]$AppName
+    )
+
+    switch ($SectionNumber) {
+        2 {
+            return @(
+                @{Text="$AppName.exe /S"; Context="Template fallback for common EXE silent install"; Source="Local Template"; Confidence=0.30; WhySelected="fallback_template"; SourceType="template"},
+                @{Text="msiexec /i `"$AppName.msi`" /qn /norestart"; Context="Template fallback for MSI silent install"; Source="Local Template"; Confidence=0.30; WhySelected="fallback_template"; SourceType="template"}
+            )
+        }
+        3 {
+            return @(
+                @{Text="msiexec /x {PRODUCT-CODE-GUID} /qn /norestart"; Context="Template fallback for MSI silent uninstall"; Source="Local Template"; Confidence=0.30; WhySelected="fallback_template"; SourceType="template"},
+                @{Text="$AppName.exe /uninstall /S"; Context="Template fallback for EXE uninstall"; Source="Local Template"; Confidence=0.30; WhySelected="fallback_template"; SourceType="template"}
+            )
+        }
+        4 {
+            return @(
+                @{Text="Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' | Where-Object { $_.DisplayName -like '*$AppName*' } | Select-Object DisplayName, UninstallString"; Context="Template to locate uninstall command"; Source="Local Template"; Confidence=0.30; WhySelected="fallback_template"; SourceType="template"}
+            )
+        }
+        5 {
+            return @(
+                @{Text="if (Get-Process -Name '$AppName' -ErrorAction SilentlyContinue) { Stop-Process -Name '$AppName' -Force }"; Context="Template pre-install process cleanup"; Source="Local Template"; Confidence=0.30; WhySelected="fallback_template"; SourceType="template"}
+            )
+        }
+        default {
+            return @()
+        }
+    }
+}
+
+function Get-NormalizedSuggestionKey {
+    param([string]$Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return ""
+    }
+
+    $normalized = $Text.ToLower()
+    $normalized = [regex]::Replace($normalized, "\s+", " ").Trim()
+    return $normalized
+}
+
+function Test-IsLinkOnlyText {
+    param([string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return $true
+    }
+
+    $trimmed = $Text.Trim().ToLower()
+    if ($trimmed -match "^https?://") { return $true }
+    if ($trimmed -match "^www\.") { return $true }
+    if ($trimmed -match "^\S+\.(com|org|net|io|edu|gov)(/\S*)?$" -and $trimmed -notmatch "\s") { return $true }
+
+    return $false
+}
+
+function Add-Suggestion {
+    param(
+        [ref]$Section,
+        $Item,
+        [string]$Source,
+        [double]$DefaultConfidence = 0.40
+    )
+
+    $text = [string]$Item.text
+    $contextValue = [string]$Item.context
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return
+    }
+    if (Test-IsLinkOnlyText -Text $text) {
+        return
+    }
+
+    $confidence = $DefaultConfidence
+    if ($null -ne $Item.confidence) {
+        $confidence = [double]$Item.confidence
+    }
+
+    $whySelected = "pattern_match"
+    if ($null -ne $Item.why_selected -and -not [string]::IsNullOrWhiteSpace([string]$Item.why_selected)) {
+        $whySelected = [string]$Item.why_selected
+    }
+
+    $sourceType = "page_text"
+    if ($null -ne $Item.source_type -and -not [string]::IsNullOrWhiteSpace([string]$Item.source_type)) {
+        $sourceType = [string]$Item.source_type
+    }
+
+    $entry = @{
+        Text = $text
+        Context = $contextValue
+        Source = $Source
+        Confidence = [Math]::Round($confidence, 3)
+        WhySelected = $whySelected
+        SourceType = $sourceType
+    }
+
+    $Section.Value.Suggestions += $entry
+}
+
 function Format-PackageHelperSections {
-    param([array]$ScrapedData)
+    param(
+        [array]$ScrapedData,
+        [string]$AppName
+    )
     
     $sections = @(
         @{SectionNumber=1; Title="Context Selection"; Summary="User or System installation context"; Suggestions=@()}
@@ -198,65 +311,132 @@ function Format-PackageHelperSections {
         @{SectionNumber=10; Title="Post-Uninstall Commands"; Summary="PowerShell to run after uninstallation"; Suggestions=@()}
     )
     
+    $hintToSection = @{
+        context_selection = 1
+        install_command_line = 2
+        uninstall_command_line = 3
+        uninstall_executable = 4
+        pre_install_commands = 5
+        custom_install_commands = 6
+        post_install_commands = 7
+        pre_uninstall_commands = 8
+        custom_uninstall_commands = 9
+        post_uninstall_commands = 10
+    }
+
     foreach ($site in $ScrapedData) {
         if ($site.success) {
             foreach ($item in $site.data) {
-                $matchedLine = $item.text.ToLower()
-                $context = $item.context.ToLower()
+                $matchedLine = ([string]$item.text).ToLower()
+                $context = ([string]$item.context).ToLower()
                 $source = "$($site.site_name) - $($site.url)"
                 
-                # Analyze the ACTUAL CONTENT, not the search term
                 $fullText = "$matchedLine $context"
+
+                # Use section hints from Python first.
+                if ($null -ne $item.section_hints) {
+                    foreach ($hint in @($item.section_hints)) {
+                        if ($hintToSection.ContainsKey([string]$hint)) {
+                            $sectionNumber = [int]$hintToSection[[string]$hint]
+                            $targetSection = $sections[$sectionNumber - 1]
+                            Add-Suggestion -Section ([ref]$targetSection) -Item $item -Source $source
+                            $sections[$sectionNumber - 1] = $targetSection
+                        }
+                    }
+                }
                 
-                # Section 1: Context Selection (ALLUSERS, per-user, per-machine)
                 if ($fullText -match "allusers|per-user|per-machine|context|hkcu|hklm") {
-                    $sections[0].Suggestions += @{Text = $item.text; Context = $context; Source = $source}
+                    $targetSection = $sections[0]
+                    Add-Suggestion -Section ([ref]$targetSection) -Item $item -Source $source
+                    $sections[0] = $targetSection
                 }
                 
-                # Section 3: Uninstall Command Line (must check BEFORE install to avoid false positives)
                 if ($fullText -match "choco uninstall|msiexec.*/x|uninst\.exe" -and $fullText -notmatch "choco install") {
-                    $sections[2].Suggestions += @{Text = $item.text; Context = $context; Source = $source}
+                    $targetSection = $sections[2]
+                    Add-Suggestion -Section ([ref]$targetSection) -Item $item -Source $source
+                    $sections[2] = $targetSection
                 }
                 
-                # Section 2: Install Command Line (switches, command lines)
                 if ($fullText -match "choco install|choco upgrade|/s|/silent|/quiet|/qn|setup\.exe|install\.exe|msiexec.*/i") {
-                    $sections[1].Suggestions += @{Text = $item.text; Context = $context; Source = $source}
+                    $targetSection = $sections[1]
+                    Add-Suggestion -Section ([ref]$targetSection) -Item $item -Source $source
+                    $sections[1] = $targetSection
                 }
                 
-                # Section 4: Uninstall Executable (registry paths, uninstaller locations)
                 if ($fullText -match "uninstall.*registry|hklm.*uninstall|program files.*uninstall|uninst\.exe.*path") {
-                    $sections[3].Suggestions += @{Text = $item.text; Context = $context; Source = $source}
+                    $targetSection = $sections[3]
+                    Add-Suggestion -Section ([ref]$targetSection) -Item $item -Source $source
+                    $sections[3] = $targetSection
                 }
                 
-                # Section 5: Pre-Install Commands (prerequisites, checks, cleanup)
                 if ($fullText -match "prerequisite|requirement|before.*install|pre-install|check.*version|remove.*old") {
-                    $sections[4].Suggestions += @{Text = $item.text; Context = $context; Source = $source}
+                    $targetSection = $sections[4]
+                    Add-Suggestion -Section ([ref]$targetSection) -Item $item -Source $source
+                    $sections[4] = $targetSection
                 }
                 
-                # Section 6: Custom Install Commands (PowerShell during install, MST, transforms)
                 if ($fullText -match "powershell|script|transform|mst|customize|modify.*install") {
-                    $sections[5].Suggestions += @{Text = $item.text; Context = $context; Source = $source}
+                    $targetSection = $sections[5]
+                    Add-Suggestion -Section ([ref]$targetSection) -Item $item -Source $source
+                    $sections[5] = $targetSection
                 }
                 
-                # Section 7: Post-Install Commands (cleanup, shortcuts, settings)
                 if ($fullText -match "after.*install|post-install|cleanup|shortcut|settings|configure") {
-                    $sections[6].Suggestions += @{Text = $item.text; Context = $context; Source = $source}
+                    $targetSection = $sections[6]
+                    Add-Suggestion -Section ([ref]$targetSection) -Item $item -Source $source
+                    $sections[6] = $targetSection
                 }
                 
-                # Section 8: Pre-Uninstall Commands (backup, prep)
                 if ($fullText -match "before.*uninstall|pre-uninstall|backup.*settings") {
-                    $sections[7].Suggestions += @{Text = $item.text; Context = $context; Source = $source}
+                    $targetSection = $sections[7]
+                    Add-Suggestion -Section ([ref]$targetSection) -Item $item -Source $source
+                    $sections[7] = $targetSection
                 }
                 
-                # Section 9: Custom Uninstall Commands (force remove, cleanup)
                 if ($fullText -match "force.*remove|manual.*uninstall|cleanup.*files|remove.*registry") {
-                    $sections[8].Suggestions += @{Text = $item.text; Context = $context; Source = $source}
+                    $targetSection = $sections[8]
+                    Add-Suggestion -Section ([ref]$targetSection) -Item $item -Source $source
+                    $sections[8] = $targetSection
                 }
                 
-                # Section 10: Post-Uninstall Commands (verify removal, final cleanup)
                 if ($fullText -match "after.*uninstall|post-uninstall|verify.*removed|final.*cleanup") {
-                    $sections[9].Suggestions += @{Text = $item.text; Context = $context; Source = $source}
+                    $targetSection = $sections[9]
+                    Add-Suggestion -Section ([ref]$targetSection) -Item $item -Source $source
+                    $sections[9] = $targetSection
                 }
+            }
+        }
+    }
+
+    # Sort by confidence, dedupe by normalized text, and cap list size.
+    for ($i = 0; $i -lt $sections.Count; $i++) {
+        $rawSuggestions = @($sections[$i].Suggestions)
+        $ordered = $rawSuggestions | Sort-Object Confidence -Descending
+        $seen = @{}
+        $deduped = @()
+
+        foreach ($suggestion in $ordered) {
+            $key = Get-NormalizedSuggestionKey -Text ([string]$suggestion.Text)
+            if ([string]::IsNullOrWhiteSpace($key)) {
+                continue
+            }
+            if ($seen.ContainsKey($key)) {
+                continue
+            }
+            $seen[$key] = $true
+            $deduped += $suggestion
+            if ($deduped.Count -ge 7) {
+                break
+            }
+        }
+
+        $sections[$i].Suggestions = $deduped
+
+        # Critical sections get deterministic fallback templates.
+        if ($sections[$i].Suggestions.Count -eq 0 -and $sections[$i].SectionNumber -in @(2, 3, 4, 5)) {
+            $fallbacks = Get-FallbackSuggestions -SectionNumber $sections[$i].SectionNumber -AppName $AppName
+            foreach ($fallback in $fallbacks) {
+                $sections[$i].Suggestions += $fallback
             }
         }
     }
@@ -282,8 +462,13 @@ function Show-Results {
             Write-Host "  Suggestions Found: $($section.Suggestions.Count)" -ForegroundColor Green
             for ($i = 0; $i -lt [Math]::Min(5, $section.Suggestions.Count); $i++) {
                 $suggestion = $section.Suggestions[$i]
+                $confidenceLabel = "n/a"
+                if ($null -ne $suggestion.Confidence) {
+                    $confidenceLabel = [string]$suggestion.Confidence
+                }
                 Write-Host "  [$($i + 1)] $($suggestion.Text)" -ForegroundColor White
                 Write-Host "      Source: $($suggestion.Source)" -ForegroundColor DarkGray
+                Write-Host "      Confidence: $confidenceLabel" -ForegroundColor DarkGray
             }
             if ($section.Suggestions.Count -gt 5) {
                 Write-Host "  ... and $($section.Suggestions.Count - 5) more" -ForegroundColor DarkGray
@@ -346,7 +531,12 @@ Write-Host ""
 
 # Step 5: Format results
 Write-Host "[STEP 5] Formatting results for Package Helper..." -ForegroundColor Cyan
-$sections = Format-PackageHelperSections -ScrapedData $scrapedData
+$sections = Format-PackageHelperSections -ScrapedData $scrapedData -AppName $metadata.ProductName
+
+Write-Log "Section coverage summary:"
+foreach ($section in $sections) {
+    Write-Log "Section $($section.SectionNumber) [$($section.Title)] suggestions: $($section.Suggestions.Count)"
+}
 
 # Step 6: Save and display
 $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"

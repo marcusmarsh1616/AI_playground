@@ -1,0 +1,27 @@
+{
+  "report_name": "Installation Validation Report",
+  "version": "1.0",
+  "template": "Templates/Professional-Validation-Template.html",
+  "output_directory": "Reports",
+  "placeholder_contract": {
+    "metadata": [
+      "Application Name",
+      "Version",
+      "Ticket Number",
+      "Validated By",
+      "Validation Date",
+      "Operating System",
+      "Status"
+    ],
+    "screenshot": [
+      "Installation Progress Dialog",
+      "Programs and Features Entry",
+      "Start Menu Shortcuts"
+    ]
+  },
+  "capture_stages": {
+    "Installation Progress Dialog": "during_installation",
+    "Programs and Features Entry": "post_install",
+    "Start Menu Shortcuts": "post_install"
+  }
+}

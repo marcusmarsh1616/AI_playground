@@ -61,6 +61,9 @@ param(
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $projectRoot = Split-Path -Parent $scriptRoot
 
+# Load report generator script so its function is available
+. (Join-Path $scriptRoot "New-ValidationReport.ps1")
+
 # Import modules
 Import-Module (Join-Path $scriptRoot "Modules\InstallerAnalysis.psm1") -Force
 Import-Module (Join-Path $scriptRoot "Modules\CacheManagement.psm1") -Force

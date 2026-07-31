@@ -18,7 +18,7 @@
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory=$false)]
     [hashtable]$Data,
     
     [Parameter(Mandatory=$false)]
@@ -31,7 +31,16 @@ function New-ValidationReport {
         [string]$OutputPath
     )
     
-    $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $scriptPath = $MyInvocation.MyCommand.Path
+    if (-not $scriptPath) {
+        $scriptPath = $PSCommandPath
+    }
+
+    if (-not $scriptPath) {
+        $scriptPath = Join-Path $PSScriptRoot "New-ValidationReport.ps1"
+    }
+
+    $scriptRoot = Split-Path -Parent $scriptPath
     $projectRoot = Split-Path -Parent $scriptRoot
     $templatePath = Join-Path $projectRoot "Templates\Professional-Validation-Template.html"
     
@@ -118,5 +127,9 @@ function New-ValidationReport {
 
 # If run directly
 if ($MyInvocation.InvocationName -ne '.') {
+    if (-not $Data) {
+        throw "Data parameter is required when executing this script directly."
+    }
+
     New-ValidationReport -Data $Data -OutputPath $OutputPath
 }

@@ -1,0 +1,102 @@
+{
+  "report_type": "installation_validation",
+  "version": "1.0",
+  "placeholders": [
+    {
+      "id": "application_name",
+      "type": "metadata",
+      "section": "header",
+      "label": "Application Name",
+      "description": "Full application name as it should appear in the report header.",
+      "required": true,
+      "default_value": "[Application Name]"
+    },
+    {
+      "id": "application_version",
+      "type": "metadata",
+      "section": "header",
+      "label": "Application Version",
+      "description": "Version number to display in the report title.",
+      "required": true,
+      "default_value": "[Version]"
+    },
+    {
+      "id": "ticket_number",
+      "type": "metadata",
+      "section": "header",
+      "label": "Ticket Number",
+      "description": "Work item or ticket identifier associated with this validation.",
+      "required": false,
+      "default_value": "[TT#####]"
+    },
+    {
+      "id": "validated_by",
+      "type": "metadata",
+      "section": "header",
+      "label": "Validated By",
+      "description": "Person who performed or approved the validation.",
+      "required": false,
+      "default_value": "[Tech Name]"
+    },
+    {
+      "id": "validation_date",
+      "type": "metadata",
+      "section": "header",
+      "label": "Validation Date",
+      "description": "Date the validation was completed or reviewed.",
+      "required": false,
+      "default_value": "[Date]"
+    },
+    {
+      "id": "operating_system",
+      "type": "metadata",
+      "section": "header",
+      "label": "Operating System",
+      "description": "Operating system used for validation.",
+      "required": false,
+      "default_value": "[OS Version]"
+    },
+    {
+      "id": "report_status",
+      "type": "metadata",
+      "section": "header",
+      "label": "Status",
+      "description": "Final validation result, typically PASSED or FAILED.",
+      "required": false,
+      "default_value": "PASSED"
+    },
+    {
+      "id": "installation_progress_dialog",
+      "type": "screenshot",
+      "section": "installation_process",
+      "label": "Installation Progress Dialog",
+      "description": "Capture the installer progress window while the install is actively running.",
+      "required": false,
+      "capture_stage": "during_installation",
+      "capture_instruction": "Capture after the installer begins and while progress is visible, before completion.",
+      "expected_filename": "{application_slug}_installation_progress.png"
+    },
+    {
+      "id": "programs_and_features_entry",
+      "type": "screenshot",
+      "section": "post_install_validation",
+      "label": "Programs and Features Entry",
+      "description": "Capture the entry in Programs and Features after installation completes.",
+      "required": false,
+      "capture_stage": "post_install",
+      "capture_instruction": "Capture the installed app entry in Programs and Features once installation is complete.",
+      "expected_filename": "{application_slug}_programs_and_features.png"
+    },
+    {
+      "id": "start_menu_shortcuts",
+      "type": "screenshot",
+      "section": "post_install_validation",
+      "label": "Start Menu Shortcuts",
+      "description": "Capture the Start Menu shortcuts created by the installation.",
+      "required": false,
+      "capture_stage": "post_install",
+      "capture_instruction": "Capture the Start Menu or application shortcuts after installation is complete.",
+      "expected_filename": "{application_slug}_start_menu_shortcuts.png"
+    }
+  ]
+}
