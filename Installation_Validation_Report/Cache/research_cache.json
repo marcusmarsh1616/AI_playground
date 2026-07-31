@@ -1,5 +1,19 @@
-﻿{
+{
   "_description": "Research results cache - Auto-populated during validation",
   "_version": "1.0.0",
-  "_cache_expiry_days": 30
+  "_cache_expiry_days": 30,
+  "Contoso Demo_1.0": {
+    "success": true,
+    "application": "Contoso Demo",
+    "version": null,
+    "timestamp": "2026-07-31T14:34:41.310317",
+    "source_url": "https://community.chocolatey.org/api/v2/Packages()?$filter=tolower(Id) eq 'contoso-demo'",
+    "research_method": "chocolatey_api",
+    "requirements": {
+      "source": "chocolatey",
+      "raw_data": "<?xml version=\"1.0\" encoding=\"utf-8\" standalone=\"yes\"?>\r\n<feed xml:base=\"http://community.chocolatey.org/api/v2/\" xmlns:d=\"http://schemas.microsoft.com/ado/2007/08/dataservices\" xmlns:m=\"http://schemas.microsoft.com/ado/2007/08/dataservices/metadata\" xmlns=\"http://www.w3.org/2005/Atom\">\r\n  <title type=\"text\">Packages</title>\r\n  <id>http://community.chocolatey.org/api/v2/Packages</id>\r\n  <updated>2026-07-31T18:34:40Z</updated>\r\n  <author>\r\n    <name />\r\n  </author>\r\n  <link rel=\"self\" title=\"Packages\" href=\"Packages\" />\r\n</feed>"
+    },
+    "cached": false,
+    "cached_at": "2026-07-31T14:34:41.311899"
+  }
 }

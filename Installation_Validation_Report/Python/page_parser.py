@@ -16,7 +16,7 @@ class PageParser:
         if patterns_path is None:
             patterns_path = Path(__file__).parent.parent / 'Config' / 'scraping_patterns.json'
         
-        with open(patterns_path, 'r', encoding='utf-8') as f:
+        with open(patterns_path, 'r', encoding='utf-8-sig') as f:
             self.patterns = json.load(f)
     
     def parse_requirements_page(self, html_content, custom_selectors=None):

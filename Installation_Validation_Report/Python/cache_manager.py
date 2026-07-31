@@ -27,7 +27,7 @@ class CacheManager:
         """Load cache from disk"""
         if self.cache_file.exists():
             try:
-                with open(self.cache_file, 'r', encoding='utf-8') as f:
+                with open(self.cache_file, 'r', encoding='utf-8-sig') as f:
                     return json.load(f)
             except Exception as e:
                 print(f"[CACHE WARNING] Failed to load cache: {e}")

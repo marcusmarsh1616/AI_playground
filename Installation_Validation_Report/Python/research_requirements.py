@@ -28,7 +28,7 @@ class RequirementsResearcher:
         self.parser = PageParser()
         
         # Load configuration
-        with open(config_path, 'r', encoding='utf-8') as f:
+        with open(config_path, 'r', encoding='utf-8-sig') as f:
             self.config = json.load(f)
     
     def research_application(self, app_name, version=None):

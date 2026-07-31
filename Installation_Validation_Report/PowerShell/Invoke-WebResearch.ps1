@@ -106,6 +106,15 @@ function Invoke-WebResearch {
     } catch {
         Write-Host "[WARNING] Could not verify Playwright installation" -ForegroundColor Yellow
     }
+
+    try {
+        & $pythonExe -m playwright install chromium | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "[WARNING] Playwright browser install returned a non-zero exit code" -ForegroundColor Yellow
+        }
+    } catch {
+        Write-Host "[WARNING] Playwright browser installation could not be completed: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
     
     # Build command arguments
     $arguments = @($pythonScript, $ApplicationName)
@@ -122,13 +131,10 @@ function Invoke-WebResearch {
     
     # Execute Python script
     try {
-        $process = Start-Process -FilePath $pythonExe `
-                                 -ArgumentList $arguments `
-                                 -NoNewWindow `
-                                 -Wait `
-                                 -PassThru
+        $output = & $pythonExe @arguments 2>&1
+        $exitCode = $LASTEXITCODE
         
-        if ($process.ExitCode -eq 0) {
+        if ($exitCode -eq 0) {
             # Read results
             if (Test-Path $tempOutput) {
                 $jsonContent = Get-Content $tempOutput -Raw -Encoding UTF8
@@ -146,7 +152,10 @@ function Invoke-WebResearch {
                 }
             }
         } else {
-            Write-Host "[ERROR] Python script failed with exit code: $($process.ExitCode)" -ForegroundColor Red
+            Write-Host "[ERROR] Python script failed with exit code: $exitCode" -ForegroundColor Red
+            if ($output) {
+                $output | ForEach-Object { Write-Host $_ -ForegroundColor Yellow }
+            }
             return @{
                 success = $false
                 error = "Python script execution failed"

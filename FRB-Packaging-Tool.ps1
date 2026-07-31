@@ -148,6 +148,7 @@ $script:LastExistingPackageLoadPath = ""
 $script:LastExistingPackageLoadTick = 0
 $script:GlobalsCommandNames = @()
 $script:GlobalsCommandLookup = @{}
+$script:PackageHelperBusyForm = $null
 
 #region Configuration
 
@@ -2700,7 +2701,7 @@ function Apply-PackageHelperSectionToGui {
 }
 
 function Apply-AllPackageHelperSuggestionsToGui {
-    $applyOrder = @("ContextSelection", "InstallCommand", "UninstallCommand", "UninstallExecutable", "PreInstallCommands", "CustomInstallCommands", "PostInstallCommands", "PreUninstallCommands", "CustomUninstallCommands", "PostUninstallCommands")
+    $applyOrder = @("ContextSelection", "UninstallCommand", "UninstallExecutable", "PreUninstallCommands", "CustomUninstallCommands", "PostUninstallCommands", "PreInstallCommands", "CustomInstallCommands", "PostInstallCommands")
     $appliedCount = 0
 
     foreach ($sectionKey in $applyOrder) {
@@ -2765,6 +2766,73 @@ function Set-PackageHelperTabContent {
     }
 }
 
+function Show-PackageHelperBusyDialog {
+    param(
+        [string]$Message = "Package Helper is generating suggestions. This may take up to a minute."
+    )
+
+    try {
+        if ($script:PackageHelperBusyForm -and -not $script:PackageHelperBusyForm.IsDisposed) {
+            $script:PackageHelperBusyForm.Close()
+            $script:PackageHelperBusyForm.Dispose()
+        }
+    }
+    catch {
+    }
+
+    $dialog = New-Object System.Windows.Forms.Form
+    $dialog.Text = "Package Helper"
+    $dialog.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+    $dialog.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterParent
+    $dialog.ControlBox = $false
+    $dialog.MaximizeBox = $false
+    $dialog.MinimizeBox = $false
+    $dialog.ShowInTaskbar = $false
+    $dialog.TopMost = $true
+    $dialog.ClientSize = New-Object System.Drawing.Size(420, 120)
+
+    $lbl = New-Object System.Windows.Forms.Label
+    $lbl.AutoSize = $false
+    $lbl.Location = New-Object System.Drawing.Point(20, 18)
+    $lbl.Size = New-Object System.Drawing.Size(380, 40)
+    $lbl.Text = $Message
+    $lbl.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
+    $dialog.Controls.Add($lbl)
+
+    $bar = New-Object System.Windows.Forms.ProgressBar
+    $bar.Location = New-Object System.Drawing.Point(20, 70)
+    $bar.Size = New-Object System.Drawing.Size(380, 18)
+    $bar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+    $bar.MarqueeAnimationSpeed = 30
+    $dialog.Controls.Add($bar)
+
+    $script:PackageHelperBusyForm = $dialog
+
+    if ($form -and -not $form.IsDisposed) {
+        [void]$dialog.Show($form)
+    }
+    else {
+        [void]$dialog.Show()
+    }
+
+    $dialog.Refresh()
+    [System.Windows.Forms.Application]::DoEvents()
+}
+
+function Close-PackageHelperBusyDialog {
+    try {
+        if ($script:PackageHelperBusyForm -and -not $script:PackageHelperBusyForm.IsDisposed) {
+            $script:PackageHelperBusyForm.Close()
+            $script:PackageHelperBusyForm.Dispose()
+        }
+    }
+    catch {
+    }
+    finally {
+        $script:PackageHelperBusyForm = $null
+    }
+}
+
 function Invoke-PackageHelperGeneration {
     if ([string]::IsNullOrWhiteSpace($txtVendor.Text) -or [string]::IsNullOrWhiteSpace($txtName.Text)) {
         [System.Windows.Forms.MessageBox]::Show(
@@ -2779,6 +2847,8 @@ function Invoke-PackageHelperGeneration {
     if ([string]::IsNullOrWhiteSpace($script:DetectedInstallerType)) {
         $script:DetectedInstallerType = "Generic"
     }
+
+    Show-PackageHelperBusyDialog -Message "Package Helper is generating suggestions. This may take up to a minute."
 
     $isScrapeCandidate = -not [string]::IsNullOrWhiteSpace($script:InstallationMediaPath) -and (Test-Path $script:InstallationMediaPath)
     if ($isScrapeCandidate) {
@@ -2825,6 +2895,9 @@ function Invoke-PackageHelperGeneration {
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Error
         )
+    }
+    finally {
+        Close-PackageHelperBusyDialog
     }
 }
 
@@ -3712,15 +3785,14 @@ $tabPackageHelper.Controls.Add($panelPackageHelper)
 
 $sectionLayout = @(
     @{ Key = "ContextSelection"; Title = "Context Selection" },
-    @{ Key = "InstallCommand"; Title = "Install Command Line" },
     @{ Key = "UninstallCommand"; Title = "Uninstall Command Line" },
     @{ Key = "UninstallExecutable"; Title = "Uninstall Executable" },
-    @{ Key = "PreInstallCommands"; Title = "Pre-Install Commands" },
-    @{ Key = "CustomInstallCommands"; Title = "Custom Install Commands" },
-    @{ Key = "PostInstallCommands"; Title = "Post-Install Commands" },
     @{ Key = "PreUninstallCommands"; Title = "Pre-Uninstall Commands" },
     @{ Key = "CustomUninstallCommands"; Title = "Custom Uninstall Commands" },
-    @{ Key = "PostUninstallCommands"; Title = "Post-Uninstall Commands" }
+    @{ Key = "PostUninstallCommands"; Title = "Post-Uninstall Commands" },
+    @{ Key = "PreInstallCommands"; Title = "Pre-Install Commands" },
+    @{ Key = "CustomInstallCommands"; Title = "Custom Install Commands" },
+    @{ Key = "PostInstallCommands"; Title = "Post-Install Commands" }
 )
 
 $helperTop = 0

@@ -753,6 +753,9 @@ function Get-PlaywrightScrapedPackageHelperSections {
             if ($line -match '(?i)^\s*Write-(Host|Output|Verbose|Debug|Warning|Information|Progress)\b') {
                 continue
             }
+            if ($line -match '(?i)^\s*Write-Log\b') {
+                continue
+            }
             if ($line -match '(?i)^\s*echo\b') {
                 continue
             }
@@ -796,6 +799,10 @@ function Get-PlaywrightScrapedPackageHelperSections {
                 continue
             }
 
+            if ($trimmed -match '(?i)^\s*Write-Log\b') {
+                continue
+            }
+
             if ($trimmed -match '(?i)^\s*echo\b') {
                 continue
             }
@@ -826,7 +833,11 @@ function Get-PlaywrightScrapedPackageHelperSections {
             return $false
         }
 
-        $commandPattern = '(?i)\b(msiexec|choco|winget|setup\.exe|install\.exe|uninstall\.exe|execute-process|execute-msi|start-process|remove-item|get-itemproperty|test-path|stop-process|block-appexecution|show-installationprogress|if\s*\(|foreach\s*\(|\$appInstallCommandLine|\$appUninstallCommandLine|/q[nb]?|/quiet|/silent|--silent|--quiet)\b'
+        if ($sample -match '(?i)\b(choco|winget)\b') {
+            return $false
+        }
+
+        $commandPattern = '(?i)\b(msiexec|setup\.exe|install\.exe|uninstall\.exe|execute-process|execute-msi|start-process|remove-item|get-itemproperty|test-path|stop-process|block-appexecution|show-installationprogress|if\s*\(|foreach\s*\(|\$appInstallCommandLine|\$appUninstallCommandLine|/q[nb]?|/quiet|/silent|--silent|--quiet)\b'
         if ($sample -match $commandPattern) {
             return $true
         }
@@ -918,6 +929,17 @@ function Get-PlaywrightScrapedPackageHelperSections {
         $SectionMap[$SectionNumber] += $Snippet
     }
 
+    function Test-IsPowerShellSnippet {
+        param([string]$Snippet)
+
+        if ([string]::IsNullOrWhiteSpace($Snippet)) {
+            return $false
+        }
+
+        $text = ($Snippet -replace "`r", " " -replace "`n", " ").Trim()
+        return ($text -match '(?i)(^\s*\$[a-z_]|\b(if|foreach|try|catch|Start-|Stop-|Get-|Set-|New-|Remove-|Execute-|Block-|Show-|Unblock-|Test-)\b)')
+    }
+
     foreach ($site in @($parsed)) {
         if (-not $site.success) {
             continue
@@ -929,6 +951,7 @@ function Get-PlaywrightScrapedPackageHelperSections {
             $text = Get-CodeOnlySnippet -Text $text
             if ([string]::IsNullOrWhiteSpace($text)) { continue }
             if (-not (Test-IsUsefulCodeSnippet -Text $text)) { continue }
+            if ($text -match '(?i)\b(choco|winget)\b') { continue }
 
             $fullText = ("{0} {1}" -f [string]$suggestion.text, [string]$suggestion.context).ToLowerInvariant()
             $sectionNumbers = @()
@@ -942,8 +965,8 @@ function Get-PlaywrightScrapedPackageHelperSections {
 
             if ($sectionNumbers.Count -eq 0) {
                 if ($fullText -match 'allusers|per-user|per-machine|hkcu|hklm') { $sectionNumbers += 1 }
-                if ($fullText -match 'msiexec.*/i|/s|/silent|/quiet|/qn|choco install|winget install') { $sectionNumbers += 2 }
-                if ($fullText -match 'msiexec.*/x|uninstall|choco uninstall|winget uninstall') { $sectionNumbers += 3 }
+                if ($fullText -match 'msiexec.*/i|/s|/silent|/quiet|/qn|setup\.exe|install\.exe') { $sectionNumbers += 2 }
+                if ($fullText -match 'msiexec.*/x|uninstall|uninst\.exe') { $sectionNumbers += 3 }
                 if ($fullText -match 'uninst\.exe|uninstallstring|currentversion\\uninstall') { $sectionNumbers += 4 }
                 if ($fullText -match 'prerequisite|before install|pre-install|stop-process|block-appexecution') { $sectionNumbers += 5 }
                 if ($fullText -match 'execute-process|execute-msi|transform|mst|custom install') { $sectionNumbers += 6 }
@@ -954,6 +977,12 @@ function Get-PlaywrightScrapedPackageHelperSections {
             }
 
             foreach ($num in @($sectionNumbers | Select-Object -Unique)) {
+                if (($num -ge 5 -and $num -le 10) -and -not (Test-IsPowerShellSnippet -Snippet $text)) {
+                    continue
+                }
+                if (($num -eq 2 -or $num -eq 3) -and (Test-IsPowerShellSnippet -Snippet $text)) {
+                    continue
+                }
                 Add-ScrapedSnippetToSection -SectionMap $sections -SectionNumber ([int]$num) -Snippet $text
             }
         }
@@ -1436,6 +1465,29 @@ if (`$installContext -eq 'User' -and [Security.Principal.WindowsIdentity]::GetCu
     $customUninstallSuggestions = @($customUninstallSuggestions | Select-Object -Unique)
     $postUninstallSuggestions = @($postUninstallSuggestions | Select-Object -Unique)
 
+    $installCommandSuggestions = @($installCommandSuggestions | Where-Object { $_ -notmatch '(?i)\b(choco|winget)\b' })
+    $uninstallCommandSuggestions = @($uninstallCommandSuggestions | Where-Object { $_ -notmatch '(?i)\b(choco|winget)\b' })
+
+    $cleanSnippet = {
+        param([string]$Value)
+        if ([string]::IsNullOrWhiteSpace($Value)) { return "" }
+        $lines = $Value -split "`r?`n"
+        $kept = @()
+        foreach ($line in $lines) {
+            if ($line -match '(?i)^\s*Write-Log\b') { continue }
+            if ($line -match '(?i)^\s*Write-(Host|Output|Verbose|Debug|Warning|Information|Progress)\b') { continue }
+            $kept += $line
+        }
+        return (($kept -join "`r`n").Trim())
+    }
+
+    $preInstallChecks = @($preInstallChecks | ForEach-Object { & $cleanSnippet $_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $customInstallSuggestions = @($customInstallSuggestions | ForEach-Object { & $cleanSnippet $_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $postInstallSuggestions = @($postInstallSuggestions | ForEach-Object { & $cleanSnippet $_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $preUninstallSuggestions = @($preUninstallSuggestions | ForEach-Object { & $cleanSnippet $_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $customUninstallSuggestions = @($customUninstallSuggestions | ForEach-Object { & $cleanSnippet $_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $postUninstallSuggestions = @($postUninstallSuggestions | ForEach-Object { & $cleanSnippet $_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+
     $contextSelectionSuggestions = @()
     $contextSelectionSuggestions += "Selected Context: $safeContext"
     if ($safeContext -eq "User") {
@@ -1501,14 +1553,9 @@ if (`$installContext -eq 'User' -and [Security.Principal.WindowsIdentity]::GetCu
                 Summary = "Selected install context and detection rationale for $productDisplay."
                 Suggestions = $contextSelectionSuggestions
             }
-            InstallCommand = [ordered]@{
-                Title = "Install Command Line"
-                Summary = "Silent install switch options for $productDisplay ($safeInstallerType). Source-ordered from existing field value, live web lookup, vendor preset, installer defaults, and media hints."
-                Suggestions = $installCommandSuggestions
-            }
             UninstallCommand = [ordered]@{
                 Title = "Uninstall Command Line"
-                Summary = "Silent uninstall switch options for $productDisplay ($safeInstallerType). Source-ordered from existing field value, live web lookup, vendor preset, installer defaults, media hints, and install-switch parity."
+                Summary = "Uninstall command-line switches only for $productDisplay ($safeInstallerType)."
                 Suggestions = $uninstallCommandSuggestions
             }
             UninstallExecutable = [ordered]@{
@@ -1523,27 +1570,27 @@ if (`$installContext -eq 'User' -and [Security.Principal.WindowsIdentity]::GetCu
             }
             CustomInstallCommands = [ordered]@{
                 Title = "Custom Install Commands"
-                Summary = "Wrapper-aware custom install commands for $productDisplay with executable/MSI patterns technicians can actually adapt."
+                Summary = "PowerShell-only custom install commands for $productDisplay."
                 Suggestions = $customInstallSuggestions
             }
             PostInstallCommands = [ordered]@{
                 Title = "Post-Install Commands"
-                Summary = "Wrapper-aware post-install commands for $productDisplay including validation and shell refresh patterns."
+                Summary = "PowerShell-only post-install commands for $productDisplay."
                 Suggestions = $postInstallSuggestions
             }
             PreUninstallCommands = [ordered]@{
                 Title = "Pre-Uninstall Commands"
-                Summary = "Wrapper-aware pre-uninstall commands for $productDisplay using package wrapper cmdlets."
+                Summary = "PowerShell-only pre-uninstall commands for $productDisplay."
                 Suggestions = $preUninstallSuggestions
             }
             CustomUninstallCommands = [ordered]@{
                 Title = "Custom Uninstall Commands"
-                Summary = "Wrapper-aware custom uninstall commands for $productDisplay with MSI or executable examples."
+                Summary = "PowerShell-only custom uninstall commands for $productDisplay."
                 Suggestions = $customUninstallSuggestions
             }
             PostUninstallCommands = [ordered]@{
                 Title = "Post-Uninstall Commands"
-                Summary = "Wrapper-aware post-uninstall cleanup commands for $productDisplay, including machine-scope cleanup patterns."
+                Summary = "PowerShell-only post-uninstall cleanup commands for $productDisplay."
                 Suggestions = $postUninstallSuggestions
             }
         }
