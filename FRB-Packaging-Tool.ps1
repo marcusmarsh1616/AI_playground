@@ -2779,6 +2779,18 @@ function Invoke-PackageHelperGeneration {
         $script:DetectedInstallerType = "Generic"
     }
 
+    $isScrapeCandidate = -not [string]::IsNullOrWhiteSpace($script:InstallationMediaPath) -and (Test-Path $script:InstallationMediaPath)
+    if ($isScrapeCandidate) {
+        if ($script:lblPackageHelperContext) {
+            $script:lblPackageHelperContext.Text = "Package Helper is gathering web-backed suggestions. This may take up to a minute."
+            $script:lblPackageHelperContext.ForeColor = [System.Drawing.Color]::FromArgb(186, 103, 0)
+        }
+        Write-ProcessOutputLine -Message "Package Helper web suggestion lookup started (Playwright-enabled). This may take up to a minute." -Level "WARN"
+    }
+    else {
+        Write-ProcessOutputLine -Message "Package Helper lookup started without installer media path; web scraping source will be skipped." -Level "INFO"
+    }
+
     try {
         $helperData = Get-PackageHelpSections -InstallerType $script:DetectedInstallerType `
                                               -Vendor $txtVendor.Text.Trim() `
@@ -2794,8 +2806,10 @@ function Invoke-PackageHelperGeneration {
 
         Set-PackageHelperTabContent -HelperData $helperData
         $tabControl.SelectedTab = $tabPackageHelper
+        Write-ProcessOutputLine -Message "Package Helper suggestion generation completed." -Level "INFO"
     }
     catch {
+        Write-ProcessOutputLine -Message ("Package Helper generation failed: {0}" -f $_.Exception.Message) -Level "ERROR"
         [System.Windows.Forms.MessageBox]::Show(
             "Failed to generate package helper suggestions.`n`n$($_.Exception.Message)",
             "Package Helper Error",

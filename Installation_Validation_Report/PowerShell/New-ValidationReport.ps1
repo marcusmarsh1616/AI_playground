@@ -62,13 +62,21 @@ function New-ValidationReport {
     $report = $template
     
     # Basic info
-    $appName = $Data.Application
-    $version = if ($Data.Version) { $Data.Version } else { "Unknown" }
-    
+    $appName = if ($Data.Application) { $Data.Application } else { "[Application Name]" }
+    $version = if ($Data.Version) { $Data.Version } else { "[Version]" }
+    $generatedBy = if ($Data.GeneratedBy) { $Data.GeneratedBy } else { "[Tech Name]" }
+    $generatedDate = if ($Data.GeneratedDate) { $Data.GeneratedDate } else { "[Date]" }
+    $ticketNumber = if ($Data.TicketNumber) { $Data.TicketNumber } else { "TTxxxxx" }
+    $osValue = if ($Data.OperatingSystem) { $Data.OperatingSystem } else { "[OS Version]" }
+
     $report = $report -replace '\[Application Name\]', $appName
     $report = $report -replace '\[Version\]', $version
-    $report = $report -replace '\[Tech Name\]', $Data.GeneratedBy
-    $report = $report -replace '\[Date\]', $Data.GeneratedDate
+    $report = $report -replace '\[TT#####\]', $ticketNumber
+    $report = $report -replace '\[Tech Name\]', $generatedBy
+    $report = $report -replace '\[Date\]', $generatedDate
+    $report = $report -replace '\[OS Version\]', $osValue
+    $report = $report -replace '\[Operating System compatibility details\]', $osValue
+    $report = $report -replace '\[Application\]', $appName
     
     # Add web research data if available
     if ($Data.WebResearch -and $Data.WebResearch.success) {

@@ -698,6 +698,127 @@ Write-Log -Message 'User-level leftovers such as AppData or HKCU keys should be 
     }
 }
 
+function Get-PlaywrightScrapedPackageHelperSections {
+    [CmdletBinding()]
+    param(
+        [string]$InstallMediaPath = "",
+        [string]$AppName = ""
+    )
+
+    $emptyResult = @{
+        Success = $false
+        Sections = @{}
+        Error = ""
+    }
+
+    if ([string]::IsNullOrWhiteSpace($InstallMediaPath) -or -not (Test-Path $InstallMediaPath)) {
+        $emptyResult.Error = "Installer media path is missing or not accessible."
+        return $emptyResult
+    }
+
+    $toolRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\..\.."))
+    $scraperScriptPath = Join-Path $toolRoot "Playwright_Scraping_POC\Test-Scraper.ps1"
+    $scraperOutputPath = Join-Path $toolRoot "Playwright_Scraping_POC\output"
+
+    if (-not (Test-Path $scraperScriptPath)) {
+        $emptyResult.Error = "Playwright scraper script was not found."
+        return $emptyResult
+    }
+
+    if (-not (Test-Path $scraperOutputPath)) {
+        $emptyResult.Error = "Playwright output folder was not found."
+        return $emptyResult
+    }
+
+    $runStartedUtc = [DateTime]::UtcNow
+
+    try {
+        & $scraperScriptPath -InstallerPath $InstallMediaPath | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            $emptyResult.Error = "Playwright scraper exited with code $LASTEXITCODE."
+            return $emptyResult
+        }
+    }
+    catch {
+        $emptyResult.Error = "Playwright scraper execution failed: $($_.Exception.Message)"
+        return $emptyResult
+    }
+
+    $latestOutput = Get-ChildItem -Path $scraperOutputPath -Filter "*.json" -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTimeUtc -Descending |
+        Select-Object -First 1
+
+    if (-not $latestOutput) {
+        $emptyResult.Error = "No Playwright output JSON file was found."
+        return $emptyResult
+    }
+
+    if ($latestOutput.LastWriteTimeUtc -lt $runStartedUtc.AddMinutes(-2)) {
+        $emptyResult.Error = "Latest Playwright output appears stale."
+        return $emptyResult
+    }
+
+    try {
+        $json = Get-Content -Path $latestOutput.FullName -Raw -Encoding UTF8
+        $parsed = $json | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        $emptyResult.Error = "Failed to parse Playwright output JSON: $($_.Exception.Message)"
+        return $emptyResult
+    }
+
+    $sections = @{}
+    foreach ($section in @($parsed)) {
+        $sectionNumber = 0
+        try { $sectionNumber = [int]$section.SectionNumber } catch { $sectionNumber = 0 }
+        if ($sectionNumber -lt 1 -or $sectionNumber -gt 10) {
+            continue
+        }
+
+        $formattedSuggestions = @()
+        foreach ($suggestion in @($section.Suggestions)) {
+            if (-not $suggestion) { continue }
+            $text = [string]$suggestion.Text
+            if ([string]::IsNullOrWhiteSpace($text)) { continue }
+
+            $confidence = ""
+            if ($null -ne $suggestion.Confidence) {
+                try {
+                    $confidence = [string]::Format("{0:N2}", [double]$suggestion.Confidence)
+                }
+                catch {
+                }
+            }
+
+            $source = [string]$suggestion.Source
+            $sourceType = [string]$suggestion.SourceType
+
+            $headerParts = @("# Scraped suggestion")
+            if (-not [string]::IsNullOrWhiteSpace($confidence)) { $headerParts += "Confidence $confidence" }
+            if (-not [string]::IsNullOrWhiteSpace($sourceType)) { $headerParts += "Type $sourceType" }
+            if (-not [string]::IsNullOrWhiteSpace($source)) { $headerParts += "Source $source" }
+
+            $header = ($headerParts -join " | ")
+            $formattedSuggestions += "$header`r`n$text"
+        }
+
+        if ($formattedSuggestions.Count -gt 0) {
+            $sections[$sectionNumber] = @($formattedSuggestions | Select-Object -Unique)
+        }
+    }
+
+    if ($sections.Count -eq 0) {
+        $emptyResult.Error = "Playwright completed but no section suggestions were extracted."
+        return $emptyResult
+    }
+
+    return @{
+        Success = $true
+        Sections = $sections
+        Error = ""
+    }
+}
+
 function Get-PackageHelpSections {
     <#
     .SYNOPSIS
@@ -743,7 +864,8 @@ function Get-PackageHelpSections {
         [string]$CurrentUninstallExecutable = "",
         [string]$InstallContext = "System",
         [hashtable]$ContextRecommendation = @{},
-        [switch]$DisableWebLookup
+        [switch]$DisableWebLookup,
+        [switch]$DisablePlaywrightLookup
     )
 
     $safeInstallerType = if ([string]::IsNullOrWhiteSpace($InstallerType)) { "Generic" } else { $InstallerType }
@@ -763,6 +885,11 @@ function Get-PackageHelpSections {
     $webSuggestions = @{ Install = @(); Uninstall = @(); Sources = @(); Notes = @() }
     if (-not $DisableWebLookup) {
         $webSuggestions = Get-WebSilentSwitchSuggestions -Vendor $safeVendor -AppName $safeAppName -Version $safeVersion -InstallerType $safeInstallerType
+    }
+
+    $playwrightSuggestions = @{ Success = $false; Sections = @{}; Error = "" }
+    if (-not $DisablePlaywrightLookup) {
+        $playwrightSuggestions = Get-PlaywrightScrapedPackageHelperSections -InstallMediaPath $InstallMediaPath -AppName $safeAppName
     }
 
     if (-not [string]::IsNullOrWhiteSpace($CurrentInstallSwitch)) {
@@ -1145,6 +1272,22 @@ if (`$installContext -eq 'User' -and [Security.Principal.WindowsIdentity]::GetCu
                 $contextSelectionSuggestions += "Reason: $reason"
             }
         }
+    }
+
+    if ($playwrightSuggestions.Success) {
+        if ($playwrightSuggestions.Sections.ContainsKey(1)) { $contextSelectionSuggestions = @($playwrightSuggestions.Sections[1]) + $contextSelectionSuggestions }
+        if ($playwrightSuggestions.Sections.ContainsKey(2)) { $installCommandSuggestions = @($playwrightSuggestions.Sections[2]) + $installCommandSuggestions }
+        if ($playwrightSuggestions.Sections.ContainsKey(3)) { $uninstallCommandSuggestions = @($playwrightSuggestions.Sections[3]) + $uninstallCommandSuggestions }
+        if ($playwrightSuggestions.Sections.ContainsKey(4)) { $defaultUninstallExeOptions = @($playwrightSuggestions.Sections[4]) + $defaultUninstallExeOptions }
+        if ($playwrightSuggestions.Sections.ContainsKey(5)) { $preInstallChecks = @($playwrightSuggestions.Sections[5]) + $preInstallChecks }
+        if ($playwrightSuggestions.Sections.ContainsKey(6)) { $customInstallSuggestions = @($playwrightSuggestions.Sections[6]) + $customInstallSuggestions }
+        if ($playwrightSuggestions.Sections.ContainsKey(7)) { $postInstallSuggestions = @($playwrightSuggestions.Sections[7]) + $postInstallSuggestions }
+        if ($playwrightSuggestions.Sections.ContainsKey(8)) { $preUninstallSuggestions = @($playwrightSuggestions.Sections[8]) + $preUninstallSuggestions }
+        if ($playwrightSuggestions.Sections.ContainsKey(9)) { $customUninstallSuggestions = @($playwrightSuggestions.Sections[9]) + $customUninstallSuggestions }
+        if ($playwrightSuggestions.Sections.ContainsKey(10)) { $postUninstallSuggestions = @($playwrightSuggestions.Sections[10]) + $postUninstallSuggestions }
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($playwrightSuggestions.Error)) {
+        $contextSelectionSuggestions += "Playwright scrape note: $($playwrightSuggestions.Error)"
     }
 
     $contextSelectionSuggestions = @($contextSelectionSuggestions | Select-Object -Unique)
