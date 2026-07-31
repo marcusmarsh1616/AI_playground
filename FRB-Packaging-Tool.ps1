@@ -157,6 +157,7 @@ $script:PackageHelperIsRunning = $false
 $script:PackageHelperPendingRefresh = $false
 $script:PackageHelperActiveJob = $null
 $script:PackageHelperPollTimer = $null
+$script:LastPackageHelperAutoTriggerSignature = ""
 
 #region Configuration
 
@@ -2342,6 +2343,41 @@ function Get-PackageHelperSuggestionValue {
     return ""
 }
 
+function Invoke-PackageHelperAutoRefresh {
+    param(
+        [string]$Reason = ""
+    )
+
+    if ([string]::IsNullOrWhiteSpace($script:InstallationMediaPath)) {
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($txtVendor.Text) -or [string]::IsNullOrWhiteSpace($txtName.Text)) {
+        return
+    }
+
+    $signature = @(
+        $script:InstallationMediaPath.Trim()
+        $txtVendor.Text.Trim()
+        $txtName.Text.Trim()
+        $txtEdition.Text.Trim()
+        $txtVersion.Text.Trim()
+        $script:SelectedInstallContext
+    ) -join '|'
+
+    if ($script:LastPackageHelperAutoTriggerSignature -eq $signature) {
+        return
+    }
+
+    $script:LastPackageHelperAutoTriggerSignature = $signature
+    if ($script:lblPackageHelperContext -and -not [string]::IsNullOrWhiteSpace($Reason)) {
+        $script:lblPackageHelperContext.Text = $Reason
+        $script:lblPackageHelperContext.ForeColor = [System.Drawing.Color]::FromArgb(186, 103, 0)
+    }
+
+    Invoke-PackageHelperGeneration
+}
+
 function Add-UniqueHelperSnippet {
     param(
         [Parameter(Mandatory = $true)]
@@ -2716,7 +2752,7 @@ function Apply-PackageHelperSectionToGui {
 }
 
 function Apply-AllPackageHelperSuggestionsToGui {
-    $applyOrder = @("ContextSelection", "UninstallExecutable", "InstallCommand", "UninstallCommand", "PreInstallCommands", "CustomInstallCommands", "PostInstallCommands", "PreUninstallCommands", "CustomUninstallCommands", "PostUninstallCommands")
+    $applyOrder = @("UninstallExecutable", "InstallCommand", "UninstallCommand", "PreInstallCommands", "CustomInstallCommands", "PostInstallCommands", "PreUninstallCommands", "CustomUninstallCommands", "PostUninstallCommands")
     $appliedCount = 0
 
     foreach ($sectionKey in $applyOrder) {
@@ -3104,8 +3140,11 @@ function Set-InstallContextState {
     $normalized = if ($Context -eq "User") { "User" } else { "System" }
     $script:SelectedInstallContext = $normalized
 
-    if ($script:chkUserContext) {
-        $script:chkUserContext.Checked = ($normalized -eq "User")
+    if ($script:lblUserContextMode) {
+        $script:lblUserContextMode.Visible = ($normalized -eq "User")
+    }
+    if ($script:lblSystemContextMode) {
+        $script:lblSystemContextMode.Visible = ($normalized -ne "User")
     }
 
     if ($script:lblPackageHelperContext) {
@@ -3523,13 +3562,25 @@ $txtVersion.Size = New-Object System.Drawing.Size(600, 25)
 $grpMetadata.Controls.Add($txtVersion)
 
 # User Context Checkbox
-$chkUserContext = New-Object System.Windows.Forms.CheckBox
-$chkUserContext.Text = "User Context Installation (no elevation required)"
-$chkUserContext.Location = New-Object System.Drawing.Point(180, 288)
-$chkUserContext.Size = New-Object System.Drawing.Size(600, 20)
-$chkUserContext.Font = New-Object System.Drawing.Font("Segoe UI", 9)
-$grpMetadata.Controls.Add($chkUserContext)
-$script:chkUserContext = $chkUserContext
+$lblUserContextMode = New-Object System.Windows.Forms.Label
+$lblUserContextMode.Text = "User Context Installation (no elevation required)"
+$lblUserContextMode.Location = New-Object System.Drawing.Point(180, 288)
+$lblUserContextMode.Size = New-Object System.Drawing.Size(600, 20)
+$lblUserContextMode.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+$lblUserContextMode.ForeColor = [System.Drawing.Color]::FromArgb(0, 102, 204)
+$lblUserContextMode.Visible = $false
+$grpMetadata.Controls.Add($lblUserContextMode)
+$script:lblUserContextMode = $lblUserContextMode
+
+$lblSystemContextMode = New-Object System.Windows.Forms.Label
+$lblSystemContextMode.Text = "System Context Installation (Elevation is required)"
+$lblSystemContextMode.Location = New-Object System.Drawing.Point(180, 288)
+$lblSystemContextMode.Size = New-Object System.Drawing.Size(600, 20)
+$lblSystemContextMode.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+$lblSystemContextMode.ForeColor = [System.Drawing.Color]::FromArgb(0, 128, 0)
+$lblSystemContextMode.Visible = $false
+$grpMetadata.Controls.Add($lblSystemContextMode)
+$script:lblSystemContextMode = $lblSystemContextMode
 
 # Folder Exists Flag
 $lblFolderExistsFlag = New-Object System.Windows.Forms.Label
@@ -3559,21 +3610,10 @@ $grpSwitches.Controls.Add($lblInstallSwitch)
 
 $txtInstallSwitch = New-Object System.Windows.Forms.TextBox
 $txtInstallSwitch.Location = New-Object System.Drawing.Point(180, 33)
-$txtInstallSwitch.Size = New-Object System.Drawing.Size(410, 25)
+$txtInstallSwitch.Size = New-Object System.Drawing.Size(600, 25)
 $txtInstallSwitch.Font = $FontCode
 $txtInstallSwitch.Visible = $false
 $grpSwitches.Controls.Add($txtInstallSwitch)
-
-$btnCopySearchTerms = New-Object System.Windows.Forms.Button
-$btnCopySearchTerms.Text = "Help package"
-$btnCopySearchTerms.Location = New-Object System.Drawing.Point(600, 31)
-$btnCopySearchTerms.Size = New-Object System.Drawing.Size(190, 30)
-$btnCopySearchTerms.BackColor = $Colors.AccentTeal
-$btnCopySearchTerms.ForeColor = [System.Drawing.Color]::White
-$btnCopySearchTerms.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-$btnCopySearchTerms.FlatAppearance.BorderSize = 0
-$btnCopySearchTerms.Visible = $false
-$grpSwitches.Controls.Add($btnCopySearchTerms)
 
 $lblUninstallSwitch = New-Object System.Windows.Forms.Label
 $lblUninstallSwitch.Text = "Uninstall Switch:"
@@ -3942,25 +3982,15 @@ $lblPackageHelperHeader.Font = New-Object System.Drawing.Font("Segoe UI", 11, [S
 $tabPackageHelper.Controls.Add($lblPackageHelperHeader)
 
 $script:lblPackageHelperContext = New-Object System.Windows.Forms.Label
-$script:lblPackageHelperContext.Text = "Click Help package to generate section guidance for this app."
+$script:lblPackageHelperContext.Text = "Package Helper runs automatically when install media is selected."
 $script:lblPackageHelperContext.Location = New-Object System.Drawing.Point(20, 26)
 $script:lblPackageHelperContext.Size = New-Object System.Drawing.Size(500, 18)
 $script:lblPackageHelperContext.ForeColor = [System.Drawing.Color]::Gray
 $tabPackageHelper.Controls.Add($script:lblPackageHelperContext)
 
-$btnRefreshPackageHelper = New-Object System.Windows.Forms.Button
-$btnRefreshPackageHelper.Text = "Refresh Helper"
-$btnRefreshPackageHelper.Location = New-Object System.Drawing.Point(670, 22)
-$btnRefreshPackageHelper.Size = New-Object System.Drawing.Size(130, 28)
-$btnRefreshPackageHelper.BackColor = $Colors.AccentTeal
-$btnRefreshPackageHelper.ForeColor = [System.Drawing.Color]::White
-$btnRefreshPackageHelper.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-$btnRefreshPackageHelper.FlatAppearance.BorderSize = 0
-$tabPackageHelper.Controls.Add($btnRefreshPackageHelper)
-
 $btnApplyAllPackageHelper = New-Object System.Windows.Forms.Button
 $btnApplyAllPackageHelper.Text = "Apply All to Tool"
-$btnApplyAllPackageHelper.Location = New-Object System.Drawing.Point(530, 22)
+$btnApplyAllPackageHelper.Location = New-Object System.Drawing.Point(670, 22)
 $btnApplyAllPackageHelper.Size = New-Object System.Drawing.Size(130, 28)
 $btnApplyAllPackageHelper.BackColor = $Colors.SuccessGreen
 $btnApplyAllPackageHelper.ForeColor = [System.Drawing.Color]::White
@@ -3976,7 +4006,6 @@ $panelPackageHelper.BackColor = $Colors.Background
 $tabPackageHelper.Controls.Add($panelPackageHelper)
 
 $sectionLayout = @(
-    @{ Key = "ContextSelection"; Title = "Context Selection" },
     @{ Key = "UninstallExecutable"; Title = "Uninstall Media" },
     @{ Key = "InstallCommand"; Title = "Install Command-line Switch" },
     @{ Key = "UninstallCommand"; Title = "Uninstall Command-Line Switch" },
@@ -4443,6 +4472,10 @@ function Load-ExistingPackageDataIfPresent {
         Sync-CommandSectionExpansionState
         Ensure-CustomUninstallTextBound -ExpectedText $loadResult.CustomUninstall -Stage "post-sync"
 
+        if (-not [string]::IsNullOrWhiteSpace($script:InstallationMediaPath)) {
+            Invoke-PackageHelperAutoRefresh -Reason "Package detected. Package Helper refresh queued automatically."
+        }
+
         Write-ProcessOutputLine -Message ("Textbox lengths after sync | PreInstall={0} CustomInstall={1} PostInstall={2} PreUninstall={3} CustomUninstall={4} PostUninstall={5}" -f $script:txtPreInstall.TextLength, $script:txtCustomInstall.TextLength, $script:txtPostInstall.TextLength, $script:txtPreUninstall.TextLength, $script:txtCustomUninstall.TextLength, $script:txtPostUninstall.TextLength) -Level "INFO"
         Update-Status "Custom commands and metadata loaded from existing package!" "Green"
     }
@@ -4515,17 +4548,6 @@ $txtName.Add_TextChanged({ Check-PackageFolderExists })
 $txtEdition.Add_TextChanged({ Check-PackageFolderExists })
 $txtVersion.Add_TextChanged({ Check-PackageFolderExists })
 
-$chkUserContext.Add_CheckedChanged({
-    $script:SelectedInstallContext = if ($chkUserContext.Checked) { "User" } else { "System" }
-    if (-not [string]::IsNullOrWhiteSpace($script:InstallationMediaPath) -and -not [string]::IsNullOrWhiteSpace($txtVendor.Text) -and -not [string]::IsNullOrWhiteSpace($txtName.Text)) {
-        Invoke-PackageHelperGeneration
-    }
-})
-
-$btnRefreshPackageHelper.Add_Click({
-    Invoke-PackageHelperGeneration
-})
-
 # Browse Button Click Event
 $btnBrowse.Add_Click({
     $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
@@ -4594,7 +4616,7 @@ $btnBrowse.Add_Click({
             $txtUninstallExecutable.Visible = $true
             $txtInstallSwitch.Visible = $true
             $txtUninstallSwitch.Visible = $true
-            $btnCopySearchTerms.Visible = $true
+            Invoke-PackageHelperAutoRefresh -Reason "Install media selected. Package Helper refresh queued automatically."
 
         } elseif ($extension -eq ".msi") {
             $lblMediaType.Text = "Type: MSI - Using DetectionEngine..."
@@ -4620,7 +4642,7 @@ $btnBrowse.Add_Click({
             $txtUninstallExecutable.Visible = $true
             $txtInstallSwitch.Visible = $true
             $txtUninstallSwitch.Visible = $true
-            $btnCopySearchTerms.Visible = $true
+            Invoke-PackageHelperAutoRefresh -Reason "Install media selected. Package Helper refresh queued automatically."
             
             $lblMediaType.Text = "Type: MSI ($($script:DetectedInstallerType) detected)"
             $lblMediaType.ForeColor = [System.Drawing.Color]::Green
@@ -4633,19 +4655,13 @@ $btnBrowse.Add_Click({
             $lblUninstallSwitch.Visible = $false
             $txtInstallSwitch.Visible = $false
             $txtUninstallSwitch.Visible = $false
-            $btnCopySearchTerms.Visible = $false
         }
 
         if (-not [string]::IsNullOrWhiteSpace($txtVendor.Text) -and -not [string]::IsNullOrWhiteSpace($txtName.Text)) {
-            Invoke-PackageHelperGeneration
+            Invoke-PackageHelperAutoRefresh -Reason "Package fields are ready. Package Helper refresh queued automatically."
         }
     }
 
-})
-
-# Help package Button Click Event
-$btnCopySearchTerms.Add_Click({
-    Invoke-PackageHelperGeneration
 })
 
 # Start Packaging Button Click Event (validation only - workflow in New-PackagingFolder)

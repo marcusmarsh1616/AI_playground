@@ -1559,16 +1559,15 @@ if (`$installContext -eq 'User' -and [Security.Principal.WindowsIdentity]::GetCu
     }
 
     if ($playwrightSuggestions.Success) {
-        if ($playwrightSuggestions.Sections.ContainsKey(1)) { $contextSelectionSuggestions = @($playwrightSuggestions.Sections[1]) + $contextSelectionSuggestions }
-        if ($playwrightSuggestions.Sections.ContainsKey(2)) { $installCommandSuggestions = @($playwrightSuggestions.Sections[2]) + $installCommandSuggestions }
-        if ($playwrightSuggestions.Sections.ContainsKey(3)) { $uninstallCommandSuggestions = @($playwrightSuggestions.Sections[3]) + $uninstallCommandSuggestions }
-        if ($playwrightSuggestions.Sections.ContainsKey(4)) { $defaultUninstallExeOptions = @($playwrightSuggestions.Sections[4]) + $defaultUninstallExeOptions }
-        if ($playwrightSuggestions.Sections.ContainsKey(5)) { $preInstallChecks = @($playwrightSuggestions.Sections[5]) + $preInstallChecks }
-        if ($playwrightSuggestions.Sections.ContainsKey(6)) { $customInstallSuggestions = @($playwrightSuggestions.Sections[6]) + $customInstallSuggestions }
-        if ($playwrightSuggestions.Sections.ContainsKey(7)) { $postInstallSuggestions = @($playwrightSuggestions.Sections[7]) + $postInstallSuggestions }
-        if ($playwrightSuggestions.Sections.ContainsKey(8)) { $preUninstallSuggestions = @($playwrightSuggestions.Sections[8]) + $preUninstallSuggestions }
-        if ($playwrightSuggestions.Sections.ContainsKey(9)) { $customUninstallSuggestions = @($playwrightSuggestions.Sections[9]) + $customUninstallSuggestions }
-        if ($playwrightSuggestions.Sections.ContainsKey(10)) { $postUninstallSuggestions = @($playwrightSuggestions.Sections[10]) + $postUninstallSuggestions }
+        if ($playwrightSuggestions.Sections.ContainsKey(1)) { $installCommandSuggestions = @($playwrightSuggestions.Sections[1]) + $installCommandSuggestions }
+        if ($playwrightSuggestions.Sections.ContainsKey(2)) { $uninstallCommandSuggestions = @($playwrightSuggestions.Sections[2]) + $uninstallCommandSuggestions }
+        if ($playwrightSuggestions.Sections.ContainsKey(3)) { $defaultUninstallExeOptions = @($playwrightSuggestions.Sections[3]) + $defaultUninstallExeOptions }
+        if ($playwrightSuggestions.Sections.ContainsKey(4)) { $preInstallChecks = @($playwrightSuggestions.Sections[4]) + $preInstallChecks }
+        if ($playwrightSuggestions.Sections.ContainsKey(5)) { $customInstallSuggestions = @($playwrightSuggestions.Sections[5]) + $customInstallSuggestions }
+        if ($playwrightSuggestions.Sections.ContainsKey(6)) { $postInstallSuggestions = @($playwrightSuggestions.Sections[6]) + $postInstallSuggestions }
+        if ($playwrightSuggestions.Sections.ContainsKey(7)) { $preUninstallSuggestions = @($playwrightSuggestions.Sections[7]) + $preUninstallSuggestions }
+        if ($playwrightSuggestions.Sections.ContainsKey(8)) { $customUninstallSuggestions = @($playwrightSuggestions.Sections[8]) + $customUninstallSuggestions }
+        if ($playwrightSuggestions.Sections.ContainsKey(9)) { $postUninstallSuggestions = @($playwrightSuggestions.Sections[9]) + $postUninstallSuggestions }
     }
     elseif (-not [string]::IsNullOrWhiteSpace($playwrightSuggestions.Error)) {
         $contextSelectionSuggestions += "Playwright scrape note: $($playwrightSuggestions.Error)"
@@ -1593,11 +1592,6 @@ if (`$installContext -eq 'User' -and [Security.Principal.WindowsIdentity]::GetCu
             PlaywrightOutputFile = $playwrightSuggestions.OutputFile
         }
         Sections = [ordered]@{
-            ContextSelection = [ordered]@{
-                Title = "Context Selection"
-                Summary = "Selected install context and detection rationale for $productDisplay."
-                Suggestions = $contextSelectionSuggestions
-            }
             UninstallExecutable = [ordered]@{
                 Title = "Uninstall Media"
                 Summary = "Uninstall media candidates ordered from existing field value, installer family heuristics, and install-media filename patterns."
