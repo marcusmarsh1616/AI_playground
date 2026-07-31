@@ -32,8 +32,8 @@ function Invoke-WebResearch {
         [string]$Version
     )
     
-    $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-    $projectRoot = Split-Path -Parent $scriptRoot
+    $scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $PSCommandPath }
+    $projectRoot = if ($scriptRoot) { Split-Path -Parent $scriptRoot } else { $PWD.Path }
     $pythonScript = Join-Path $projectRoot "Python\research_requirements.py"
     
     # Verify Python script exists
@@ -45,24 +45,63 @@ function Invoke-WebResearch {
         }
     }
     
-    # Check if Python is available
-    try {
-        $pythonVersion = & python --version 2>&1
-        Write-Host "[INFO] Using $pythonVersion" -ForegroundColor Cyan
-    } catch {
-        Write-Host "[ERROR] Python not found. Please install Python 3.x" -ForegroundColor Red
+    # Resolve a usable Python interpreter on Windows or other systems
+    $pythonExe = $null
+    $candidatePaths = @(
+        $env:PYTHON_EXE,
+        $env:VIRTUAL_ENV,
+        'C:\Users\marcu\AppData\Roaming\uv\python\cpython-3.14.6-windows-x86_64-none\python.exe',
+        'C:\Users\marcu\AppData\Local\Programs\Python\Python311\python.exe',
+        'C:\Users\marcu\AppData\Local\Programs\Python\Python312\python.exe',
+        'C:\Program Files\Python311\python.exe',
+        'C:\Program Files\Python312\python.exe',
+        'python'
+    )
+
+    foreach ($candidate in $candidatePaths) {
+        if (-not $candidate) { continue }
+        if ($candidate -eq 'python') {
+            try {
+                $pythonVersion = & python --version 2>&1
+                if ($LASTEXITCODE -eq 0) {
+                    $pythonExe = 'python'
+                    break
+                }
+            } catch { }
+            continue
+        }
+
+        if (Test-Path $candidate) {
+            $pythonExe = $candidate
+            break
+        }
+    }
+
+    if (-not $pythonExe) {
+        Write-Host "[ERROR] Python interpreter could not be located. Install Python 3.x and ensure it is available on the machine." -ForegroundColor Red
         return @{
             success = $false
-            error = "Python not installed or not in PATH"
+            error = "Python interpreter not found"
+        }
+    }
+
+    try {
+        $pythonVersion = & $pythonExe --version 2>&1
+        Write-Host "[INFO] Using $pythonVersion" -ForegroundColor Cyan
+    } catch {
+        Write-Host "[ERROR] Python was found but could not be executed: $($_.Exception.Message)" -ForegroundColor Red
+        return @{
+            success = $false
+            error = "Python interpreter could not be executed"
         }
     }
     
     # Check if Playwright is installed
     try {
-        $playwrightCheck = & python -c "import playwright; print('OK')" 2>&1
-        if ($playwrightCheck -ne 'OK') {
-            Write-Host "[WARNING] Playwright may not be installed" -ForegroundColor Yellow
-            Write-Host "[INFO] Run: pip install -r $projectRoot\Python\requirements.txt" -ForegroundColor Cyan
+        $playwrightCheck = & $pythonExe -c "import playwright; print('OK')" 2>&1
+        if ($LASTEXITCODE -ne 0 -or $playwrightCheck -notmatch 'OK') {
+            Write-Host "[WARNING] Playwright may not be installed for $pythonExe" -ForegroundColor Yellow
+            Write-Host "[INFO] Run: & '$pythonExe' -m pip install -r $projectRoot\Python\requirements.txt" -ForegroundColor Cyan
         }
     } catch {
         Write-Host "[WARNING] Could not verify Playwright installation" -ForegroundColor Yellow
@@ -79,11 +118,11 @@ function Invoke-WebResearch {
     $tempOutput = Join-Path $env:TEMP "validation_research_$(Get-Date -Format 'yyyyMMddHHmmss').json"
     $arguments += @("--output", $tempOutput)
     
-    Write-Host "[EXECUTE] python $($arguments -join ' ')" -ForegroundColor Cyan
+    Write-Host "[EXECUTE] $pythonExe $($arguments -join ' ')" -ForegroundColor Cyan
     
     # Execute Python script
     try {
-        $process = Start-Process -FilePath "python" `
+        $process = Start-Process -FilePath $pythonExe `
                                  -ArgumentList $arguments `
                                  -NoNewWindow `
                                  -Wait `

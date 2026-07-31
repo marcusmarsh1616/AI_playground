@@ -844,138 +844,24 @@ function Get-PlaywrightScrapedPackageHelperSections {
         return $emptyResult
     }
 
-    $toolRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\..\..\.."))
-    $scraperPythonPath = Join-Path $toolRoot "Playwright_Scraping_POC\scraper.py"
-    if (-not (Test-Path $scraperPythonPath)) {
-        $emptyResult.Error = "Playwright scraper engine was not found at expected path: $scraperPythonPath"
+    $engineCommand = Get-Command Invoke-PythonScraperForPackageHelper -ErrorAction SilentlyContinue
+    $engineSource = if ($engineCommand) { [string]$engineCommand.Source } else { "not-loaded" }
+    & $writeProcessLine -Message ("Package Helper integration trace | SwitchEnginePath={0} | PythonScraperEngineSource={1}" -f $PSCommandPath, $engineSource) -Level "INFO"
+
+    if (-not (Get-Command Invoke-PythonScraperForPackageHelper -ErrorAction SilentlyContinue)) {
+        $emptyResult.Error = "PythonScraperEngine is not loaded."
+        & $writeProcessLine -Message $emptyResult.Error -Level "WARN"
         return $emptyResult
     }
 
-    $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
-    if (-not $pythonCmd) {
-        $emptyResult.Error = "Python command was not found on PATH for Playwright scraping."
-        & $writeProcessLine -Message "Package Helper scrape skipped: Python command not found on PATH." -Level "WARN"
-        return $emptyResult
-    }
+    & $writeProcessLine -Message "Package Helper scrape: running integrated PythonScraperEngine (may take up to a minute)." -Level "INFO"
 
-    & $writeProcessLine -Message "Package Helper scrape: precheck passed." -Level "INFO"
+    $scrapeResult = Invoke-PythonScraperForPackageHelper -InstallMediaPath $InstallMediaPath -AppName $AppName -Vendor $Vendor -Version $Version
+    $emptyResult.DurationSeconds = [double]$scrapeResult.DurationSeconds
 
-    try {
-        & python -c "import playwright" 2>$null
-        if ($LASTEXITCODE -ne 0) {
-            $emptyResult.Error = "Python is available but Playwright module is not installed in that environment."
-            & $writeProcessLine -Message "Package Helper scrape skipped: Playwright Python module not installed." -Level "WARN"
-            return $emptyResult
-        }
-    }
-    catch {
-        $emptyResult.Error = "Playwright import precheck failed: $($_.Exception.Message)"
-        & $writeProcessLine -Message ("Package Helper scrape precheck failed: {0}" -f $_.Exception.Message) -Level "WARN"
-        return $emptyResult
-    }
-
-    $runStartedUtc = [DateTime]::UtcNow
-    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-    & $writeProcessLine -Message "Package Helper scrape: running Playwright extraction (may take up to a minute)." -Level "INFO"
-    & $writeProcessLine -Message "Package Helper scrape: using integrated scraper.py engine." -Level "INFO"
-
-    $safeAppName = if ([string]::IsNullOrWhiteSpace($AppName)) { "application" } else { $AppName.Trim() }
-    $safeVendor = if ([string]::IsNullOrWhiteSpace($Vendor)) { "" } else { $Vendor.Trim() }
-    $safeVersion = if ([string]::IsNullOrWhiteSpace($Version)) { "" } else { $Version.Trim() }
-
-    $appSlug = (($safeAppName -replace '[^a-zA-Z0-9]+', '-') -replace '^-|-$', '').ToLowerInvariant()
-    if ([string]::IsNullOrWhiteSpace($appSlug)) {
-        $appSlug = "application"
-    }
-
-    $searchTerms = @(
-        "$safeAppName silent install",
-        "$safeAppName command line switches",
-        "$safeAppName unattended install",
-        "$safeAppName uninstall",
-        "$safeAppName powershell deployment",
-        "msiexec /i /qn",
-        "msiexec /x /qn",
-        "Execute-Process",
-        "Execute-MSI"
-    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
-
-    if (-not [string]::IsNullOrWhiteSpace($safeVendor)) {
-        $searchTerms += "$safeVendor $safeAppName silent"
-    }
-    if (-not [string]::IsNullOrWhiteSpace($safeVersion)) {
-        $searchTerms += "$safeAppName $safeVersion silent install"
-    }
-
-    $config = [ordered]@{
-        target_application = $safeAppName
-        version = $safeVersion
-        vendor = $safeVendor
-        installer_path = $InstallMediaPath
-        search_terms = @($searchTerms | Select-Object -First 20)
-        target_websites = @(
-            @{ name = "Silent Install HQ Search"; url = "https://silentinstallhq.com/?s=$([uri]::EscapeDataString($safeAppName))"; priority = 1; search_enabled = $true },
-            @{ name = "Chocolatey Package"; url = "https://community.chocolatey.org/packages/$appSlug"; priority = 2; search_enabled = $true },
-            @{ name = "ITNinja Search"; url = "https://www.itninja.com/search?query=$([uri]::EscapeDataString($safeAppName))"; priority = 3; search_enabled = $true },
-            @{ name = "Vendor Support Search"; url = "https://duckduckgo.com/html/?q=$([uri]::EscapeDataString("$safeVendor $safeAppName silent install"))"; priority = 4; search_enabled = $true }
-        )
-        scraping_config = @{
-            timeout_seconds = 30
-            max_results_per_site = 12
-            headless = $true
-            user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            follow_secondary_links = $true
-            max_secondary_pages = 4
-            max_candidates_per_page = 30
-            min_confidence = 0.30
-            include_page_text_fallback = $true
-        }
-    }
-
-    $configJson = $config | ConvertTo-Json -Depth 10 -Compress
-
-    try {
-        $psi = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName = $pythonCmd.Source
-        $psi.Arguments = '"' + $scraperPythonPath + '"'
-        $psi.UseShellExecute = $false
-        $psi.RedirectStandardInput = $true
-        $psi.RedirectStandardOutput = $true
-        $psi.RedirectStandardError = $true
-        $psi.CreateNoWindow = $true
-
-        $proc = New-Object System.Diagnostics.Process
-        $proc.StartInfo = $psi
-        [void]$proc.Start()
-
-        $proc.StandardInput.Write($configJson)
-        $proc.StandardInput.Close()
-
-        $scrapeStdOut = $proc.StandardOutput.ReadToEnd()
-        $scrapeStdErr = $proc.StandardError.ReadToEnd()
-        $proc.WaitForExit()
-        $scrapeExitCode = $proc.ExitCode
-
-        $scrapeOutput = @()
-        if (-not [string]::IsNullOrWhiteSpace($scrapeStdErr)) {
-            $scrapeOutput += ($scrapeStdErr -split "`r?`n")
-        }
-
-        foreach ($entry in @($scrapeOutput)) {
-            if ($null -eq $entry) { continue }
-
-            $line = ""
-            if ($entry -is [System.Management.Automation.ErrorRecord]) {
-                $line = [string]$entry.ToString()
-            }
-            else {
-                $line = [string]$entry
-            }
-
-            if ([string]::IsNullOrWhiteSpace($line)) { continue }
-
-            $line = $line.Trim()
-            $highSignal = ConvertTo-HighSignalScraperLine -Line $line
+    if ($scrapeResult.StderrLines) {
+        foreach ($line in @($scrapeResult.StderrLines)) {
+            $highSignal = ConvertTo-HighSignalScraperLine -Line ([string]$line)
             if ([string]::IsNullOrWhiteSpace($highSignal)) {
                 continue
             }
@@ -987,40 +873,17 @@ function Get-PlaywrightScrapedPackageHelperSections {
 
             & $writeProcessLine -Message ("[Scraper] {0}" -f $highSignal) -Level $lineLevel
         }
-
-        $stopwatch.Stop()
-        $emptyResult.DurationSeconds = [Math]::Round($stopwatch.Elapsed.TotalSeconds, 2)
-
-        if ($scrapeExitCode -ne 0) {
-            $emptyResult.Error = "Integrated Playwright scraper exited with code $scrapeExitCode after $($emptyResult.DurationSeconds)s."
-            if (-not [string]::IsNullOrWhiteSpace($scrapeStdErr)) {
-                $errorTail = (($scrapeStdErr -split "`r?`n") | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Last 3) -join " | "
-                if (-not [string]::IsNullOrWhiteSpace($errorTail)) {
-                    $emptyResult.Error += " Error tail: $errorTail"
-                }
-            }
-            & $writeProcessLine -Message $emptyResult.Error -Level "WARN"
-            return $emptyResult
-        }
-
-        if ([string]::IsNullOrWhiteSpace($scrapeStdOut)) {
-            $emptyResult.Error = "Integrated Playwright scraper returned no JSON output."
-            & $writeProcessLine -Message $emptyResult.Error -Level "WARN"
-            return $emptyResult
-        }
-
-        $emptyResult.OutputFile = "in-memory:scraper.py"
-
-        & $writeProcessLine -Message "Package Helper scrape: processing scraper output..." -Level "INFO"
-        $parsed = $scrapeStdOut | ConvertFrom-Json -ErrorAction Stop
     }
-    catch {
-        $stopwatch.Stop()
-        $emptyResult.DurationSeconds = [Math]::Round($stopwatch.Elapsed.TotalSeconds, 2)
-        $emptyResult.Error = "Playwright scraper execution failed: $($_.Exception.Message)"
+
+    if (-not $scrapeResult.Success) {
+        $emptyResult.Error = $scrapeResult.Error
         & $writeProcessLine -Message $emptyResult.Error -Level "WARN"
         return $emptyResult
     }
+
+    $emptyResult.OutputFile = "in-memory:PythonScraperEngine"
+    & $writeProcessLine -Message "Package Helper scrape: processing scraper output..." -Level "INFO"
+    $parsed = @($scrapeResult.Results)
 
     $sections = @{}
 
@@ -1099,41 +962,6 @@ function Get-PlaywrightScrapedPackageHelperSections {
     $sectionKeys = @($sections.Keys)
     foreach ($key in $sectionKeys) {
         $sections[$key] = @($sections[$key] | Select-Object -Unique | Select-Object -First 7)
-    }
-
-    # Preserve legacy parser as a fallback if structured site-data shape changes.
-    foreach ($section in @($parsed)) {
-        $sectionNumber = 0
-        try { $sectionNumber = [int]$section.SectionNumber } catch { $sectionNumber = 0 }
-        if ($sectionNumber -lt 1 -or $sectionNumber -gt 10) {
-            continue
-        }
-
-        $formattedSuggestions = @()
-        foreach ($suggestion in @($section.Suggestions)) {
-            if (-not $suggestion) { continue }
-            $text = Remove-WriteHostLines -Text ([string]$suggestion.Text)
-            $text = Get-CodeOnlySnippet -Text $text
-            if ([string]::IsNullOrWhiteSpace($text)) { continue }
-            if (-not (Test-IsUsefulCodeSnippet -Text $text)) { continue }
-
-            $confidence = ""
-            if ($null -ne $suggestion.Confidence) {
-                try {
-                    $confidence = [string]::Format("{0:N2}", [double]$suggestion.Confidence)
-                }
-                catch {
-                }
-            }
-
-            $formattedSuggestions += $text
-        }
-
-        if ($formattedSuggestions.Count -gt 0) {
-            if (-not $sections.ContainsKey($sectionNumber) -or $sections[$sectionNumber].Count -eq 0) {
-                $sections[$sectionNumber] = @($formattedSuggestions | Select-Object -Unique)
-            }
-        }
     }
 
     if ($sections.Count -gt 0) {

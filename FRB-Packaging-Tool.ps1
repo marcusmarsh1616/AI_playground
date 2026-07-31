@@ -383,6 +383,7 @@ $enginePath = Join-Path $script:ToolRoot "src\Engines"
 $enginesToLoad = @(
     @{ Name = "MetadataEngine"; Path = "MetadataEngine\MetadataEngine.psm1" },
     @{ Name = "DetectionEngine"; Path = "DetectionEngine\DetectionEngine.psm1" },
+    @{ Name = "PythonScraperEngine"; Path = "PythonScraperEngine\PythonScraperEngine.psm1" },
     @{ Name = "SwitchEngine"; Path = "SwitchEngine\SwitchEngine.psm1" },
     @{ Name = "UninstallEngine"; Path = "UninstallEngine\UninstallEngine.psm1" },
     @{ Name = "ValidationEngine"; Path = "ValidationEngine\ValidationEngine.psm1" },
