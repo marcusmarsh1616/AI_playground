@@ -4165,7 +4165,7 @@ $tabPackageHelper.Controls.Add($btnApplyAllPackageHelper)
 
 $panelPackageHelper = New-Object System.Windows.Forms.Panel
 $panelPackageHelper.Location = New-Object System.Drawing.Point(20, 58)
-$panelPackageHelper.Size = New-Object System.Drawing.Size(820, 404)
+$panelPackageHelper.Size = New-Object System.Drawing.Size(820, 550)
 $panelPackageHelper.AutoScroll = $true
 $panelPackageHelper.BackColor = $Colors.Background
 $tabPackageHelper.Controls.Add($panelPackageHelper)
