@@ -26,6 +26,17 @@
         "content_area": "main article"
       }
     },
+
+    "Camtasia": {
+      "vendor": "TechSmith",
+      "search_strategy": "google_search",
+      "search_terms": ["Camtasia system requirements", "Camtasia technical specifications"],
+      "vendor_domain": "techsmith.com",
+      "selectors": {
+        "requirements_section": "div.system-requirements, main article, section",
+        "content_area": "main article"
+      }
+    },
     
     "Google Chrome": {
       "vendor": "Google",

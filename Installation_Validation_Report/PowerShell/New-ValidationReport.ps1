@@ -67,6 +67,78 @@ function Get-ChecklistHtml {
     return ($listItems -join "`n")
 }
 
+function Get-RequirementValue {
+    param(
+        [Parameter(Mandatory=$false)]
+        [object]$Requirements,
+
+        [Parameter(Mandatory=$true)]
+        [string]$FieldName
+    )
+
+    if ($null -eq $Requirements) {
+        return $null
+    }
+
+    if ($Requirements -is [System.Collections.IDictionary]) {
+        if ($Requirements.Contains($FieldName)) {
+            return $Requirements[$FieldName]
+        }
+        return $null
+    }
+
+    $property = $Requirements.PSObject.Properties[$FieldName]
+    if ($property) {
+        return $property.Value
+    }
+
+    return $null
+}
+
+function Get-ResearchSectionHtml {
+    param(
+        [Parameter(Mandatory=$false)]
+        [object]$Requirements,
+
+        [Parameter(Mandatory=$true)]
+        [string]$FieldName,
+
+        [Parameter(Mandatory=$true)]
+        [string]$FallbackText,
+
+        [Parameter(Mandatory=$false)]
+        [switch]$UseCheckmark,
+
+        [Parameter(Mandatory=$false)]
+        [object]$ResearchData
+    )
+
+    $values = Get-RequirementValue -Requirements $Requirements -FieldName $FieldName
+    if ($null -eq $values) {
+        $values = @()
+    }
+
+    $items = @($values)
+    if ($items.Count -eq 0) {
+        $fallbackItems = New-Object System.Collections.Generic.List[string]
+        if ($ResearchData -and $ResearchData.research_method) {
+            $fallbackItems.Add("Research method: $($ResearchData.research_method)")
+        }
+        if ($ResearchData -and $ResearchData.source_url) {
+            $fallbackItems.Add("Source: $($ResearchData.source_url)")
+        }
+        if ($ResearchData -and $ResearchData.warning) {
+            $fallbackItems.Add("Note: $($ResearchData.warning)")
+        }
+        if ($fallbackItems.Count -eq 0) {
+            $fallbackItems.Add($FallbackText)
+        }
+        return Get-ChecklistHtml -Items $fallbackItems -FallbackText $FallbackText -UseCheckmark:$UseCheckmark
+    }
+
+    return Get-ChecklistHtml -Items $items -FallbackText $FallbackText -UseCheckmark:$UseCheckmark
+}
+
 function New-ValidationReport {
     param(
         [hashtable]$Data,
@@ -121,25 +193,44 @@ function New-ValidationReport {
     $report = $report -replace '\[Application\]', $appName
     
     # Add web research data if available
-    if ($Data.WebResearch -and $Data.WebResearch.success) {
+    $requirements = $null
+    $researchData = $null
+    if ($Data.WebResearch) {
+        $researchData = $Data.WebResearch
         $requirements = $Data.WebResearch.requirements
+    }
 
-        $osHtml = Get-ChecklistHtml -Items $requirements.operating_system -FallbackText 'No specific operating-system requirement was identified in the research data.' -UseCheckmark
+    if ($requirements) {
+        $osHtml = Get-ResearchSectionHtml -Requirements $requirements -FieldName 'operating_system' -FallbackText 'No specific operating-system requirement was identified in the research data.' -UseCheckmark -ResearchData $researchData
         $report = $report -replace '\[OS_COMPATIBILITY_CONTENT\]', $osHtml
 
-        $conflictHtml = Get-ChecklistHtml -Items $requirements.conflicts -FallbackText 'No application conflicts were identified in the available research data.'
+        $conflictHtml = Get-ResearchSectionHtml -Requirements $requirements -FieldName 'conflicts' -FallbackText 'No application conflicts were identified in the available research data.' -ResearchData $researchData
         $report = $report -replace '\[CONFLICT_CONTENT\]', $conflictHtml
 
-        $prereqHtml = Get-ChecklistHtml -Items $requirements.prerequisites -FallbackText 'No additional prerequisites were identified in the available research data.'
+        $prereqHtml = Get-ResearchSectionHtml -Requirements $requirements -FieldName 'prerequisites' -FallbackText 'No additional prerequisites were identified in the available research data.' -ResearchData $researchData
         $report = $report -replace '\[PREREQUISITE_CONTENT\]', $prereqHtml
 
-        $upgradeHtml = Get-ChecklistHtml -Items $requirements.upgrade_path -FallbackText 'No upgrade-path information was identified in the available research data.'
+        $upgradeHtml = Get-ResearchSectionHtml -Requirements $requirements -FieldName 'upgrade_path' -FallbackText 'No upgrade-path information was identified in the available research data.' -ResearchData $researchData
         $report = $report -replace '\[UPGRADE_PATH_CONTENT\]', $upgradeHtml
     } else {
-        $report = $report -replace '\[OS_COMPATIBILITY_CONTENT\]', "<li>No research data was available for operating-system compatibility.</li>"
-        $report = $report -replace '\[CONFLICT_CONTENT\]', "<li>No research data was available for conflicts.</li>"
-        $report = $report -replace '\[PREREQUISITE_CONTENT\]', "<li>No research data was available for prerequisites.</li>"
-        $report = $report -replace '\[UPGRADE_PATH_CONTENT\]', "<li>No research data was available for upgrade paths.</li>"
+        $fallbackResearch = @()
+        if ($researchData -and $researchData.research_method) {
+            $fallbackResearch += "Research method: $($researchData.research_method)"
+        }
+        if ($researchData -and $researchData.source_url) {
+            $fallbackResearch += "Source: $($researchData.source_url)"
+        }
+        if ($researchData -and $researchData.warning) {
+            $fallbackResearch += "Note: $($researchData.warning)"
+        }
+        if ($fallbackResearch.Count -eq 0) {
+            $fallbackResearch += 'No research data was available for this section.'
+        }
+
+        $report = $report -replace '\[OS_COMPATIBILITY_CONTENT\]', (Get-ChecklistHtml -Items $fallbackResearch -FallbackText 'No research data was available for operating-system compatibility.')
+        $report = $report -replace '\[CONFLICT_CONTENT\]', (Get-ChecklistHtml -Items $fallbackResearch -FallbackText 'No research data was available for conflicts.')
+        $report = $report -replace '\[PREREQUISITE_CONTENT\]', (Get-ChecklistHtml -Items $fallbackResearch -FallbackText 'No research data was available for prerequisites.')
+        $report = $report -replace '\[UPGRADE_PATH_CONTENT\]', (Get-ChecklistHtml -Items $fallbackResearch -FallbackText 'No research data was available for upgrade paths.')
     }
     
     # Add installer data if available

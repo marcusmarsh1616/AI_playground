@@ -19,7 +19,7 @@ function Invoke-InstallerAnalysis {
     $fileInfo = Get-Item $Path
     $extension = $fileInfo.Extension.ToLower()
     
-    $analysis = @{
+    $analysis = [ordered]@{
         FilePath = $Path
         FileName = $fileInfo.Name
         FileSize = $fileInfo.Length
@@ -35,9 +35,19 @@ function Invoke-InstallerAnalysis {
     }
     
     if ($extension -eq '.msi') {
-        $analysis += Analyze-MsiFile -Path $Path
+        $msiData = Analyze-MsiFile -Path $Path
+        foreach ($key in $msiData.Keys) {
+            if ($null -ne $msiData[$key]) {
+                $analysis[$key] = $msiData[$key]
+            }
+        }
     } elseif ($extension -eq '.exe') {
-        $analysis += Analyze-ExeFile -Path $Path
+        $exeData = Analyze-ExeFile -Path $Path
+        foreach ($key in $exeData.Keys) {
+            if ($null -ne $exeData[$key]) {
+                $analysis[$key] = $exeData[$key]
+            }
+        }
     } else {
         Write-Host "[WARNING] Unsupported file type: $extension" -ForegroundColor Yellow
     }

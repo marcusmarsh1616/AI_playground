@@ -1,0 +1,24 @@
+﻿{
+    "session_id":  "42559f85-6e8e-4ca9-be68-8a234cd5928f",
+    "start_time":  "2026-07-31 16:14:27",
+    "user":  "marcu",
+    "computer":  "DADDY_GAMER",
+    "application":  "Camtasia",
+    "version":  "2024",
+    "installer_path":  "C:\\Windows\\notepad.exe",
+    "status":  "completed",
+    "metrics":  {
+                    "cache_hit":  false,
+                    "report_generation_time":  0.046548599999999996,
+                    "installer_analysis_time":  0.028342,
+                    "research_method":  "techsmith_support_search",
+                    "web_research_time":  0.6115259
+                },
+    "errors":  [
+
+               ],
+    "end_time":  "2026-07-31 16:14:28",
+    "success":  true,
+    "report_path":  ".\\Reports\\Validation_Camtasia_2024_20260731_161428.html",
+    "duration_seconds":  1
+}
