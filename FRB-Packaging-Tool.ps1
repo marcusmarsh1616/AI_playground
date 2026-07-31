@@ -4179,7 +4179,8 @@ foreach ($sectionInfo in $sectionLayout) {
     $helperTop += 200
 }
 
-$panelPackageHelper.AutoScrollMinSize = New-Object System.Drawing.Size(780, $helperTop + 10)
+$packageHelperScrollHeight = [int]($helperTop + 10)
+$panelPackageHelper.AutoScrollMinSize = New-Object System.Drawing.Size(780, $packageHelperScrollHeight)
 
 $btnApplyAllPackageHelper.Add_Click({
     $count = Apply-AllPackageHelperSuggestionsToGui
