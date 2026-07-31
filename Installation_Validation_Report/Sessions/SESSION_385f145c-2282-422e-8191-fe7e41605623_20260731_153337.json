@@ -1,0 +1,21 @@
+﻿{
+    "metrics":  {
+                    "report_generation_time":  0,
+                    "research_method":  "none",
+                    "web_research_time":  0,
+                    "installer_analysis_time":  0,
+                    "cache_hit":  false
+                },
+    "errors":  [
+                   "Web research error: The term \u0027Invoke-WebResearch\u0027 is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.",
+                   "Report generation failed: A parameter cannot be found that matches parameter name \u0027Encoding\u0027."
+               ],
+    "version":  "",
+    "session_id":  "385f145c-2282-422e-8191-fe7e41605623",
+    "computer":  "P2MAM08L4",
+    "status":  "failed",
+    "application":  "Contoso Demo",
+    "installer_path":  "",
+    "start_time":  "2026-07-31 15:33:37",
+    "user":  "P1MAM08"
+}
