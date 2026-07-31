@@ -1,0 +1,20 @@
+﻿{
+    "metrics":  {
+                    "cache_hit":  false,
+                    "report_generation_time":  0.0221822,
+                    "installer_analysis_time":  0,
+                    "research_method":  "skipped",
+                    "web_research_time":  0
+                },
+    "errors":  [
+
+               ],
+    "version":  "1.0",
+    "session_id":  "af6ad215-d847-4ff5-8557-ba03cc37e9fc",
+    "computer":  "DADDY_GAMER",
+    "status":  "completed",
+    "application":  "Contoso Demo",
+    "installer_path":  "",
+    "start_time":  "2026-07-31 15:41:56",
+    "user":  "marcu"
+}

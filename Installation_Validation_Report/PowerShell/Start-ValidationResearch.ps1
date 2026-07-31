@@ -63,6 +63,7 @@ $projectRoot = Split-Path -Parent $scriptRoot
 
 # Load report generator script so its function is available
 . (Join-Path $scriptRoot "New-ValidationReport.ps1")
+. (Join-Path $scriptRoot "Invoke-WebResearch.ps1") -ApplicationName $ApplicationName -Version $Version
 
 # Import modules
 Import-Module (Join-Path $scriptRoot "Modules\InstallerAnalysis.psm1") -Force

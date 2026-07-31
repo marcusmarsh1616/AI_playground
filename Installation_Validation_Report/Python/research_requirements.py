@@ -85,11 +85,11 @@ class RequirementsResearcher:
         
         # Try APIs first (fast, structured data)
         result = self._try_chocolatey_api(app_name)
-        if result and result.get('success'):
+        if result and result.get('success') and self._has_meaningful_requirements(result.get('requirements')):
             return result
         
         result = self._try_winget_api(app_name)
-        if result and result.get('success'):
+        if result and result.get('success') and self._has_meaningful_requirements(result.get('requirements')):
             return result
         
         # Fall back to Google search
@@ -286,8 +286,56 @@ class RequirementsResearcher:
         
         return self._create_error_result("All API sources failed")
     
+    def _has_meaningful_requirements(self, requirements):
+        """Return True when the requirements payload contains useful extracted data."""
+        if not isinstance(requirements, dict):
+            return False
+
+        for key in ["operating_system", "prerequisites", "memory", "disk_space", "processor", "conflicts", "upgrade_path"]:
+            value = requirements.get(key)
+            if isinstance(value, list):
+                if any(v for v in value if str(v).strip()):
+                    return True
+            elif isinstance(value, str) and value.strip():
+                return True
+            elif value is not None:
+                return True
+
+        return bool(requirements.get("raw_text") or requirements.get("raw_data"))
+
+    def _normalize_requirements(self, requirements):
+        """Normalize a requirements payload to the structured shape expected by the report."""
+        if isinstance(requirements, dict) and all(key in requirements for key in [
+            "operating_system", "prerequisites", "memory", "disk_space", "processor", "conflicts", "upgrade_path", "raw_text"
+        ]):
+            return requirements
+
+        raw_text = ""
+        if isinstance(requirements, dict):
+            raw_text = requirements.get("raw_text") or requirements.get("raw_data") or ""
+        elif isinstance(requirements, str):
+            raw_text = requirements
+
+        if raw_text:
+            structured = self.parser.parse_requirements_page(raw_text)
+            if structured:
+                return structured
+
+        return {
+            "operating_system": [],
+            "prerequisites": [],
+            "memory": None,
+            "disk_space": None,
+            "processor": None,
+            "conflicts": [],
+            "upgrade_path": [],
+            "raw_text": str(raw_text)[:5000],
+            "extraction_confidence": "low"
+        }
+
     def _create_success_result(self, app_name, version, requirements, source_url, method):
         """Create standardized success result"""
+        normalized_requirements = self._normalize_requirements(requirements)
         return {
             "success": True,
             "application": app_name,
@@ -295,7 +343,7 @@ class RequirementsResearcher:
             "timestamp": datetime.now().isoformat(),
             "source_url": source_url,
             "research_method": method,
-            "requirements": requirements,
+            "requirements": normalized_requirements,
             "cached": False
         }
     
