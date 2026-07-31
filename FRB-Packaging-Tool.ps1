@@ -1068,6 +1068,141 @@ function Get-GlobalsAssistantRewriteResult {
     }
 }
 
+function Test-GlobalsAssistantRegistryCommandText {
+    param(
+        [string]$CommandText
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CommandText)) {
+        return $false
+    }
+
+    return ($CommandText -match '(?i)(HKLM:|HKCU:|HKCR:|HKU:|HKCC:|HKEY_LOCAL_MACHINE|HKEY_CURRENT_USER|HKEY_CLASSES_ROOT|HKEY_USERS|HKEY_CURRENT_CONFIG|Registry::)')
+}
+
+function Get-GlobalsAssistantCommandRecommendations {
+    param(
+        [string]$CodeText = ""
+    )
+
+    $results = @{
+        ParseErrors = @()
+        DetectedCommands = @()
+        WrapperCommandsDetected = @()
+        Recommendations = @()
+    }
+
+    if ([string]::IsNullOrWhiteSpace($CodeText)) {
+        return $results
+    }
+
+    $tokens = $null
+    $parseErrors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput($CodeText, [ref]$tokens, [ref]$parseErrors)
+
+    if ($parseErrors) {
+        $results.ParseErrors = @($parseErrors | ForEach-Object {
+            "Line {0}: {1}" -f $_.Extent.StartLineNumber, $_.Message
+        })
+    }
+
+    $recommendations = New-Object System.Collections.Generic.List[object]
+    $detectedCommands = New-Object System.Collections.Generic.List[string]
+    $wrapperDetected = New-Object System.Collections.Generic.List[string]
+    $recommendationLookup = @{}
+
+    $commandAsts = @($ast.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.CommandAst]
+        }, $true))
+
+    foreach ($commandAst in $commandAsts) {
+        $commandName = $commandAst.GetCommandName()
+        if ([string]::IsNullOrWhiteSpace($commandName)) {
+            continue
+        }
+
+        [void]$detectedCommands.Add($commandName)
+
+        if ($script:GlobalsCommandLookup.ContainsKey($commandName)) {
+            [void]$wrapperDetected.Add($commandName)
+        }
+
+        $lineNumber = [int]$commandAst.Extent.StartLineNumber
+        $commandText = [string]$commandAst.Extent.Text.Trim()
+        $commandNameLower = $commandName.ToLowerInvariant()
+
+        $suggestedCommand = ""
+        $reason = ""
+        $template = ""
+
+        switch ($commandNameLower) {
+            'remove-item' {
+                if ((Test-GlobalsAssistantRegistryCommandText -CommandText $commandText) -and $script:GlobalsCommandLookup.ContainsKey('Remove-RegistryKey')) {
+                    $suggestedCommand = 'Remove-RegistryKey'
+                    $reason = 'Direct registry Remove-Item calls bypass wrapper logging and standardized error handling.'
+                    $template = 'Remove-RegistryKey -Key <RegistryPath> -Recurse -ContinueOnError `$true'
+                }
+            }
+            'remove-itemproperty' {
+                if ((Test-GlobalsAssistantRegistryCommandText -CommandText $commandText) -and $script:GlobalsCommandLookup.ContainsKey('Remove-RegistryKey')) {
+                    $suggestedCommand = 'Remove-RegistryKey'
+                    $reason = 'Registry property removal should use wrapper cmdlets for consistent logging and execution context.'
+                    $template = 'Remove-RegistryKey -Key <RegistryPath> -Name <ValueName> -ContinueOnError `$true'
+                }
+            }
+            'set-itemproperty' {
+                if ((Test-GlobalsAssistantRegistryCommandText -CommandText $commandText) -and $script:GlobalsCommandLookup.ContainsKey('Set-RegistryKey')) {
+                    $suggestedCommand = 'Set-RegistryKey'
+                    $reason = 'Registry writes are safer through Globals wrapper cmdlets to unify behavior across package scripts.'
+                    $template = 'Set-RegistryKey -Key <RegistryPath> -Name <ValueName> -Value <ValueData> -Type <Type>'
+                }
+            }
+            'new-itemproperty' {
+                if ((Test-GlobalsAssistantRegistryCommandText -CommandText $commandText) -and $script:GlobalsCommandLookup.ContainsKey('Set-RegistryKey')) {
+                    $suggestedCommand = 'Set-RegistryKey'
+                    $reason = 'Wrapper-based registry creation keeps logging and retry/error behavior aligned with Globals.ps1 standards.'
+                    $template = 'Set-RegistryKey -Key <RegistryPath> -Name <ValueName> -Value <ValueData> -Type <Type>'
+                }
+            }
+            'write-host' {
+                if ($script:GlobalsCommandLookup.ContainsKey('Write-Log')) {
+                    $suggestedCommand = 'Write-Log'
+                    $reason = 'Write-Host output is not captured in deployment logs; Write-Log preserves traceability.'
+                    $template = 'Write-Log -Message "<message>" -Severity 1'
+                }
+            }
+            'start-process' {
+                if ($script:GlobalsCommandLookup.ContainsKey('Execute-Process')) {
+                    $suggestedCommand = 'Execute-Process'
+                    $reason = 'Execute-Process provides standardized process execution telemetry and exit handling.'
+                    $template = 'Execute-Process -Path <ExecutablePath> -Parameters "<args>" -WindowStyle Hidden'
+                }
+            }
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($suggestedCommand)) {
+            $lookupKey = "{0}|{1}|{2}" -f $lineNumber, $commandNameLower, $suggestedCommand
+            if (-not $recommendationLookup.ContainsKey($lookupKey)) {
+                $recommendationLookup[$lookupKey] = $true
+                [void]$recommendations.Add([PSCustomObject]@{
+                        Line = $lineNumber
+                        SourceCommand = $commandName
+                        SuggestedCommand = $suggestedCommand
+                        Reason = $reason
+                        Template = $template
+                        SourceText = $commandText
+                    })
+            }
+        }
+    }
+
+    $results.DetectedCommands = @($detectedCommands | Select-Object -Unique)
+    $results.WrapperCommandsDetected = @($wrapperDetected | Select-Object -Unique)
+    $results.Recommendations = @($recommendations | Sort-Object Line)
+    return $results
+}
+
 function Get-GlobalsAssistantSuggestions {
     param(
         [string]$CodeText = ""
@@ -1082,6 +1217,8 @@ function Get-GlobalsAssistantSuggestions {
     $rewriteResult = Get-GlobalsAssistantRewriteResult -CodeText $CodeText
     $rewrittenCode = [string]$rewriteResult.RewrittenCode
     $appliedChanges = @($rewriteResult.AppliedChanges)
+    $commandReview = Get-GlobalsAssistantCommandRecommendations -CodeText $CodeText
+    $recommendedChanges = @($commandReview.Recommendations)
 
     $lines = New-Object System.Collections.Generic.List[string]
     [void]$lines.Add("Globals Assistant Analysis")
@@ -1102,6 +1239,34 @@ function Get-GlobalsAssistantSuggestions {
     else {
         [void]$lines.Add("Applied Changes:")
         [void]$lines.Add("- No automatic wrapper substitutions were required for the submitted lines.")
+    }
+
+    [void]$lines.Add("")
+    [void]$lines.Add("Recommended Globals.ps1 Options:")
+    if ($recommendedChanges.Count -gt 0) {
+        foreach ($recommendation in @($recommendedChanges)) {
+            [void]$lines.Add("- Line $($recommendation.Line): $($recommendation.SourceCommand) -> $($recommendation.SuggestedCommand)")
+            [void]$lines.Add("  Why: $($recommendation.Reason)")
+            [void]$lines.Add("  Suggested Pattern: $($recommendation.Template)")
+            [void]$lines.Add("  Source: $($recommendation.SourceText)")
+        }
+    }
+    else {
+        [void]$lines.Add("- No additional wrapper command substitutions were detected by command-level analysis.")
+    }
+
+    if ($commandReview.WrapperCommandsDetected.Count -gt 0) {
+        [void]$lines.Add("")
+        [void]$lines.Add("Wrapper Commands Already Used:")
+        [void]$lines.Add("- " + (($commandReview.WrapperCommandsDetected | Sort-Object) -join ', '))
+    }
+
+    if ($commandReview.ParseErrors.Count -gt 0) {
+        [void]$lines.Add("")
+        [void]$lines.Add("Syntax Notes:")
+        foreach ($parseError in @($commandReview.ParseErrors)) {
+            [void]$lines.Add("- $parseError")
+        }
     }
 
     [void]$lines.Add("")

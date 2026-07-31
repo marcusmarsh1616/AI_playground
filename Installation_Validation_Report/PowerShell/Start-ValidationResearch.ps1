@@ -29,6 +29,9 @@
 .PARAMETER NoSession
     Skip session tracking
 
+.PARAMETER SkipHelpAboutDetection
+    Skip Help/About window detection so the main workflow can run cleanly for proof-of-concept scenarios.
+
 .EXAMPLE
     .\Start-ValidationResearch.ps1 -InstallerPath "C:\Installers\Snagit.exe"
 
@@ -54,7 +57,10 @@ param(
     [switch]$SkipWebResearch,
     
     [Parameter(Mandatory=$false)]
-    [switch]$NoSession
+    [switch]$NoSession,
+
+    [Parameter(Mandatory=$false)]
+    [switch]$SkipHelpAboutDetection
 )
 
 # Script root
@@ -69,6 +75,14 @@ $projectRoot = Split-Path -Parent $scriptRoot
 Import-Module (Join-Path $scriptRoot "Modules\InstallerAnalysis.psm1") -Force
 Import-Module (Join-Path $scriptRoot "Modules\CacheManagement.psm1") -Force
 Import-Module (Join-Path $scriptRoot "Modules\SessionManagement.psm1") -Force
+
+if (-not $SkipHelpAboutDetection) {
+    try {
+        Import-Module (Join-Path $scriptRoot "Modules\HelpAboutDetection.psm1") -Force
+    } catch {
+        Write-Host "[WARNING] Help/About detection module could not be loaded: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
 
 Write-Host "[START] Installation Validation Research" -ForegroundColor Cyan
 Write-Host "========================================"
@@ -177,8 +191,27 @@ if (-not $SkipWebResearch) {
     $metrics.research_method = 'skipped'
 }
 
-# Phase 3: Generate Report
-Write-Host "`n[PHASE 3] Generating Validation Report" -ForegroundColor Yellow
+# Phase 3: Detect Help/About verification artifacts (optional)
+$helpAboutData = @()
+if (-not $SkipHelpAboutDetection) {
+    try {
+        Write-Host "`n[PHASE 3] Detecting Help/About verification windows" -ForegroundColor Yellow
+        $helpAboutData = Get-HelpAboutVerification -ApplicationName $ApplicationName
+        if ($helpAboutData.Count -gt 0) {
+            Write-Host "[INFO] Found $($helpAboutData.Count) Help/About-style window(s)" -ForegroundColor Cyan
+        } else {
+            Write-Host "[INFO] No Help/About-style windows detected" -ForegroundColor Yellow
+        }
+    } catch {
+        Write-Host "[WARNING] Help/About detection failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        $helpAboutData = @()
+    }
+} else {
+    Write-Host "`n[PHASE 3] Help/About detection skipped" -ForegroundColor Yellow
+}
+
+# Phase 4: Generate Report
+Write-Host "`n[PHASE 4] Generating Validation Report" -ForegroundColor Yellow
 
 $reportPath = $null
 $startTime = Get-Date
@@ -188,6 +221,7 @@ try {
         Version = $Version
         InstallerAnalysis = $installerData
         WebResearch = $webResearchData
+        HelpAboutVerification = $helpAboutData
         GeneratedDate = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
         GeneratedBy = $env:USERNAME
     }

@@ -139,6 +139,43 @@ function Get-ResearchSectionHtml {
     return Get-ChecklistHtml -Items $items -FallbackText $FallbackText -UseCheckmark:$UseCheckmark
 }
 
+function Get-HelpAboutHtml {
+    param(
+        [Parameter(Mandatory=$false)]
+        [object[]]$VerificationItems
+    )
+
+    if (-not $VerificationItems -or $VerificationItems.Count -eq 0) {
+        return "<li>No Help/About-style verification windows were detected during the current session.</li>"
+    }
+
+    $rows = New-Object System.Collections.Generic.List[string]
+    foreach ($item in @($VerificationItems)) {
+        if ($null -eq $item) {
+            continue
+        }
+
+        $detailText = @()
+        if ($item.WindowTitle) { $detailText += "Window: $($item.WindowTitle)" }
+        if ($item.ProcessName) { $detailText += "Process: $($item.ProcessName)" }
+        if ($item.ProductVersion) { $detailText += "Version: $($item.ProductVersion)" }
+        if ($item.ProductName) { $detailText += "Product: $($item.ProductName)" }
+        if ($item.CompanyName) { $detailText += "Vendor: $($item.CompanyName)" }
+
+        if ($detailText.Count -eq 0) {
+            continue
+        }
+
+        $rows.Add("<li>$([string]::Join($detailText, ' | '))</li>")
+    }
+
+    if ($rows.Count -eq 0) {
+        return "<li>No Help/About-style verification windows were detected during the current session.</li>"
+    }
+
+    return ($rows -join "`n")
+}
+
 function New-ValidationReport {
     param(
         [hashtable]$Data,
@@ -245,6 +282,10 @@ function New-ValidationReport {
             $report = $report -replace '\[Uninstall Registry Keys\]', "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$($installer.ProductCode)"
         }
     }
+
+    # Add Help/About verification data if available
+    $helpAboutHtml = Get-HelpAboutHtml -VerificationItems $Data.HelpAboutVerification
+    $report = $report -replace '\[HELP_ABOUT_CONTENT\]', $helpAboutHtml
     
     # Generate filename
     $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
