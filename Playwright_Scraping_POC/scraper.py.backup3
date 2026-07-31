@@ -1,0 +1,129 @@
+﻿# INTERNAL FR/OFFICIAL USE // FRSONLY
+# SCRAPER.PY - Playwright Web Scraping Module - IMPROVED CONTENT EXTRACTION
+
+import sys
+import json
+import asyncio
+import re
+from playwright.async_api import async_playwright
+from datetime import datetime
+
+def extract_command_snippets(text_content, search_terms):
+    """Extract actual command snippets and useful suggestions from text"""
+    snippets = []
+    lines = text_content.split("\n")
+    
+    # Patterns for command lines and useful content
+    command_patterns = [
+        r'[a-zA-Z0-9_-]+\.exe\s+[/\-]',  # EXE with switches
+        r'msiexec\.exe\s+[/\-]',          # MSI commands
+        r'Start-Process\s+',              # PowerShell commands
+        r'/[sqvn]+[\s"]',                 # Common switches
+        r'--silent|--quiet|--unattended', # Long-form switches
+    ]
+    
+    for i, line in enumerate(lines):
+        line_strip = line.strip()
+        if not line_strip or len(line_strip) < 10:
+            continue
+            
+        # Check if line contains keywords
+        has_keyword = any(term.lower() in line_strip.lower() for term in search_terms)
+        if not has_keyword:
+            continue
+            
+        # Check if it looks like a command or useful suggestion
+        is_command = any(re.search(pattern, line_strip, re.IGNORECASE) for pattern in command_patterns)
+        
+        # Get context (3 lines before and after)
+        start = max(0, i - 2)
+        end = min(len(lines), i + 3)
+        context_lines = [l.strip() for l in lines[start:end] if l.strip()]
+        context = " | ".join(context_lines[:5])  # Limit context length
+        
+        # Extract the actual snippet
+        if is_command or len(line_strip) > 20:
+            snippet = {
+                "text": line_strip[:200],  # Limit to 200 chars
+                "context": context[:300],  # Limit context
+                "is_command": is_command,
+                "line_number": i
+            }
+            snippets.append(snippet)
+            
+            if len(snippets) >= 15:  # Max 15 per site
+                break
+    
+    return snippets
+
+async def scrape_website(url, search_terms, config):
+    """Scrape a website for installer documentation"""
+    results = {
+        "url": url,
+        "timestamp": datetime.now().isoformat(),
+        "success": False,
+        "data": [],
+        "error": None
+    }
+    
+    try:
+        async with async_playwright() as p:
+            # Use Microsoft Edge
+            browser = await p.chromium.launch(
+                headless=config["headless"],
+                channel="msedge"
+            )
+            page = await browser.new_page(user_agent=config["user_agent"])
+            
+            # Navigate to URL with timeout
+            await page.goto(url, timeout=config["timeout_seconds"] * 1000)
+            await page.wait_for_load_state("networkidle")
+            
+            # Extract text content
+            text_content = await page.evaluate("() => document.body.innerText")
+            
+            # Extract useful snippets
+            snippets = extract_command_snippets(text_content, search_terms)
+            
+            # Add search term attribution for each snippet
+            for snippet in snippets:
+                matching_terms = [term for term in search_terms if term.lower() in snippet["text"].lower()]
+                snippet["search_terms"] = matching_terms
+                results["data"].append(snippet)
+            
+            await browser.close()
+            results["success"] = True
+            
+    except Exception as e:
+        results["error"] = str(e)
+        results["success"] = False
+    
+    return results
+
+async def main():
+    """Main entry point - accepts JSON string via stdin"""
+    # Read JSON config from stdin
+    config_json = sys.stdin.read()
+    config = json.loads(config_json)
+    
+    all_results = []
+    
+    # Scrape each website
+    for site in config["target_websites"]:
+        if site["search_enabled"]:
+            site_name = site["name"]
+            print("[INFO] Scraping " + site_name + "...", file=sys.stderr)
+            result = await scrape_website(
+                site["url"],
+                config["search_terms"],
+                config["scraping_config"]
+            )
+            result["site_name"] = site["name"]
+            result["priority"] = site["priority"]
+            all_results.append(result)
+    
+    # Output JSON to stdout
+    print(json.dumps(all_results, indent=2))
+
+if __name__ == "__main__":
+    asyncio.run(main())

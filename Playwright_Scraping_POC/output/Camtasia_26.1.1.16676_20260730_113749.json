@@ -1,0 +1,109 @@
+﻿[
+    {
+        "Summary":  "User or System installation context",
+        "Title":  "Context Selection",
+        "SectionNumber":  1,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "Silent installation command line switches",
+        "Title":  "Install Command Line",
+        "SectionNumber":  2,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "Silent uninstallation switches",
+        "Title":  "Uninstall Command Line",
+        "SectionNumber":  3,
+        "Suggestions":  [
+                            {
+                                "Context":  "add to script builder | learn more | deployment method: individual install, upgrade, \u0026 uninstall | install | upgrade",
+                                "Source":  "Chocolatey - Camtasia Package - https://community.chocolatey.org/packages/camtasia",
+                                "Text":  "Deployment Method: Individual Install, Upgrade, \u0026 Uninstall"
+                            },
+                            {
+                                "Context":  "uninstall | to install camtasia (install), run the following command from the command line or from powershell:",
+                                "Source":  "Chocolatey - Camtasia Package - https://community.chocolatey.org/packages/camtasia",
+                                "Text":  "To install Camtasia (Install), run the following command from the command line or from PowerShell:"
+                            }
+                        ]
+    },
+    {
+        "Summary":  "Location of uninstaller",
+        "Title":  "Uninstall Executable",
+        "SectionNumber":  4,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "PowerShell to run before installation",
+        "Title":  "Pre-Install Commands",
+        "SectionNumber":  5,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "PowerShell to run during installation",
+        "Title":  "Custom Install Commands",
+        "SectionNumber":  6,
+        "Suggestions":  [
+                            {
+                                "Context":  "add to script builder | learn more | deployment method: individual install, upgrade, \u0026 uninstall | install | upgrade",
+                                "Source":  "Chocolatey - Camtasia Package - https://community.chocolatey.org/packages/camtasia",
+                                "Text":  "Deployment Method: Individual Install, Upgrade, \u0026 Uninstall"
+                            },
+                            {
+                                "Context":  "uninstall | to install camtasia (install), run the following command from the command line or from powershell:",
+                                "Source":  "Chocolatey - Camtasia Package - https://community.chocolatey.org/packages/camtasia",
+                                "Text":  "To install Camtasia (Install), run the following command from the command line or from PowerShell:"
+                            }
+                        ]
+    },
+    {
+        "Summary":  "PowerShell to run after installation",
+        "Title":  "Post-Install Commands",
+        "SectionNumber":  7,
+        "Suggestions":  [
+                            {
+                                "Context":  "/nodesktopshortcut | does not install an application shortcut on the desktop. | example: -params=\u0027\"/licensekey:abcd-efgh-ijkl /licensename:\"\"joe bloggs\"\" /nodesktopshortcut\"\u0027",
+                                "Source":  "Chocolatey - Camtasia Package - https://community.chocolatey.org/packages/camtasia",
+                                "Text":  "Does not install an application shortcut on the desktop."
+                            },
+                            {
+                                "Context":  "does not install an application shortcut on the desktop. | example: -params=\u0027\"/licensekey:abcd-efgh-ijkl /licensename:\"\"joe bloggs\"\" /nodesktopshortcut\"\u0027 | note: techsmith seem to be okay with releasing a new version of the same version. this throws out the checksum of the package. if you find this happening, please raise an issue at https://github.com/pauby/chocopackages/issues. thanks.",
+                                "Source":  "Chocolatey - Camtasia Package - https://community.chocolatey.org/packages/camtasia",
+                                "Text":  "Example: -params=\u0027\"/licensekey:ABCD-EFGH-IJKL /licensename:\"\"Joe Bloggs\"\" /nodesktopshortcut\"\u0027"
+                            }
+                        ]
+    },
+    {
+        "Summary":  "PowerShell to run before uninstallation",
+        "Title":  "Pre-Uninstall Commands",
+        "SectionNumber":  8,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "PowerShell to run during uninstallation",
+        "Title":  "Custom Uninstall Commands",
+        "SectionNumber":  9,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "PowerShell to run after uninstallation",
+        "Title":  "Post-Uninstall Commands",
+        "SectionNumber":  10,
+        "Suggestions":  [
+
+                        ]
+    }
+]

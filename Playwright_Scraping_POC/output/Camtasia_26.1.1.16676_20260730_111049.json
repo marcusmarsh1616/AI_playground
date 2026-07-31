@@ -1,0 +1,166 @@
+﻿[
+    {
+        "Summary":  "User or System installation context",
+        "Title":  "Context Selection",
+        "SectionNumber":  1,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "Silent installation command line switches",
+        "Title":  "Install Command Line",
+        "SectionNumber":  2,
+        "Suggestions":  [
+                            {
+                                "Context":  "\nip address: 199.169.200.175\ntime: 2026-07-30t15:09:53z\nurl: https://www.google.com/search?q=camtasia+26.1.1.16676+silent+install\u0026sei=qwlrautdf_zj5nopo-2akqe\n",
+                                "Source":  "Google - Camtasia 26.1.1.16676 silent install - https://www.google.com/search?q=Camtasia+26.1.1.16676+silent+install",
+                                "Text":  "URL: https://www.google.com/search?q=Camtasia+26.1.1.16676+silent+install\u0026sei=QWlrauTdF_zj5NoPo-2akQE"
+                            },
+                            {
+                                "Context":  "\nip address: 199.169.200.175\ntime: 2026-07-30t15:09:53z\nurl: https://www.google.com/search?q=camtasia+26.1.1.16676+silent+install\u0026sei=qwlrautdf_zj5nopo-2akqe\n",
+                                "Source":  "Google - Camtasia 26.1.1.16676 silent install - https://www.google.com/search?q=Camtasia+26.1.1.16676+silent+install",
+                                "Text":  "URL: https://www.google.com/search?q=Camtasia+26.1.1.16676+silent+install\u0026sei=QWlrauTdF_zj5NoPo-2akQE"
+                            },
+                            {
+                                "Context":  "\nip address: 199.169.200.175\ntime: 2026-07-30t15:09:53z\nurl: https://www.google.com/search?q=camtasia+26.1.1.16676+silent+install\u0026sei=qwlrautdf_zj5nopo-2akqe\n",
+                                "Source":  "Google - Camtasia 26.1.1.16676 silent install - https://www.google.com/search?q=Camtasia+26.1.1.16676+silent+install",
+                                "Text":  "URL: https://www.google.com/search?q=Camtasia+26.1.1.16676+silent+install\u0026sei=QWlrauTdF_zj5NoPo-2akQE"
+                            },
+                            {
+                                "Context":  "\nip address: 199.169.200.175\ntime: 2026-07-30t15:09:59z\nurl: https://www.google.com/search?q=camtasia+deployment+command+line+switches\u0026sei=rmlratlmj5c9ptqppoot6ak\n",
+                                "Source":  "Google - Camtasia deployment switches - https://www.google.com/search?q=Camtasia+deployment+command+line+switches",
+                                "Text":  "URL: https://www.google.com/search?q=Camtasia+deployment+command+line+switches\u0026sei=RmlratLmJ5C9ptQPpoOT6Ak"
+                            },
+                            {
+                                "Context":  "\nip address: 199.169.200.175\ntime: 2026-07-30t15:09:59z\nurl: https://www.google.com/search?q=camtasia+deployment+command+line+switches\u0026sei=rmlratlmj5c9ptqppoot6ak\n",
+                                "Source":  "Google - Camtasia deployment switches - https://www.google.com/search?q=Camtasia+deployment+command+line+switches",
+                                "Text":  "URL: https://www.google.com/search?q=Camtasia+deployment+command+line+switches\u0026sei=RmlratLmJ5C9ptQPpoOT6Ak"
+                            },
+                            {
+                                "Context":  "\nip address: 199.169.200.175\ntime: 2026-07-30t15:09:59z\nurl: https://www.google.com/search?q=camtasia+deployment+command+line+switches\u0026sei=rmlratlmj5c9ptqppoot6ak\n",
+                                "Source":  "Google - Camtasia deployment switches - https://www.google.com/search?q=Camtasia+deployment+command+line+switches",
+                                "Text":  "URL: https://www.google.com/search?q=Camtasia+deployment+command+line+switches\u0026sei=RmlratLmJ5C9ptQPpoOT6Ak"
+                            },
+                            {
+                                "Context":  "show results from \nall of reddit\n\nsilent installs\nr/sysadmin\n·\n4y ago",
+                                "Source":  "Reddit r/sysadmin - Camtasia - https://www.reddit.com/r/sysadmin/search/?q=Camtasia+silent+install",
+                                "Text":  "Silent Installs"
+                            },
+                            {
+                                "Context":  "r/sysadmin\n·\n4y ago\nsilent installs\n0 votes·9 comments\ntools to silently install software that does not support silent switches\nr/sysadmin",
+                                "Source":  "Reddit r/sysadmin - Camtasia - https://www.reddit.com/r/sysadmin/search/?q=Camtasia+silent+install",
+                                "Text":  "Silent Installs"
+                            },
+                            {
+                                "Context":  "4y ago\nsilent installs\n0 votes·9 comments\ntools to silently install software that does not support silent switches\nr/sysadmin\n·\n7y ago",
+                                "Source":  "Reddit r/sysadmin - Camtasia - https://www.reddit.com/r/sysadmin/search/?q=Camtasia+silent+install",
+                                "Text":  "Tools to silently install software that does not support silent switches"
+                            },
+                            {
+                                "Context":  "r/sysadmin\n·\n7y ago\ntools to silently install software that does not support silent switches\n64 votes·61 comments\nwebsite for silent install switches\nr/sysadmin",
+                                "Source":  "Reddit r/sysadmin - Camtasia - https://www.reddit.com/r/sysadmin/search/?q=Camtasia+silent+install",
+                                "Text":  "Tools to silently install software that does not support silent switches"
+                            },
+                            {
+                                "Context":  "7y ago\ntools to silently install software that does not support silent switches\n64 votes·61 comments\nwebsite for silent install switches\nr/sysadmin\n·\n5y ago",
+                                "Source":  "Reddit r/sysadmin - Camtasia - https://www.reddit.com/r/sysadmin/search/?q=Camtasia+silent+install",
+                                "Text":  "Website for Silent install switches"
+                            },
+                            {
+                                "Context":  "r/sysadmin\n·\n5y ago\nwebsite for silent install switches\n12 votes·19 comments\nups worldship silent install help ws_silent\nr/sysadmin",
+                                "Source":  "Reddit r/sysadmin - Camtasia - https://www.reddit.com/r/sysadmin/search/?q=Camtasia+silent+install",
+                                "Text":  "Website for Silent install switches"
+                            },
+                            {
+                                "Context":  "5y ago\nwebsite for silent install switches\n12 votes·19 comments\nups worldship silent install help ws_silent\nr/sysadmin\n·\n6mo ago",
+                                "Source":  "Reddit r/sysadmin - Camtasia - https://www.reddit.com/r/sysadmin/search/?q=Camtasia+silent+install",
+                                "Text":  "UPS Worldship Silent Install help ws_silent"
+                            },
+                            {
+                                "Context":  "r/sysadmin\n·\n6mo ago\nups worldship silent install help ws_silent\n7 votes·3 comments\nsilent deployment/updating of computerease software\nr/sysadmin",
+                                "Source":  "Reddit r/sysadmin - Camtasia - https://www.reddit.com/r/sysadmin/search/?q=Camtasia+silent+install",
+                                "Text":  "UPS Worldship Silent Install help ws_silent"
+                            },
+                            {
+                                "Context":  "6mo ago\nups worldship silent install help ws_silent\n7 votes·3 comments\nsilent deployment/updating of computerease software\nr/sysadmin\n·\n2mo ago",
+                                "Source":  "Reddit r/sysadmin - Camtasia - https://www.reddit.com/r/sysadmin/search/?q=Camtasia+silent+install",
+                                "Text":  "Silent Deployment/Updating of ComputerEase software"
+                            },
+                            {
+                                "Context":  "all of reddit\n\n3rd party software...\nr/sccm\n·\n7y ago\n3rd party software...",
+                                "Source":  "Reddit r/SCCM - Camtasia - https://www.reddit.com/r/SCCM/search/?q=Camtasia",
+                                "Text":  "r/SCCM"
+                            },
+                            {
+                                "Context":  "all of reddit\n\n3rd party software...\nr/sccm\n·\n7y ago\n3rd party software...",
+                                "Source":  "Reddit r/SCCM - Camtasia - https://www.reddit.com/r/SCCM/search/?q=Camtasia",
+                                "Text":  "r/SCCM"
+                            }
+                        ]
+    },
+    {
+        "Summary":  "Silent uninstallation switches",
+        "Title":  "Uninstall Command Line",
+        "SectionNumber":  3,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "Location of uninstaller",
+        "Title":  "Uninstall Executable",
+        "SectionNumber":  4,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "PowerShell to run before installation",
+        "Title":  "Pre-Install Commands",
+        "SectionNumber":  5,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "PowerShell to run during installation",
+        "Title":  "Custom Install Commands",
+        "SectionNumber":  6,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "PowerShell to run after installation",
+        "Title":  "Post-Install Commands",
+        "SectionNumber":  7,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "PowerShell to run before uninstallation",
+        "Title":  "Pre-Uninstall Commands",
+        "SectionNumber":  8,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "PowerShell to run during uninstallation",
+        "Title":  "Custom Uninstall Commands",
+        "SectionNumber":  9,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "PowerShell to run after uninstallation",
+        "Title":  "Post-Uninstall Commands",
+        "SectionNumber":  10,
+        "Suggestions":  [
+
+                        ]
+    }
+]

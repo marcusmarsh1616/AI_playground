@@ -1,0 +1,46 @@
+﻿{
+  "target_application": "Camtasia",
+  "vendor": "TechSmith",
+  "installer_path": "C:\\Users\\P1MAM08\\Downloads\\camtasia.exe",
+  "search_terms": [
+    "camtasia silent install",
+    "camtasia command line switches",
+    "camtasia uninstall",
+    "camtasia prerequisites",
+    "camtasia conflicts",
+    "camtasia registry",
+    "camtasia previous version"
+  ],
+  "target_websites": [
+    {
+      "name": "TechSmith Documentation",
+      "url": "https://support.techsmith.com/",
+      "priority": 1,
+      "search_enabled": true
+    },
+    {
+      "name": "TechSmith Community",
+      "url": "https://feedback.techsmith.com/",
+      "priority": 2,
+      "search_enabled": true
+    },
+    {
+      "name": "GitHub Camtasia Discussions",
+      "url": "https://github.com/search?q=camtasia+silent+install",
+      "priority": 3,
+      "search_enabled": false
+    },
+    {
+      "name": "Reddit SysAdmin",
+      "url": "https://www.reddit.com/r/sysadmin/search/?q=camtasia",
+      "priority": 4,
+      "search_enabled": false
+    }
+  ],
+  "scraping_config": {
+    "timeout_seconds": 30,
+    "max_results_per_site": 5,
+    "headless": true,
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+  }
+}

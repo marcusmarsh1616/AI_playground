@@ -1,0 +1,179 @@
+﻿# INTERNAL FR/OFFICIAL USE // FRSONLY
+# SCRAPER.PY - Direct Source Scraping with Enhanced Command Detection
+
+import sys
+import json
+import asyncio
+import re
+from playwright.async_api import async_playwright
+from datetime import datetime
+
+def extract_commands_from_content(text_content, search_terms):
+    """Extract commands with improved pattern detection"""
+    commands = []
+    lines = text_content.split("\n")
+    
+    # Enhanced command patterns
+    command_patterns = [
+        # Installation commands
+        r'[a-zA-Z0-9_-]+\.exe\s+[/\-]',
+        r'[a-zA-Z0-9_-]+\.msi\s+[/\-]',
+        r'msiexec(\.exe)?\s+/[ixar]',
+        r'setup(\.exe)?\s+[/\-]',
+        r'install(er)?(\.exe)?\s+[/\-]',
+        
+        # PowerShell commands
+        r'Start-Process\s+["\']?[^"\']+["\']?\s+-',
+        r'Invoke-Command\s+',
+        r'Remove-Item\s+["\']?\$',
+        r'Remove-ItemProperty\s+-Path',
+        r'Get-Process.*\|\s*Stop-Process',
+        r'Get-ChildItem.*\|\s*Remove-Item',
+        
+        # Common switches
+        r'/[sqvnQN]+\b',
+        r'/quiet\b',
+        r'/silent\b',
+        r'/passive\b',
+        r'/norestart\b',
+        r'ALLUSERS=\d',
+        r'--silent|--quiet|--unattended',
+        
+        # Registry and cleanup
+        r'reg\s+delete',
+        r'HKLM:\\',
+        r'HKCU:\\',
+    ]
+    
+    # Keywords that indicate useful content
+    useful_keywords = [
+        'command line', 'silent', 'install', 'uninstall', 'switches',
+        'deployment', 'powershell', 'msiexec', 'remove', 'delete',
+        'shortcut', 'registry', 'cleanup', 'prerequisite'
+    ]
+    
+    for i, line in enumerate(lines):
+        line_strip = line.strip()
+        
+        # Skip empty or very short lines
+        if len(line_strip) < 10:
+            continue
+        
+        # Skip lines that look like navigation/UI elements
+        if any(skip in line_strip.lower() for skip in ['copyright', 'cookie', 'privacy policy', 'terms of service', 'sign in', 'log in']):
+            continue
+        
+        # Check if line contains search terms or useful keywords
+        has_keyword = any(term.lower() in line_strip.lower() for term in search_terms + useful_keywords)
+        if not has_keyword:
+            continue
+        
+        # Check if looks like a command
+        is_command = any(re.search(pattern, line_strip, re.IGNORECASE) for pattern in command_patterns)
+        
+        # Include if it's a command OR contains useful deployment info
+        if is_command or (len(line_strip) > 25 and has_keyword):
+            # Get context (2 lines before, 2 after)
+            start = max(0, i - 2)
+            end = min(len(lines), i + 3)
+            context_lines = [l.strip() for l in lines[start:end] if l.strip() and len(l.strip()) > 5]
+            
+            # Build context string
+            context = " | ".join(context_lines[:5])
+            
+            # Skip if context looks like navigation
+            if len(context) < 20:
+                continue
+            
+            commands.append({
+                "text": line_strip[:300],
+                "context": context[:500],
+                "is_command": is_command,
+                "line_number": i
+            })
+            
+            if len(commands) >= 15:
+                break
+    
+    return commands
+
+async def scrape_website(url, search_terms, config):
+    """Scrape direct documentation pages"""
+    results = {
+        "url": url,
+        "timestamp": datetime.now().isoformat(),
+        "success": False,
+        "data": [],
+        "error": None
+    }
+    
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=config["headless"],
+                channel="msedge"
+            )
+            
+            context = await browser.new_context(
+                user_agent=config["user_agent"],
+                viewport={'width': 1920, 'height': 1080}
+            )
+            
+            page = await context.new_page()
+            
+            # Load page with extended timeout
+            print("[INFO]   -> Loading page...", file=sys.stderr)
+            await page.goto(url, timeout=config["timeout_seconds"] * 1000, wait_until="networkidle")
+            
+            # Wait for dynamic content
+            await page.wait_for_timeout(3000)
+            
+            # Extract text content
+            text_content = await page.evaluate("() => document.body.innerText")
+            
+            print("[INFO]   -> Extracting commands from " + str(len(text_content)) + " chars of content", file=sys.stderr)
+            
+            # Extract commands
+            commands = extract_commands_from_content(text_content, search_terms)
+            
+            print("[INFO]   -> Found " + str(len(commands)) + " potential commands/suggestions", file=sys.stderr)
+            
+            results["data"].extend(commands)
+            
+            await browser.close()
+            results["success"] = True
+    
+    except Exception as e:
+        error_msg = str(e)
+        results["error"] = error_msg[:200]
+        results["success"] = False
+        print("[ERROR] Scraping failed: " + error_msg[:100], file=sys.stderr)
+    
+    return results
+
+async def main():
+    """Main entry point"""
+    config_json = sys.stdin.read()
+    config = json.loads(config_json)
+    
+    all_results = []
+    
+    for site in config["target_websites"]:
+        if site["search_enabled"]:
+            site_name = site["name"]
+            print("[INFO] Scraping " + site_name + "...", file=sys.stderr)
+            
+            result = await scrape_website(
+                site["url"],
+                config["search_terms"],
+                config["scraping_config"]
+            )
+            
+            result["site_name"] = site["name"]
+            result["priority"] = site["priority"]
+            all_results.append(result)
+    
+    print(json.dumps(all_results, indent=2))
+
+if __name__ == "__main__":
+    asyncio.run(main())

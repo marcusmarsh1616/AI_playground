@@ -1,0 +1,87 @@
+[2026-07-30 10:11:26] [INFO] Checking prerequisites...
+[2026-07-30 10:11:26] [INFO] Python detected: Python 3.14.5
+[2026-07-30 10:11:26] [ERROR] Error checking Playwright: Traceback (most recent call last):
+[2026-07-30 10:12:18] [INFO] Checking prerequisites...
+[2026-07-30 10:12:18] [INFO] Python detected: Python 3.14.5
+[2026-07-30 10:12:18] [ERROR] Error checking Playwright: Traceback (most recent call last):
+[2026-07-30 10:14:07] [INFO] Checking prerequisites...
+[2026-07-30 10:14:07] [INFO] Python detected: Python 3.14.5
+[2026-07-30 10:14:07] [ERROR] Error checking Playwright: Traceback (most recent call last):
+[2026-07-30 10:15:20] [INFO] Checking prerequisites...
+[2026-07-30 10:15:20] [INFO] Python detected: Python 3.14.5
+[2026-07-30 10:15:20] [WARNING] Playwright not installed.
+[2026-07-30 10:15:32] [INFO] Playwright installation completed successfully
+[2026-07-30 10:15:32] [INFO] Target: Camtasia by TechSmith
+[2026-07-30 10:15:32] [INFO] Starting scraper with config: C:\Temp\AI_Tools\Playwright_Scraping_POC\config.json
+[2026-07-30 10:15:32] [ERROR] Scraper failed with exit code: 1
+[2026-07-30 10:15:32] [ERROR] Output:   File "C:\Temp\AI_Tools\Playwright_Scraping_POC\scraper.py", line 1     <!-- INTERNAL FR/OFFICIAL USE // FRSONLY -->     ^ SyntaxError: invalid syntax
+[2026-07-30 10:15:32] [ERROR] Scraping failed. See logs for details.
+[2026-07-30 10:19:11] [INFO] Checking prerequisites...
+[2026-07-30 10:19:11] [INFO] Python detected: Python 3.14.5
+[2026-07-30 10:19:11] [INFO] Microsoft Edge detected: C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe
+[2026-07-30 10:19:11] [WARNING] Playwright library not installed.
+[2026-07-30 10:25:08] [INFO] Playwright library installation completed successfully
+[2026-07-30 10:25:08] [INFO] Configured to use Microsoft Edge browser
+[2026-07-30 10:25:08] [INFO] Target: Camtasia by TechSmith
+[2026-07-30 10:25:08] [INFO] Starting scraper with config: C:\Temp\AI_Tools\Playwright_Scraping_POC\config.json
+[2026-07-30 10:25:08] [INFO] Browser: Microsoft Edge (msedge)
+[2026-07-30 10:25:08] [ERROR] Scraper failed with exit code: 1
+[2026-07-30 10:25:08] [ERROR] Output:   File "C:\Temp\AI_Tools\Playwright_Scraping_POC\scraper.py", line 89     print(f"[INFO] Scraping {site[\"name\"]}...", file=sys.stderr)                                    ^ SyntaxError: unexpected character after line continuation character
+[2026-07-30 10:25:08] [ERROR] Scraping failed. See logs for details.
+[2026-07-30 10:29:06] [INFO] Checking prerequisites...
+[2026-07-30 10:29:07] [INFO] Python detected: Python 3.14.5
+[2026-07-30 10:29:07] [INFO] Microsoft Edge detected: C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe
+[2026-07-30 10:29:07] [WARNING] Playwright library not installed.
+[2026-07-30 10:37:53] [ERROR] User declined Playwright installation
+[2026-07-30 10:38:02] [INFO] Checking prerequisites...
+[2026-07-30 10:38:02] [INFO] Python detected: Python 3.14.5
+[2026-07-30 10:38:02] [INFO] Microsoft Edge detected: C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe
+[2026-07-30 10:38:02] [INFO] Playwright library detected
+[2026-07-30 10:38:02] [INFO] Will use Microsoft Edge browser (no additional browser download needed)
+[2026-07-30 10:38:02] [INFO] Target: Camtasia by TechSmith
+[2026-07-30 10:38:02] [INFO] Starting scraper with config: C:\Temp\AI_Tools\Playwright_Scraping_POC\config.json
+[2026-07-30 10:38:02] [INFO] Browser: Microsoft Edge (msedge)
+[2026-07-30 10:38:02] [ERROR] Scraper failed with exit code: 1
+[2026-07-30 10:38:02] [ERROR] Output:   File "C:\Temp\AI_Tools\Playwright_Scraping_POC\scraper.py", line 89     print(f"[INFO] Scraping {site[\"name\"]}...", file=sys.stderr)                                    ^ SyntaxError: unexpected character after line continuation character
+[2026-07-30 10:38:02] [ERROR] Scraping failed. See logs for details.
+[2026-07-30 10:39:59] [INFO] Checking prerequisites...
+[2026-07-30 10:39:59] [INFO] Python detected: Python 3.14.5
+[2026-07-30 10:39:59] [INFO] Microsoft Edge detected: C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe
+[2026-07-30 10:39:59] [INFO] Playwright library detected
+[2026-07-30 10:39:59] [INFO] Will use Microsoft Edge browser (no additional browser download needed)
+[2026-07-30 10:39:59] [INFO] Target: Camtasia by TechSmith
+[2026-07-30 10:39:59] [INFO] Starting scraper with config: C:\Temp\AI_Tools\Playwright_Scraping_POC\config.json
+[2026-07-30 10:39:59] [INFO] Browser: Microsoft Edge (msedge)
+[2026-07-30 10:40:00] [ERROR] Scraper failed with exit code: 1
+[2026-07-30 10:40:00] [ERROR] Output: Traceback (most recent call last):   File "C:\Temp\AI_Tools\Playwright_Scraping_POC\scraper.py", line 101, in <module>     asyncio.run(main())     ~~~~~~~~~~~^^^^^^^^   File "C:\Users\P1MAM08\AppData\Local\Programs\Python\Python314\Lib\asyncio\runners.py", line 204, in run     return runner.run(main)            ~~~~~~~~~~^^^^^^   File "C:\Users\P1MAM08\AppData\Local\Programs\Python\Python314\Lib\asyncio\runners.py", line 127, in run     return self._loop.run_until_complete(task)            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^   File "C:\Users\P1MAM08\AppData\Local\Programs\Python\Python314\Lib\asyncio\base_events.py", line 719, in run_until_complete     return future.result()            ~~~~~~~~~~~~~^^   File "C:\Temp\AI_Tools\Playwright_Scraping_POC\scraper.py", line 79, in main     config = json.load(f)   File "C:\Users\P1MAM08\AppData\Local\Programs\Python\Python314\Lib\json\__init__.py", line 298, in load     return loads(fp.read(),         cls=cls, object_hook=object_hook,         parse_float=parse_float, parse_int=parse_int,         parse_constant=parse_constant, object_pairs_hook=object_pairs_hook, **kw)   File "C:\Users\P1MAM08\AppData\Local\Programs\Python\Python314\Lib\json\__init__.py", line 352, in loads     return _default_decoder.decode(s)            ~~~~~~~~~~~~~~~~~~~~~~~^^^   File "C:\Users\P1MAM08\AppData\Local\Programs\Python\Python314\Lib\json\decoder.py", line 345, in decode     obj, end = self.raw_decode(s, idx=_w(s, 0).end())                ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^   File "C:\Users\P1MAM08\AppData\Local\Programs\Python\Python314\Lib\json\decoder.py", line 363, in raw_decode     raise JSONDecodeError("Expecting value", s, err.value) from None json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+[2026-07-30 10:40:00] [ERROR] Scraping failed. See logs for details.
+[2026-07-30 10:45:10] [INFO] Checking prerequisites...
+[2026-07-30 10:45:10] [INFO] Python detected: Python 3.14.5
+[2026-07-30 10:45:10] [INFO] Microsoft Edge detected: C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe
+[2026-07-30 10:45:11] [INFO] Playwright library detected
+[2026-07-30 10:45:11] [INFO] Target: Camtasia by TechSmith
+[2026-07-30 10:45:11] [INFO] Starting scraper (config via stdin to bypass DLP)
+[2026-07-30 10:45:11] [INFO] Browser: Microsoft Edge (msedge)
+[2026-07-30 10:45:34] [INFO] Scraper completed successfully
+[2026-07-30 10:45:34] [ERROR] Scraping failed. See logs for details.
+[2026-07-30 10:47:11] [INFO] Checking prerequisites...
+[2026-07-30 10:47:11] [INFO] Python detected: Python 3.14.5
+[2026-07-30 10:47:11] [INFO] Microsoft Edge detected: C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe
+[2026-07-30 10:47:11] [INFO] Playwright library detected
+[2026-07-30 10:47:11] [INFO] Target: Camtasia by TechSmith
+[2026-07-30 10:47:11] [INFO] Starting scraper (config via stdin to bypass DLP)
+[2026-07-30 10:47:11] [INFO] Browser: Microsoft Edge (msedge)
+[2026-07-30 10:47:28] [INFO] Scraper completed successfully
+[2026-07-30 10:47:28] [INFO] Formatting scraped data into Package Helper sections...
+[2026-07-30 10:47:28] [INFO] Results saved to: C:\Temp\AI_Tools\Playwright_Scraping_POC\output\camtasia_20260730_104728.json
+[2026-07-30 10:53:47] [INFO] Scraper completed successfully
+[2026-07-30 10:58:13] [INFO] Scraper completed successfully
+[2026-07-30 11:00:50] [INFO] Scraper completed successfully
+[2026-07-30 11:10:49] [INFO] Scraper completed successfully
+[2026-07-30 11:17:42] [INFO] Scraper completed successfully
+[2026-07-30 11:22:56] [INFO] Scraper completed successfully
+[2026-07-30 11:24:33] [INFO] Scraper completed successfully
+[2026-07-30 11:34:22] [INFO] Scraper completed successfully
+[2026-07-30 11:37:49] [INFO] Scraper completed successfully
+[2026-07-30 11:47:04] [INFO] Scraper completed successfully
+[2026-07-30 11:54:34] [INFO] Scraper completed successfully

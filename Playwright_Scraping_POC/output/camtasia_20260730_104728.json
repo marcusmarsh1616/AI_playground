@@ -1,0 +1,82 @@
+﻿[
+    {
+        "Summary":  "User or System installation context",
+        "Title":  "Context Selection",
+        "SectionNumber":  1,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "Silent installation command line switches",
+        "Title":  "Install Command Line",
+        "SectionNumber":  2,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "Silent uninstallation switches",
+        "Title":  "Uninstall Command Line",
+        "SectionNumber":  3,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "Location of uninstaller",
+        "Title":  "Uninstall Executable",
+        "SectionNumber":  4,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "PowerShell to run before installation",
+        "Title":  "Pre-Install Commands",
+        "SectionNumber":  5,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "PowerShell to run during installation",
+        "Title":  "Custom Install Commands",
+        "SectionNumber":  6,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "PowerShell to run after installation",
+        "Title":  "Post-Install Commands",
+        "SectionNumber":  7,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "PowerShell to run before uninstallation",
+        "Title":  "Pre-Uninstall Commands",
+        "SectionNumber":  8,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "PowerShell to run during uninstallation",
+        "Title":  "Custom Uninstall Commands",
+        "SectionNumber":  9,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "PowerShell to run after uninstallation",
+        "Title":  "Post-Uninstall Commands",
+        "SectionNumber":  10,
+        "Suggestions":  [
+
+                        ]
+    }
+]

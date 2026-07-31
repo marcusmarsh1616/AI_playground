@@ -1,0 +1,372 @@
+﻿# INTERNAL FR/OFFICIAL USE // FRSONLY
+#Requires -Version 5.1
+
+<#
+.SYNOPSIS
+    Version-aware web scraping for Package Helper suggestions
+.DESCRIPTION
+    Extracts version from installer, builds version-specific config, scrapes documentation
+    All-in-one tool - just provide installer path
+.PARAMETER InstallerPath
+    Path to the installer EXE/MSI
+.EXAMPLE
+    .\Test-Scraper.ps1 -InstallerPath "C:\Users\P1MAM08\Downloads\camtasia.exe"
+#>
+
+param(
+    [Parameter(Mandatory=$true)]
+    [string]$InstallerPath
+)
+
+$ErrorActionPreference = "Continue"
+$ScriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+function Write-Log {
+    param([string]$Message, [string]$Level = "INFO")
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $logMessage = "[$timestamp] [$Level] $Message"
+    Write-Host $logMessage
+    Add-Content "$ScriptPath\logs\scraper.log" $logMessage
+}
+
+function Get-InstallerMetadata {
+    param([string]$Path)
+    
+    if (-not (Test-Path $Path)) {
+        Write-Host "[ERROR] Installer not found: $Path" -ForegroundColor Red
+        return $null
+    }
+    
+    try {
+        $file = Get-Item $Path
+        $versionInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($Path)
+        
+        $metadata = @{
+            FileName = $file.Name
+            FullPath = $file.FullName
+            ProductName = $versionInfo.ProductName
+            ProductVersion = $versionInfo.ProductVersion
+            CompanyName = $versionInfo.CompanyName
+        }
+        
+        return $metadata
+    } catch {
+        Write-Host "[ERROR] Failed to extract metadata: $_" -ForegroundColor Red
+        return $null
+    }
+}
+
+function Build-VersionAwareConfig {
+    param($Metadata)
+    
+    $productName = $Metadata.ProductName
+    $version = $Metadata.ProductVersion
+    $vendor = $Metadata.CompanyName
+    
+    # Search terms for content extraction
+    $searchTerms = @(
+        "silent"
+        "install"
+        "command line"
+        "switches"
+        "/s"
+        "/quiet"
+        "unattended"
+        "deployment"
+        "sccm"
+        "intune"
+        "powershell"
+        "msiexec"
+        "uninstall"
+        "mst"
+        "transform"
+    )
+    
+    $config = @{
+        target_application = $productName
+        version = $version
+        vendor = $vendor
+        installer_path = $Metadata.FullPath
+        search_terms = $searchTerms
+        target_websites = @(
+            @{
+                name = "TechSmith - Camtasia Silent Install"
+                url = "https://support.techsmith.com/hc/en-us/articles/203731008-Camtasia-Silent-Installation"
+                priority = 1
+                search_enabled = $true
+            }
+            @{
+                name = "TechSmith - MSI Deployment Guide"
+                url = "https://support.techsmith.com/hc/en-us/articles/115005442063-Deploy-Camtasia-via-MSI"
+                priority = 2
+                search_enabled = $true
+            }
+            @{
+                name = "Silent Install HQ - Camtasia"
+                url = "https://silentinstallhq.com/camtasia-silent-install/"
+                priority = 3
+                search_enabled = $true
+            }
+            @{
+                name = "Chocolatey - Camtasia Package"
+                url = "https://community.chocolatey.org/packages/camtasia"
+                priority = 4
+                search_enabled = $true
+            }
+            @{
+                name = "ITNinja - Camtasia Software Page"
+                url = "https://www.itninja.com/software/techsmith/camtasia"
+                priority = 5
+                search_enabled = $true
+            }
+            @{
+                name = "AppDeploy - Camtasia Repackaging"
+                url = "https://www.appdeploy.com/packages/detail.asp?id=2896"
+                priority = 6
+                search_enabled = $true
+            }
+        )
+        scraping_config = @{
+            timeout_seconds = 30
+            max_results_per_site = 10
+            headless = $true
+            user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+    }
+    
+    return $config
+}
+function Test-Prerequisites {
+    Write-Host "[1/3] Checking Python..." -ForegroundColor Cyan
+    $pythonVersion = python --version 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "    [FAIL] Python not found" -ForegroundColor Red
+        return $false
+    }
+    Write-Host "    [PASS] $pythonVersion" -ForegroundColor Green
+    
+    Write-Host "[2/3] Checking Microsoft Edge..." -ForegroundColor Cyan
+    $edgePath = "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+    if (Test-Path $edgePath) {
+        Write-Host "    [PASS] Microsoft Edge found" -ForegroundColor Green
+    } else {
+        Write-Host "    [WARN] Edge not found at expected location" -ForegroundColor Yellow
+    }
+    
+    Write-Host "[3/3] Checking Playwright library..." -ForegroundColor Cyan
+    $playwrightCheck = python -c "import playwright; print('installed')" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "    [PASS] Playwright is installed" -ForegroundColor Green
+        Write-Host ""
+        return $true
+    }
+    
+    Write-Host "    [MISSING] Playwright library not installed" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "Run: .\Install-Playwright.ps1" -ForegroundColor Yellow
+    return $false
+}
+
+function Invoke-Scraper {
+    param([string]$ConfigJson)
+    
+    $scraperPath = Join-Path $ScriptPath "scraper.py"
+    $output = $ConfigJson | python $scraperPath
+    
+    if ($LASTEXITCODE -eq 0) {
+        Write-Log "Scraper completed successfully"
+        return $output | ConvertFrom-Json
+    } else {
+        Write-Log "Scraper failed with exit code: $LASTEXITCODE" "ERROR"
+        return $null
+    }
+}
+
+function Format-PackageHelperSections {
+    param([array]$ScrapedData)
+    
+    $sections = @(
+        @{SectionNumber=1; Title="Context Selection"; Summary="User or System installation context"; Suggestions=@()}
+        @{SectionNumber=2; Title="Install Command Line"; Summary="Silent installation command line switches"; Suggestions=@()}
+        @{SectionNumber=3; Title="Uninstall Command Line"; Summary="Silent uninstallation switches"; Suggestions=@()}
+        @{SectionNumber=4; Title="Uninstall Executable"; Summary="Location of uninstaller"; Suggestions=@()}
+        @{SectionNumber=5; Title="Pre-Install Commands"; Summary="PowerShell to run before installation"; Suggestions=@()}
+        @{SectionNumber=6; Title="Custom Install Commands"; Summary="PowerShell to run during installation"; Suggestions=@()}
+        @{SectionNumber=7; Title="Post-Install Commands"; Summary="PowerShell to run after installation"; Suggestions=@()}
+        @{SectionNumber=8; Title="Pre-Uninstall Commands"; Summary="PowerShell to run before uninstallation"; Suggestions=@()}
+        @{SectionNumber=9; Title="Custom Uninstall Commands"; Summary="PowerShell to run during uninstallation"; Suggestions=@()}
+        @{SectionNumber=10; Title="Post-Uninstall Commands"; Summary="PowerShell to run after uninstallation"; Suggestions=@()}
+    )
+    
+    foreach ($site in $ScrapedData) {
+        if ($site.success) {
+            foreach ($item in $site.data) {
+                $matchedLine = $item.text.ToLower()
+                $context = $item.context.ToLower()
+                $source = "$($site.site_name) - $($site.url)"
+                
+                # Analyze the ACTUAL CONTENT, not the search term
+                $fullText = "$matchedLine $context"
+                
+                # Section 1: Context Selection (ALLUSERS, per-user, per-machine)
+                if ($fullText -match "allusers|per-user|per-machine|context|hkcu|hklm") {
+                    $sections[0].Suggestions += @{Text = $item.text; Context = $context; Source = $source}
+                }
+                
+                # Section 3: Uninstall Command Line (must check BEFORE install to avoid false positives)
+                if ($fullText -match "choco uninstall|msiexec.*/x|uninst\.exe" -and $fullText -notmatch "choco install") {
+                    $sections[2].Suggestions += @{Text = $item.text; Context = $context; Source = $source}
+                }
+                
+                # Section 2: Install Command Line (switches, command lines)
+                if ($fullText -match "choco install|choco upgrade|/s|/silent|/quiet|/qn|setup\.exe|install\.exe|msiexec.*/i") {
+                    $sections[1].Suggestions += @{Text = $item.text; Context = $context; Source = $source}
+                }
+                
+                # Section 4: Uninstall Executable (registry paths, uninstaller locations)
+                if ($fullText -match "uninstall.*registry|hklm.*uninstall|program files.*uninstall|uninst\.exe.*path") {
+                    $sections[3].Suggestions += @{Text = $item.text; Context = $context; Source = $source}
+                }
+                
+                # Section 5: Pre-Install Commands (prerequisites, checks, cleanup)
+                if ($fullText -match "prerequisite|requirement|before.*install|pre-install|check.*version|remove.*old") {
+                    $sections[4].Suggestions += @{Text = $item.text; Context = $context; Source = $source}
+                }
+                
+                # Section 6: Custom Install Commands (PowerShell during install, MST, transforms)
+                if ($fullText -match "powershell|script|transform|mst|customize|modify.*install") {
+                    $sections[5].Suggestions += @{Text = $item.text; Context = $context; Source = $source}
+                }
+                
+                # Section 7: Post-Install Commands (cleanup, shortcuts, settings)
+                if ($fullText -match "after.*install|post-install|cleanup|shortcut|settings|configure") {
+                    $sections[6].Suggestions += @{Text = $item.text; Context = $context; Source = $source}
+                }
+                
+                # Section 8: Pre-Uninstall Commands (backup, prep)
+                if ($fullText -match "before.*uninstall|pre-uninstall|backup.*settings") {
+                    $sections[7].Suggestions += @{Text = $item.text; Context = $context; Source = $source}
+                }
+                
+                # Section 9: Custom Uninstall Commands (force remove, cleanup)
+                if ($fullText -match "force.*remove|manual.*uninstall|cleanup.*files|remove.*registry") {
+                    $sections[8].Suggestions += @{Text = $item.text; Context = $context; Source = $source}
+                }
+                
+                # Section 10: Post-Uninstall Commands (verify removal, final cleanup)
+                if ($fullText -match "after.*uninstall|post-uninstall|verify.*removed|final.*cleanup") {
+                    $sections[9].Suggestions += @{Text = $item.text; Context = $context; Source = $source}
+                }
+            }
+        }
+    }
+    
+    return $sections
+}
+
+function Show-Results {
+    param([array]$Sections)
+    
+    Write-Host ""
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "PACKAGE HELPER SCRAPED SUGGESTIONS" -ForegroundColor Cyan
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host ""
+    
+    foreach ($section in $Sections) {
+        Write-Host "SECTION $($section.SectionNumber): $($section.Title)" -ForegroundColor Yellow
+        Write-Host "Summary: $($section.Summary)" -ForegroundColor Gray
+        Write-Host ""
+        
+        if ($section.Suggestions.Count -gt 0) {
+            Write-Host "  Suggestions Found: $($section.Suggestions.Count)" -ForegroundColor Green
+            for ($i = 0; $i -lt [Math]::Min(5, $section.Suggestions.Count); $i++) {
+                $suggestion = $section.Suggestions[$i]
+                Write-Host "  [$($i + 1)] $($suggestion.Text)" -ForegroundColor White
+                Write-Host "      Source: $($suggestion.Source)" -ForegroundColor DarkGray
+            }
+            if ($section.Suggestions.Count -gt 5) {
+                Write-Host "  ... and $($section.Suggestions.Count - 5) more" -ForegroundColor DarkGray
+            }
+        } else {
+            Write-Host "  No suggestions found (will use templates)" -ForegroundColor DarkYellow
+        }
+        Write-Host ""
+    }
+}
+
+# =========================================
+# MAIN EXECUTION
+# =========================================
+
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "Version-Aware Web Scraping Tool" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host ""
+
+# Step 1: Extract installer metadata
+Write-Host "[STEP 1] Extracting installer metadata..." -ForegroundColor Cyan
+$metadata = Get-InstallerMetadata -Path $InstallerPath
+
+if ($null -eq $metadata) {
+    exit 1
+}
+
+Write-Host "  Product: $($metadata.ProductName)" -ForegroundColor White
+Write-Host "  Version: $($metadata.ProductVersion)" -ForegroundColor White
+Write-Host "  Vendor: $($metadata.CompanyName)" -ForegroundColor White
+Write-Host ""
+
+# Step 2: Check prerequisites
+Write-Host "[STEP 2] Checking prerequisites..." -ForegroundColor Cyan
+if (-not (Test-Prerequisites)) {
+    Write-Host "[ERROR] Prerequisites check failed. Exiting." -ForegroundColor Red
+    exit 1
+}
+Write-Host "[SUCCESS] All prerequisites satisfied" -ForegroundColor Green
+Write-Host ""
+
+# Step 3: Build version-specific config
+Write-Host "[STEP 3] Building version-specific scraping configuration..." -ForegroundColor Cyan
+$config = Build-VersionAwareConfig -Metadata $metadata
+Write-Host "  Search terms: $($config.search_terms.Count)" -ForegroundColor White
+Write-Host "  Target websites: $($config.target_websites.Count)" -ForegroundColor White
+Write-Host ""
+
+# Step 4: Run scraper
+Write-Host "[STEP 4] Scraping version-specific documentation..." -ForegroundColor Cyan
+$configJson = $config | ConvertTo-Json -Depth 10
+$scrapedData = Invoke-Scraper -ConfigJson $configJson
+
+if ($null -eq $scrapedData) {
+    Write-Log "Scraping failed. See logs for details." "ERROR"
+    exit 1
+}
+Write-Host ""
+
+# Step 5: Format results
+Write-Host "[STEP 5] Formatting results for Package Helper..." -ForegroundColor Cyan
+$sections = Format-PackageHelperSections -ScrapedData $scrapedData
+
+# Step 6: Save and display
+$timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+$appName = $metadata.ProductName -replace "[^a-zA-Z0-9]", "_"
+$outputPath = Join-Path $ScriptPath "output\$($appName)_$($metadata.ProductVersion)_$timestamp.json"
+$sections | ConvertTo-Json -Depth 10 | Set-Content $outputPath -Encoding UTF8
+Write-Host "[SUCCESS] Results saved to: $outputPath" -ForegroundColor Green
+Write-Host ""
+
+Show-Results -Sections $sections
+
+Write-Host ""
+Write-Host "[SUCCESS] Scraping Complete" -ForegroundColor Green
+Write-Host "Output file: $outputPath" -ForegroundColor Cyan
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,136 @@
+﻿[
+    {
+        "Summary":  "User or System installation context",
+        "Title":  "Context Selection",
+        "SectionNumber":  1,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "Silent installation command line switches",
+        "Title":  "Install Command Line",
+        "SectionNumber":  2,
+        "Suggestions":  [
+                            {
+                                "Context":  "ip address: 199.169.200.175 | time: 2026-07-30t15:17:03z | url: https://www.google.com/search?q=++silent+install\u0026sei=72prasu0e-hq5nopoispsqy",
+                                "Source":  "Google - Camtasia 26.1.1.16676 silent install - https://www.google.com/search?q=++silent+install",
+                                "Text":  "URL: https://www.google.com/search?q=++silent+install\u0026sei=72prasu0E-HQ5NoPoISpsQY"
+                            },
+                            {
+                                "Context":  "ip address: 199.169.200.175 | time: 2026-07-30t15:17:08z | url: https://www.google.com/search?q=+deployment+command+line+switches\u0026sei=82prarfsiqitptqpo9hbgqs",
+                                "Source":  "Google - Camtasia deployment switches - https://www.google.com/search?q=+deployment+command+line+switches",
+                                "Text":  "URL: https://www.google.com/search?q=+deployment+command+line+switches\u0026sei=82prarfsIqitptQPo9HbgQs"
+                            },
+                            {
+                                "Context":  "all of reddit | tools to silently install software that does not support silent switches | r/sysadmin | ·",
+                                "Source":  "Reddit r/sysadmin - Camtasia - https://www.reddit.com/r/sysadmin/search/?q=Camtasia+silent+install",
+                                "Text":  "Tools to silently install software that does not support silent switches"
+                            },
+                            {
+                                "Context":  "silent installs | 0 votes·9 comments | website for silent install switches | r/sysadmin | ·",
+                                "Source":  "Reddit r/sysadmin - Camtasia - https://www.reddit.com/r/sysadmin/search/?q=Camtasia+silent+install",
+                                "Text":  "Website for Silent install switches"
+                            },
+                            {
+                                "Context":  "website for silent install switches | 12 votes·19 comments | ups worldship silent install help ws_silent | r/sysadmin | ·",
+                                "Source":  "Reddit r/sysadmin - Camtasia - https://www.reddit.com/r/sysadmin/search/?q=Camtasia+silent+install",
+                                "Text":  "UPS Worldship Silent Install help ws_silent"
+                            },
+                            {
+                                "Context":  "ups worldship silent install help ws_silent | 7 votes·3 comments | silent deployment/updating of computerease software | r/sysadmin | ·",
+                                "Source":  "Reddit r/sysadmin - Camtasia - https://www.reddit.com/r/sysadmin/search/?q=Camtasia+silent+install",
+                                "Text":  "Silent Deployment/Updating of ComputerEase software"
+                            },
+                            {
+                                "Context":  "silent deployment/updating of computerease software | 11 votes·7 comments | clickonce silent installer | r/sysadmin | ·",
+                                "Source":  "Reddit r/sysadmin - Camtasia - https://www.reddit.com/r/sysadmin/search/?q=Camtasia+silent+install",
+                                "Text":  "Clickonce silent installer"
+                            },
+                            {
+                                "Context":  "clickonce silent installer | 1 vote·6 comments | install software without silent install feature silently? | r/sysadmin | ·",
+                                "Source":  "Reddit r/sysadmin - Camtasia - https://www.reddit.com/r/sysadmin/search/?q=Camtasia+silent+install",
+                                "Text":  "Install software without silent install feature silently?"
+                            },
+                            {
+                                "Context":  "has anyone used this or is it legit? | 95 votes·35 comments | best sccm tools free/paid | r/sccm | ·",
+                                "Source":  "Reddit r/SCCM - Camtasia - https://www.reddit.com/r/SCCM/search/?q=Camtasia",
+                                "Text":  "Best SCCM Tools Free/Paid"
+                            },
+                            {
+                                "Context":  "was cleaning up a bit in the inboxes and came across this beauty | 123 votes·5 comments | sccm imagining alternatives | r/sccm | ·",
+                                "Source":  "Reddit r/SCCM - Camtasia - https://www.reddit.com/r/SCCM/search/?q=Camtasia",
+                                "Text":  "SCCM Imagining Alternatives"
+                            },
+                            {
+                                "Context":  "sccm imagining alternatives | 0 votes·45 comments | top 3 best sccm alternatives for msps and it teams - sccm alternative tools | r/sccm | ·",
+                                "Source":  "Reddit r/SCCM - Camtasia - https://www.reddit.com/r/SCCM/search/?q=Camtasia",
+                                "Text":  "Top 3 Best SCCM alternatives for MSPs and IT teams - SCCM alternative tools"
+                            }
+                        ]
+    },
+    {
+        "Summary":  "Silent uninstallation switches",
+        "Title":  "Uninstall Command Line",
+        "SectionNumber":  3,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "Location of uninstaller",
+        "Title":  "Uninstall Executable",
+        "SectionNumber":  4,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "PowerShell to run before installation",
+        "Title":  "Pre-Install Commands",
+        "SectionNumber":  5,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "PowerShell to run during installation",
+        "Title":  "Custom Install Commands",
+        "SectionNumber":  6,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "PowerShell to run after installation",
+        "Title":  "Post-Install Commands",
+        "SectionNumber":  7,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "PowerShell to run before uninstallation",
+        "Title":  "Pre-Uninstall Commands",
+        "SectionNumber":  8,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "PowerShell to run during uninstallation",
+        "Title":  "Custom Uninstall Commands",
+        "SectionNumber":  9,
+        "Suggestions":  [
+
+                        ]
+    },
+    {
+        "Summary":  "PowerShell to run after uninstallation",
+        "Title":  "Post-Uninstall Commands",
+        "SectionNumber":  10,
+        "Suggestions":  [
+
+                        ]
+    }
+]
