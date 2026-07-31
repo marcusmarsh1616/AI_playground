@@ -702,7 +702,9 @@ function Get-PlaywrightScrapedPackageHelperSections {
     [CmdletBinding()]
     param(
         [string]$InstallMediaPath = "",
-        [string]$AppName = ""
+        [string]$AppName = "",
+        [string]$Vendor = "",
+        [string]$Version = ""
     )
 
     $emptyResult = @{
@@ -842,17 +844,10 @@ function Get-PlaywrightScrapedPackageHelperSections {
         return $emptyResult
     }
 
-    $toolRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\..\.."))
-    $scraperScriptPath = Join-Path $toolRoot "Playwright_Scraping_POC\Test-Scraper.ps1"
-    $scraperOutputPath = Join-Path $toolRoot "Playwright_Scraping_POC\output"
-
-    if (-not (Test-Path $scraperScriptPath)) {
-        $emptyResult.Error = "Playwright scraper script was not found."
-        return $emptyResult
-    }
-
-    if (-not (Test-Path $scraperOutputPath)) {
-        $emptyResult.Error = "Playwright output folder was not found."
+    $toolRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\..\..\.."))
+    $scraperPythonPath = Join-Path $toolRoot "Playwright_Scraping_POC\scraper.py"
+    if (-not (Test-Path $scraperPythonPath)) {
+        $emptyResult.Error = "Playwright scraper engine was not found at expected path: $scraperPythonPath"
         return $emptyResult
     }
 
@@ -882,14 +877,89 @@ function Get-PlaywrightScrapedPackageHelperSections {
     $runStartedUtc = [DateTime]::UtcNow
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     & $writeProcessLine -Message "Package Helper scrape: running Playwright extraction (may take up to a minute)." -Level "INFO"
+    & $writeProcessLine -Message "Package Helper scrape: using integrated scraper.py engine." -Level "INFO"
+
+    $safeAppName = if ([string]::IsNullOrWhiteSpace($AppName)) { "application" } else { $AppName.Trim() }
+    $safeVendor = if ([string]::IsNullOrWhiteSpace($Vendor)) { "" } else { $Vendor.Trim() }
+    $safeVersion = if ([string]::IsNullOrWhiteSpace($Version)) { "" } else { $Version.Trim() }
+
+    $appSlug = (($safeAppName -replace '[^a-zA-Z0-9]+', '-') -replace '^-|-$', '').ToLowerInvariant()
+    if ([string]::IsNullOrWhiteSpace($appSlug)) {
+        $appSlug = "application"
+    }
+
+    $searchTerms = @(
+        "$safeAppName silent install",
+        "$safeAppName command line switches",
+        "$safeAppName unattended install",
+        "$safeAppName uninstall",
+        "$safeAppName powershell deployment",
+        "msiexec /i /qn",
+        "msiexec /x /qn",
+        "Execute-Process",
+        "Execute-MSI"
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+
+    if (-not [string]::IsNullOrWhiteSpace($safeVendor)) {
+        $searchTerms += "$safeVendor $safeAppName silent"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($safeVersion)) {
+        $searchTerms += "$safeAppName $safeVersion silent install"
+    }
+
+    $config = [ordered]@{
+        target_application = $safeAppName
+        version = $safeVersion
+        vendor = $safeVendor
+        installer_path = $InstallMediaPath
+        search_terms = @($searchTerms | Select-Object -First 20)
+        target_websites = @(
+            @{ name = "Silent Install HQ Search"; url = "https://silentinstallhq.com/?s=$([uri]::EscapeDataString($safeAppName))"; priority = 1; search_enabled = $true },
+            @{ name = "Chocolatey Package"; url = "https://community.chocolatey.org/packages/$appSlug"; priority = 2; search_enabled = $true },
+            @{ name = "ITNinja Search"; url = "https://www.itninja.com/search?query=$([uri]::EscapeDataString($safeAppName))"; priority = 3; search_enabled = $true },
+            @{ name = "Vendor Support Search"; url = "https://duckduckgo.com/html/?q=$([uri]::EscapeDataString("$safeVendor $safeAppName silent install"))"; priority = 4; search_enabled = $true }
+        )
+        scraping_config = @{
+            timeout_seconds = 30
+            max_results_per_site = 12
+            headless = $true
+            user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            follow_secondary_links = $true
+            max_secondary_pages = 4
+            max_candidates_per_page = 30
+            min_confidence = 0.30
+            include_page_text_fallback = $true
+        }
+    }
+
+    $configJson = $config | ConvertTo-Json -Depth 10 -Compress
 
     try {
-        $psRunner = "powershell.exe"
-        if (-not (Get-Command $psRunner -ErrorAction SilentlyContinue)) {
-            $psRunner = (Join-Path $PSHOME "powershell.exe")
-        }
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $pythonCmd.Source
+        $psi.Arguments = '"' + $scraperPythonPath + '"'
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardInput = $true
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
 
-        $scrapeOutput = & $psRunner -NoProfile -ExecutionPolicy Bypass -File $scraperScriptPath -InstallerPath $InstallMediaPath 2>&1
+        $proc = New-Object System.Diagnostics.Process
+        $proc.StartInfo = $psi
+        [void]$proc.Start()
+
+        $proc.StandardInput.Write($configJson)
+        $proc.StandardInput.Close()
+
+        $scrapeStdOut = $proc.StandardOutput.ReadToEnd()
+        $scrapeStdErr = $proc.StandardError.ReadToEnd()
+        $proc.WaitForExit()
+        $scrapeExitCode = $proc.ExitCode
+
+        $scrapeOutput = @()
+        if (-not [string]::IsNullOrWhiteSpace($scrapeStdErr)) {
+            $scrapeOutput += ($scrapeStdErr -split "`r?`n")
+        }
 
         foreach ($entry in @($scrapeOutput)) {
             if ($null -eq $entry) { continue }
@@ -921,24 +991,28 @@ function Get-PlaywrightScrapedPackageHelperSections {
         $stopwatch.Stop()
         $emptyResult.DurationSeconds = [Math]::Round($stopwatch.Elapsed.TotalSeconds, 2)
 
-        if ($LASTEXITCODE -ne 0) {
-            $logTail = ""
-            $scraperLogPath = Join-Path $toolRoot "Playwright_Scraping_POC\logs\scraper.log"
-            if (Test-Path $scraperLogPath) {
-                try {
-                    $logTail = (Get-Content -Path $scraperLogPath -Tail 4 -ErrorAction SilentlyContinue | Out-String).Trim()
+        if ($scrapeExitCode -ne 0) {
+            $emptyResult.Error = "Integrated Playwright scraper exited with code $scrapeExitCode after $($emptyResult.DurationSeconds)s."
+            if (-not [string]::IsNullOrWhiteSpace($scrapeStdErr)) {
+                $errorTail = (($scrapeStdErr -split "`r?`n") | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Last 3) -join " | "
+                if (-not [string]::IsNullOrWhiteSpace($errorTail)) {
+                    $emptyResult.Error += " Error tail: $errorTail"
                 }
-                catch {
-                }
-            }
-
-            $emptyResult.Error = "Playwright scraper exited with code $LASTEXITCODE after $($emptyResult.DurationSeconds)s."
-            if (-not [string]::IsNullOrWhiteSpace($logTail)) {
-                $emptyResult.Error += " Log tail: $logTail"
             }
             & $writeProcessLine -Message $emptyResult.Error -Level "WARN"
             return $emptyResult
         }
+
+        if ([string]::IsNullOrWhiteSpace($scrapeStdOut)) {
+            $emptyResult.Error = "Integrated Playwright scraper returned no JSON output."
+            & $writeProcessLine -Message $emptyResult.Error -Level "WARN"
+            return $emptyResult
+        }
+
+        $emptyResult.OutputFile = "in-memory:scraper.py"
+
+        & $writeProcessLine -Message "Package Helper scrape: processing scraper output..." -Level "INFO"
+        $parsed = $scrapeStdOut | ConvertFrom-Json -ErrorAction Stop
     }
     catch {
         $stopwatch.Stop()
@@ -948,36 +1022,86 @@ function Get-PlaywrightScrapedPackageHelperSections {
         return $emptyResult
     }
 
-    $latestOutput = Get-ChildItem -Path $scraperOutputPath -Filter "*.json" -File -ErrorAction SilentlyContinue |
-        Sort-Object LastWriteTimeUtc -Descending |
-        Select-Object -First 1
-
-    if (-not $latestOutput) {
-        $emptyResult.Error = "No Playwright output JSON file was found."
-        & $writeProcessLine -Message $emptyResult.Error -Level "WARN"
-        return $emptyResult
-    }
-
-    if ($latestOutput.LastWriteTimeUtc -lt $runStartedUtc.AddMinutes(-2)) {
-        $emptyResult.Error = "Latest Playwright output appears stale and was not produced by this run."
-        & $writeProcessLine -Message $emptyResult.Error -Level "WARN"
-        return $emptyResult
-    }
-
-    $emptyResult.OutputFile = $latestOutput.FullName
-
-    try {
-        & $writeProcessLine -Message "Package Helper scrape: processing scraper output..." -Level "INFO"
-        $json = Get-Content -Path $latestOutput.FullName -Raw -Encoding UTF8
-        $parsed = $json | ConvertFrom-Json -ErrorAction Stop
-    }
-    catch {
-        $emptyResult.Error = "Failed to parse Playwright output JSON: $($_.Exception.Message)"
-        & $writeProcessLine -Message $emptyResult.Error -Level "WARN"
-        return $emptyResult
-    }
-
     $sections = @{}
+
+    $hintToSection = @{
+        context_selection = 1
+        install_command_line = 2
+        uninstall_command_line = 3
+        uninstall_executable = 4
+        pre_install_commands = 5
+        custom_install_commands = 6
+        post_install_commands = 7
+        pre_uninstall_commands = 8
+        custom_uninstall_commands = 9
+        post_uninstall_commands = 10
+    }
+
+    function Add-ScrapedSnippetToSection {
+        param(
+            [hashtable]$SectionMap,
+            [int]$SectionNumber,
+            [string]$Snippet
+        )
+
+        if ($SectionNumber -lt 1 -or $SectionNumber -gt 10) {
+            return
+        }
+
+        if (-not $SectionMap.ContainsKey($SectionNumber)) {
+            $SectionMap[$SectionNumber] = @()
+        }
+
+        $SectionMap[$SectionNumber] += $Snippet
+    }
+
+    foreach ($site in @($parsed)) {
+        if (-not $site.success) {
+            continue
+        }
+
+        foreach ($suggestion in @($site.data)) {
+            if (-not $suggestion) { continue }
+            $text = Remove-WriteHostLines -Text ([string]$suggestion.text)
+            $text = Get-CodeOnlySnippet -Text $text
+            if ([string]::IsNullOrWhiteSpace($text)) { continue }
+            if (-not (Test-IsUsefulCodeSnippet -Text $text)) { continue }
+
+            $fullText = ("{0} {1}" -f [string]$suggestion.text, [string]$suggestion.context).ToLowerInvariant()
+            $sectionNumbers = @()
+
+            foreach ($hint in @($suggestion.section_hints)) {
+                $hintText = [string]$hint
+                if ($hintToSection.ContainsKey($hintText)) {
+                    $sectionNumbers += [int]$hintToSection[$hintText]
+                }
+            }
+
+            if ($sectionNumbers.Count -eq 0) {
+                if ($fullText -match 'allusers|per-user|per-machine|hkcu|hklm') { $sectionNumbers += 1 }
+                if ($fullText -match 'msiexec.*/i|/s|/silent|/quiet|/qn|choco install|winget install') { $sectionNumbers += 2 }
+                if ($fullText -match 'msiexec.*/x|uninstall|choco uninstall|winget uninstall') { $sectionNumbers += 3 }
+                if ($fullText -match 'uninst\.exe|uninstallstring|currentversion\\uninstall') { $sectionNumbers += 4 }
+                if ($fullText -match 'prerequisite|before install|pre-install|stop-process|block-appexecution') { $sectionNumbers += 5 }
+                if ($fullText -match 'execute-process|execute-msi|transform|mst|custom install') { $sectionNumbers += 6 }
+                if ($fullText -match 'post-install|after install|validate|verification') { $sectionNumbers += 7 }
+                if ($fullText -match 'pre-uninstall|before uninstall|backup') { $sectionNumbers += 8 }
+                if ($fullText -match 'custom uninstall|cleanup.*registry|remove-item') { $sectionNumbers += 9 }
+                if ($fullText -match 'post-uninstall|after uninstall|final cleanup') { $sectionNumbers += 10 }
+            }
+
+            foreach ($num in @($sectionNumbers | Select-Object -Unique)) {
+                Add-ScrapedSnippetToSection -SectionMap $sections -SectionNumber ([int]$num) -Snippet $text
+            }
+        }
+    }
+
+    $sectionKeys = @($sections.Keys)
+    foreach ($key in $sectionKeys) {
+        $sections[$key] = @($sections[$key] | Select-Object -Unique | Select-Object -First 7)
+    }
+
+    # Preserve legacy parser as a fallback if structured site-data shape changes.
     foreach ($section in @($parsed)) {
         $sectionNumber = 0
         try { $sectionNumber = [int]$section.SectionNumber } catch { $sectionNumber = 0 }
@@ -1006,7 +1130,9 @@ function Get-PlaywrightScrapedPackageHelperSections {
         }
 
         if ($formattedSuggestions.Count -gt 0) {
-            $sections[$sectionNumber] = @($formattedSuggestions | Select-Object -Unique)
+            if (-not $sections.ContainsKey($sectionNumber) -or $sections[$sectionNumber].Count -eq 0) {
+                $sections[$sectionNumber] = @($formattedSuggestions | Select-Object -Unique)
+            }
         }
     }
 
@@ -1109,7 +1235,7 @@ function Get-PackageHelpSections {
     $playwrightLookupMessage = "Playwright lookup disabled by request."
     $playwrightLookupDurationSeconds = 0
     if (-not $DisablePlaywrightLookup) {
-        $playwrightSuggestions = Get-PlaywrightScrapedPackageHelperSections -InstallMediaPath $InstallMediaPath -AppName $safeAppName
+        $playwrightSuggestions = Get-PlaywrightScrapedPackageHelperSections -InstallMediaPath $InstallMediaPath -AppName $safeAppName -Vendor $safeVendor -Version $safeVersion
         $playwrightLookupDurationSeconds = $playwrightSuggestions.DurationSeconds
         if ($playwrightSuggestions.Success) {
             $playwrightLookupStatus = "Succeeded"
