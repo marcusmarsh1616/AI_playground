@@ -24,7 +24,7 @@ function Start-ValidationSession {
     $sessionId = [guid]::NewGuid().ToString()
     $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
     
-    $session = @{
+    $session = [ordered]@{
         session_id = $sessionId
         start_time = $timestamp
         user = $env:USERNAME
@@ -35,6 +35,10 @@ function Start-ValidationSession {
         status = 'running'
         metrics = @{}
         errors = @()
+        end_time = $null
+        success = $null
+        report_path = $null
+        duration_seconds = $null
     }
     
     Write-Host "[SESSION] Started: $sessionId" -ForegroundColor Cyan
