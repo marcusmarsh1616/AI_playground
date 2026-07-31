@@ -97,6 +97,17 @@
       "capture_stage": "post_install",
       "capture_instruction": "Capture the Start Menu or application shortcuts after installation is complete.",
       "expected_filename": "{application_slug}_start_menu_shortcuts.png"
+    },
+    {
+      "id": "help_about_dialog",
+      "type": "screenshot",
+      "section": "post_launch_validation",
+      "label": "Help > About dialog",
+      "description": "Capture the Help > About dialog after launch to validate the product version and build information.",
+      "required": false,
+      "capture_stage": "post_launch",
+      "capture_instruction": "Launch the application and capture the Help > About dialog once the main window is open.",
+      "expected_filename": "{application_slug}_help_about.png"
     }
   ]
 }

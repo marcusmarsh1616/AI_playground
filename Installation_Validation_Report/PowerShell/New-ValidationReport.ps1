@@ -25,6 +25,48 @@ param(
     [string]$OutputPath = ".\Reports"
 )
 
+function Get-ChecklistHtml {
+    param(
+        [Parameter(Mandatory=$false)]
+        [object]$Items,
+
+        [Parameter(Mandatory=$false)]
+        [string]$FallbackText = 'No findings were identified.',
+
+        [Parameter(Mandatory=$false)]
+        [switch]$UseCheckmark
+    )
+
+    if (-not $Items) {
+        return "<li>$FallbackText</li>"
+    }
+
+    $listItems = New-Object System.Collections.Generic.List[string]
+
+    foreach ($item in @($Items)) {
+        if ($null -eq $item) {
+            continue
+        }
+
+        $text = [string]$item
+        if ([string]::IsNullOrWhiteSpace($text)) {
+            continue
+        }
+
+        if ($UseCheckmark) {
+            $listItems.Add("<li><span class='checkmark'>☒</span> $text</li>")
+        } else {
+            $listItems.Add("<li>$text</li>")
+        }
+    }
+
+    if ($listItems.Count -eq 0) {
+        return "<li>$FallbackText</li>"
+    }
+
+    return ($listItems -join "`n")
+}
+
 function New-ValidationReport {
     param(
         [hashtable]$Data,
@@ -81,29 +123,23 @@ function New-ValidationReport {
     # Add web research data if available
     if ($Data.WebResearch -and $Data.WebResearch.success) {
         $requirements = $Data.WebResearch.requirements
-        
-        # Operating System
-        if ($requirements.operating_system -and $requirements.operating_system.Count -gt 0) {
-            $osHtml = ($requirements.operating_system | ForEach-Object { 
-                "<p><span class='checkmark'>OK</span> $_</p>" 
-            }) -join "`n"
-            
-            $report = $report -replace '<p><span class="checkmark">.*?</span> Windows 10 x64 or Newer</p>', $osHtml
-        }
-        
-        # Prerequisites
-        if ($requirements.prerequisites -and $requirements.prerequisites.Count -gt 0) {
-            $prereqHtml = "<table class='details-table'><tr><td>Component</td><td>Version</td><td>Status</td></tr>`n"
-            
-            foreach ($prereq in $requirements.prerequisites) {
-                $prereqHtml += "<tr><td>$prereq</td><td>As Required</td><td><span class='checkmark'>OK</span> Required</td></tr>`n"
-            }
-            
-            $prereqHtml += "</table>"
-            
-            # Find and replace prerequisites table
-            $report = $report -replace '<table class="details-table">.*?</table>', $prereqHtml
-        }
+
+        $osHtml = Get-ChecklistHtml -Items $requirements.operating_system -FallbackText 'No specific operating-system requirement was identified in the research data.' -UseCheckmark
+        $report = $report -replace '\[OS_COMPATIBILITY_CONTENT\]', $osHtml
+
+        $conflictHtml = Get-ChecklistHtml -Items $requirements.conflicts -FallbackText 'No application conflicts were identified in the available research data.'
+        $report = $report -replace '\[CONFLICT_CONTENT\]', $conflictHtml
+
+        $prereqHtml = Get-ChecklistHtml -Items $requirements.prerequisites -FallbackText 'No additional prerequisites were identified in the available research data.'
+        $report = $report -replace '\[PREREQUISITE_CONTENT\]', $prereqHtml
+
+        $upgradeHtml = Get-ChecklistHtml -Items $requirements.upgrade_path -FallbackText 'No upgrade-path information was identified in the available research data.'
+        $report = $report -replace '\[UPGRADE_PATH_CONTENT\]', $upgradeHtml
+    } else {
+        $report = $report -replace '\[OS_COMPATIBILITY_CONTENT\]', "<li>No research data was available for operating-system compatibility.</li>"
+        $report = $report -replace '\[CONFLICT_CONTENT\]', "<li>No research data was available for conflicts.</li>"
+        $report = $report -replace '\[PREREQUISITE_CONTENT\]', "<li>No research data was available for prerequisites.</li>"
+        $report = $report -replace '\[UPGRADE_PATH_CONTENT\]', "<li>No research data was available for upgrade paths.</li>"
     }
     
     # Add installer data if available

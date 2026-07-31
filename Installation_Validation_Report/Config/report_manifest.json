@@ -16,12 +16,14 @@
     "screenshot": [
       "Installation Progress Dialog",
       "Programs and Features Entry",
-      "Start Menu Shortcuts"
+      "Start Menu Shortcuts",
+      "Help > About dialog"
     ]
   },
   "capture_stages": {
     "Installation Progress Dialog": "during_installation",
     "Programs and Features Entry": "post_install",
-    "Start Menu Shortcuts": "post_install"
+    "Start Menu Shortcuts": "post_install",
+    "Help > About dialog": "post_launch"
   }
 }

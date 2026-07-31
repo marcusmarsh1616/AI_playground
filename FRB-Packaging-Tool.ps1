@@ -2806,6 +2806,14 @@ function Invoke-PackageHelperGeneration {
 
         Set-PackageHelperTabContent -HelperData $helperData
         $tabControl.SelectedTab = $tabPackageHelper
+
+        if ($helperData -and $helperData.Context -and $helperData.Context.PlaywrightLookupStatus) {
+            $status = [string]$helperData.Context.PlaywrightLookupStatus
+            $duration = [string]$helperData.Context.PlaywrightLookupDurationSeconds
+            $message = [string]$helperData.Context.PlaywrightLookupMessage
+            Write-ProcessOutputLine -Message ("Package Helper Playwright status: {0} | Duration: {1}s | Detail: {2}" -f $status, $duration, $message) -Level "INFO"
+        }
+
         Write-ProcessOutputLine -Message "Package Helper suggestion generation completed." -Level "INFO"
     }
     catch {
