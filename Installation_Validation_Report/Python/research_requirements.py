@@ -105,7 +105,7 @@ class RequirementsResearcher:
         
         try:
             with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
+                browser = p.chromium.launch(channel='msedge', headless=True)
                 page = browser.new_page()
                 
                 page.goto(url, wait_until='networkidle', timeout=30000)
@@ -143,7 +143,7 @@ class RequirementsResearcher:
         
         try:
             with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
+                browser = p.chromium.launch(channel='msedge', headless=True)
                 page = browser.new_page()
                 
                 # Perform Google search
@@ -192,7 +192,7 @@ class RequirementsResearcher:
         
         try:
             with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
+                browser = p.chromium.launch(channel='msedge', headless=True)
                 page = browser.new_page()
                 
                 search_url = f"https://www.google.com/search?q={query.replace(' ', '+')}"

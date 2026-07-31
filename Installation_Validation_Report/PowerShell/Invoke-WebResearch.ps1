@@ -50,7 +50,8 @@ function Invoke-WebResearch {
     $candidatePaths = @(
         $env:PYTHON_EXE,
         $env:VIRTUAL_ENV,
-        'C:\Users\marcu\AppData\Roaming\uv\python\cpython-3.14.6-windows-x86_64-none\python.exe',
+        'C:\Users\marcu\.local\share\uv\python\cpython-3.11.15-windows-x86_64-none\python.exe',
+        'C:\Users\marcu\AppData\Roaming\uv\python\cpython-3.11.15-windows-x86_64-none\python.exe',
         'C:\Users\marcu\AppData\Local\Programs\Python\Python311\python.exe',
         'C:\Users\marcu\AppData\Local\Programs\Python\Python312\python.exe',
         'C:\Program Files\Python311\python.exe',

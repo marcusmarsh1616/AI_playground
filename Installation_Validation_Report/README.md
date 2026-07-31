@@ -39,9 +39,9 @@ Required packages:
 - requests >= 2.31.0
 
 ### Playwright Installation
-After installing Python packages, install browser binaries:
+After installing Python packages, install the Edge-based Chromium browser binaries:
 ```bash
-python -m playwright install chromium
+python -m playwright install msedge
 ```
 
 ## Quick Start

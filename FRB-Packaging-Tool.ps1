@@ -149,6 +149,14 @@ $script:LastExistingPackageLoadTick = 0
 $script:GlobalsCommandNames = @()
 $script:GlobalsCommandLookup = @{}
 $script:PackageHelperBusyForm = $null
+$script:PackageHelperBusyMessageLabel = $null
+$script:PackageHelperBusyElapsedLabel = $null
+$script:PackageHelperBusyStartedAt = $null
+$script:PackageHelperBusyBaseMessage = ""
+$script:PackageHelperIsRunning = $false
+$script:PackageHelperPendingRefresh = $false
+$script:PackageHelperActiveJob = $null
+$script:PackageHelperPollTimer = $null
 
 #region Configuration
 
@@ -2324,6 +2332,13 @@ function Get-PackageHelperSuggestionValue {
         return $matches[1]
     }
 
+    if ($VariableName -in @("appInstallCommandLine", "appUninstallCommandLine")) {
+        $firstContentLine = ($Snippet -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and $_ -notmatch '^\s*#' } | Select-Object -First 1)
+        if (-not [string]::IsNullOrWhiteSpace($firstContentLine)) {
+            return $firstContentLine.Trim()
+        }
+    }
+
     return ""
 }
 
@@ -2701,7 +2716,7 @@ function Apply-PackageHelperSectionToGui {
 }
 
 function Apply-AllPackageHelperSuggestionsToGui {
-    $applyOrder = @("ContextSelection", "UninstallCommand", "UninstallExecutable", "PreUninstallCommands", "CustomUninstallCommands", "PostUninstallCommands", "PreInstallCommands", "CustomInstallCommands", "PostInstallCommands")
+    $applyOrder = @("ContextSelection", "UninstallExecutable", "InstallCommand", "UninstallCommand", "PreInstallCommands", "CustomInstallCommands", "PostInstallCommands", "PreUninstallCommands", "CustomUninstallCommands", "PostUninstallCommands")
     $appliedCount = 0
 
     foreach ($sectionKey in $applyOrder) {
@@ -2793,20 +2808,33 @@ function Show-PackageHelperBusyDialog {
 
     $lbl = New-Object System.Windows.Forms.Label
     $lbl.AutoSize = $false
-    $lbl.Location = New-Object System.Drawing.Point(20, 18)
+    $lbl.Location = New-Object System.Drawing.Point(20, 16)
     $lbl.Size = New-Object System.Drawing.Size(380, 40)
     $lbl.Text = $Message
     $lbl.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
     $dialog.Controls.Add($lbl)
 
+    $lblElapsed = New-Object System.Windows.Forms.Label
+    $lblElapsed.AutoSize = $false
+    $lblElapsed.Location = New-Object System.Drawing.Point(20, 56)
+    $lblElapsed.Size = New-Object System.Drawing.Size(380, 14)
+    $lblElapsed.ForeColor = [System.Drawing.Color]::FromArgb(80, 80, 80)
+    $lblElapsed.Text = "Elapsed: 0s"
+    $lblElapsed.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
+    $dialog.Controls.Add($lblElapsed)
+
     $bar = New-Object System.Windows.Forms.ProgressBar
-    $bar.Location = New-Object System.Drawing.Point(20, 70)
+    $bar.Location = New-Object System.Drawing.Point(20, 78)
     $bar.Size = New-Object System.Drawing.Size(380, 18)
     $bar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
     $bar.MarqueeAnimationSpeed = 30
     $dialog.Controls.Add($bar)
 
     $script:PackageHelperBusyForm = $dialog
+    $script:PackageHelperBusyMessageLabel = $lbl
+    $script:PackageHelperBusyElapsedLabel = $lblElapsed
+    $script:PackageHelperBusyStartedAt = Get-Date
+    $script:PackageHelperBusyBaseMessage = $Message
 
     if ($form -and -not $form.IsDisposed) {
         [void]$dialog.Show($form)
@@ -2817,6 +2845,176 @@ function Show-PackageHelperBusyDialog {
 
     $dialog.Refresh()
     [System.Windows.Forms.Application]::DoEvents()
+}
+
+function Update-PackageHelperBusyDialog {
+    if (-not $script:PackageHelperBusyForm -or $script:PackageHelperBusyForm.IsDisposed) {
+        return
+    }
+
+    if ($script:PackageHelperBusyMessageLabel -and -not [string]::IsNullOrWhiteSpace($script:PackageHelperBusyBaseMessage)) {
+        $script:PackageHelperBusyMessageLabel.Text = $script:PackageHelperBusyBaseMessage
+    }
+
+    if ($script:PackageHelperBusyElapsedLabel -and $script:PackageHelperBusyStartedAt) {
+        $elapsed = [int]([DateTime]::Now - $script:PackageHelperBusyStartedAt).TotalSeconds
+        $script:PackageHelperBusyElapsedLabel.Text = "Elapsed: ${elapsed}s"
+    }
+}
+
+function Stop-PackageHelperBackgroundWork {
+    if ($script:PackageHelperPollTimer) {
+        try {
+            $script:PackageHelperPollTimer.Stop()
+            $script:PackageHelperPollTimer.Dispose()
+        }
+        catch {
+        }
+        finally {
+            $script:PackageHelperPollTimer = $null
+        }
+    }
+
+    if ($script:PackageHelperActiveJob) {
+        try {
+            if ($script:PackageHelperActiveJob.State -eq 'Running') {
+                Stop-Job -Job $script:PackageHelperActiveJob -ErrorAction SilentlyContinue
+            }
+        }
+        catch {
+        }
+
+        try {
+            Remove-Job -Job $script:PackageHelperActiveJob -Force -ErrorAction SilentlyContinue
+        }
+        catch {
+        }
+        finally {
+            $script:PackageHelperActiveJob = $null
+        }
+    }
+
+    $script:PackageHelperIsRunning = $false
+}
+
+function Start-PackageHelperBackgroundWork {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$RequestData,
+
+        [bool]$IsScrapeCandidate = $false
+    )
+
+    $pythonScraperModulePath = Join-Path $script:ToolRoot "src\Engines\PythonScraperEngine\PythonScraperEngine.psm1"
+    $switchEngineModulePath = Join-Path $script:ToolRoot "src\Engines\SwitchEngine\SwitchEngine.psm1"
+
+    if ($script:PackageHelperActiveJob) {
+        Stop-PackageHelperBackgroundWork
+    }
+
+    $script:PackageHelperActiveJob = Start-Job -ScriptBlock {
+        param($SwitchEngineModulePath, $PythonScraperModulePath, $Request)
+
+        Import-Module $PythonScraperModulePath -Force
+        Import-Module $SwitchEngineModulePath -Force
+
+        Get-PackageHelpSections -InstallerType $Request.InstallerType `
+                                -Vendor $Request.Vendor `
+                                -AppName $Request.AppName `
+                                -Edition $Request.Edition `
+                                -Version $Request.Version `
+                                -InstallMediaPath $Request.InstallMediaPath `
+                                -CurrentInstallSwitch $Request.CurrentInstallSwitch `
+                                -CurrentUninstallSwitch $Request.CurrentUninstallSwitch `
+                                -CurrentUninstallExecutable $Request.CurrentUninstallExecutable `
+                                -InstallContext $Request.InstallContext `
+                                -ContextRecommendation $Request.ContextRecommendation
+    } -ArgumentList $switchEngineModulePath, $pythonScraperModulePath, $RequestData
+
+    $script:PackageHelperPollTimer = New-Object System.Windows.Forms.Timer
+    $script:PackageHelperPollTimer.Interval = 350
+    $script:PackageHelperPollTimer.Add_Tick({
+        Update-PackageHelperBusyDialog
+
+        if (-not $script:PackageHelperActiveJob) {
+            return
+        }
+
+        $jobState = $script:PackageHelperActiveJob.State
+        if ($jobState -eq 'Running' -or $jobState -eq 'NotStarted') {
+            return
+        }
+
+        $job = $script:PackageHelperActiveJob
+        $script:PackageHelperActiveJob = $null
+
+        try {
+            if ($jobState -eq 'Completed') {
+                $helperData = Receive-Job -Job $job -ErrorAction Stop
+                if ($helperData -is [System.Array] -and $helperData.Count -gt 0) {
+                    $helperData = $helperData[-1]
+                }
+
+                if ($helperData) {
+                    Set-PackageHelperTabContent -HelperData $helperData
+                    $tabControl.SelectedTab = $tabPackageHelper
+
+                    if ($helperData.Context -and $helperData.Context.PlaywrightLookupStatus) {
+                        $status = [string]$helperData.Context.PlaywrightLookupStatus
+                        $duration = [string]$helperData.Context.PlaywrightLookupDurationSeconds
+                        $message = [string]$helperData.Context.PlaywrightLookupMessage
+                        Write-ProcessOutputLine -Message ("Package Helper Playwright status: {0} | Duration: {1}s | Detail: {2}" -f $status, $duration, $message) -Level "INFO"
+                    }
+                }
+
+                Write-ProcessOutputLine -Message "Package Helper suggestion generation completed." -Level "INFO"
+            }
+            else {
+                $jobErrors = ($job.ChildJobs | ForEach-Object { $_.JobStateInfo.Reason }) | Where-Object { $_ }
+                $detail = if ($jobErrors) { ($jobErrors | ForEach-Object { $_.Exception.Message } | Select-Object -Unique) -join " | " } else { "Unknown background job failure." }
+                throw [System.Exception]::new($detail)
+            }
+        }
+        catch {
+            Write-ProcessOutputLine -Message ("Package Helper generation failed: {0}" -f $_.Exception.Message) -Level "ERROR"
+            [System.Windows.Forms.MessageBox]::Show(
+                "Failed to generate package helper suggestions.`n`n$($_.Exception.Message)",
+                "Package Helper Error",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Error
+            )
+        }
+        finally {
+            try {
+                Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+            }
+            catch {
+            }
+
+            if ($script:PackageHelperPollTimer) {
+                try {
+                    $script:PackageHelperPollTimer.Stop()
+                    $script:PackageHelperPollTimer.Dispose()
+                }
+                catch {
+                }
+                finally {
+                    $script:PackageHelperPollTimer = $null
+                }
+            }
+
+            $script:PackageHelperIsRunning = $false
+            Close-PackageHelperBusyDialog
+
+            if ($script:PackageHelperPendingRefresh) {
+                $script:PackageHelperPendingRefresh = $false
+                Write-ProcessOutputLine -Message "Package Helper queued refresh started with latest field values." -Level "INFO"
+                Invoke-PackageHelperGeneration
+            }
+        }
+    })
+
+    $script:PackageHelperPollTimer.Start()
 }
 
 function Close-PackageHelperBusyDialog {
@@ -2830,6 +3028,10 @@ function Close-PackageHelperBusyDialog {
     }
     finally {
         $script:PackageHelperBusyForm = $null
+        $script:PackageHelperBusyMessageLabel = $null
+        $script:PackageHelperBusyElapsedLabel = $null
+        $script:PackageHelperBusyStartedAt = $null
+        $script:PackageHelperBusyBaseMessage = ""
     }
 }
 
@@ -2848,7 +3050,19 @@ function Invoke-PackageHelperGeneration {
         $script:DetectedInstallerType = "Generic"
     }
 
+    if ($script:PackageHelperIsRunning) {
+        $script:PackageHelperPendingRefresh = $true
+        if ($script:lblPackageHelperContext) {
+            $script:lblPackageHelperContext.Text = "Package Helper is still running. Your latest request is queued and will run next."
+            $script:lblPackageHelperContext.ForeColor = [System.Drawing.Color]::FromArgb(186, 103, 0)
+        }
+        Write-ProcessOutputLine -Message "Package Helper request queued while current generation is still running." -Level "WARN"
+        return
+    }
+
     Show-PackageHelperBusyDialog -Message "Package Helper is generating suggestions. This may take up to a minute."
+    $script:PackageHelperIsRunning = $true
+    $script:PackageHelperPendingRefresh = $false
 
     $isScrapeCandidate = -not [string]::IsNullOrWhiteSpace($script:InstallationMediaPath) -and (Test-Path $script:InstallationMediaPath)
     if ($isScrapeCandidate) {
@@ -2862,43 +3076,21 @@ function Invoke-PackageHelperGeneration {
         Write-ProcessOutputLine -Message "Package Helper lookup started without installer media path; web scraping source will be skipped." -Level "INFO"
     }
 
-    try {
-        $helperData = Get-PackageHelpSections -InstallerType $script:DetectedInstallerType `
-                                              -Vendor $txtVendor.Text.Trim() `
-                                              -AppName $txtName.Text.Trim() `
-                                              -Edition $txtEdition.Text.Trim() `
-                                              -Version $txtVersion.Text.Trim() `
-                                              -InstallMediaPath $script:InstallationMediaPath `
-                                              -CurrentInstallSwitch $txtInstallSwitch.Text.Trim() `
-                                              -CurrentUninstallSwitch $txtUninstallSwitch.Text.Trim() `
-                                              -CurrentUninstallExecutable $txtUninstallExecutable.Text.Trim() `
-                                              -InstallContext $script:SelectedInstallContext `
-                                              -ContextRecommendation $script:ContextRecommendation
-
-        Set-PackageHelperTabContent -HelperData $helperData
-        $tabControl.SelectedTab = $tabPackageHelper
-
-        if ($helperData -and $helperData.Context -and $helperData.Context.PlaywrightLookupStatus) {
-            $status = [string]$helperData.Context.PlaywrightLookupStatus
-            $duration = [string]$helperData.Context.PlaywrightLookupDurationSeconds
-            $message = [string]$helperData.Context.PlaywrightLookupMessage
-            Write-ProcessOutputLine -Message ("Package Helper Playwright status: {0} | Duration: {1}s | Detail: {2}" -f $status, $duration, $message) -Level "INFO"
-        }
-
-        Write-ProcessOutputLine -Message "Package Helper suggestion generation completed." -Level "INFO"
+    $requestData = @{
+        InstallerType = $script:DetectedInstallerType
+        Vendor = $txtVendor.Text.Trim()
+        AppName = $txtName.Text.Trim()
+        Edition = $txtEdition.Text.Trim()
+        Version = $txtVersion.Text.Trim()
+        InstallMediaPath = $script:InstallationMediaPath
+        CurrentInstallSwitch = $txtInstallSwitch.Text.Trim()
+        CurrentUninstallSwitch = $txtUninstallSwitch.Text.Trim()
+        CurrentUninstallExecutable = $txtUninstallExecutable.Text.Trim()
+        InstallContext = $script:SelectedInstallContext
+        ContextRecommendation = $script:ContextRecommendation
     }
-    catch {
-        Write-ProcessOutputLine -Message ("Package Helper generation failed: {0}" -f $_.Exception.Message) -Level "ERROR"
-        [System.Windows.Forms.MessageBox]::Show(
-            "Failed to generate package helper suggestions.`n`n$($_.Exception.Message)",
-            "Package Helper Error",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Error
-        )
-    }
-    finally {
-        Close-PackageHelperBusyDialog
-    }
+
+    Start-PackageHelperBackgroundWork -RequestData $requestData -IsScrapeCandidate:$isScrapeCandidate
 }
 
 function Set-InstallContextState {
@@ -3785,14 +3977,15 @@ $tabPackageHelper.Controls.Add($panelPackageHelper)
 
 $sectionLayout = @(
     @{ Key = "ContextSelection"; Title = "Context Selection" },
-    @{ Key = "UninstallCommand"; Title = "Uninstall Command Line" },
-    @{ Key = "UninstallExecutable"; Title = "Uninstall Executable" },
-    @{ Key = "PreUninstallCommands"; Title = "Pre-Uninstall Commands" },
-    @{ Key = "CustomUninstallCommands"; Title = "Custom Uninstall Commands" },
-    @{ Key = "PostUninstallCommands"; Title = "Post-Uninstall Commands" },
+    @{ Key = "UninstallExecutable"; Title = "Uninstall Media" },
+    @{ Key = "InstallCommand"; Title = "Install Command-line Switch" },
+    @{ Key = "UninstallCommand"; Title = "Uninstall Command-Line Switch" },
     @{ Key = "PreInstallCommands"; Title = "Pre-Install Commands" },
     @{ Key = "CustomInstallCommands"; Title = "Custom Install Commands" },
-    @{ Key = "PostInstallCommands"; Title = "Post-Install Commands" }
+    @{ Key = "PostInstallCommands"; Title = "Post-Install Commands" },
+    @{ Key = "PreUninstallCommands"; Title = "Pre-Uninstall Commands" },
+    @{ Key = "CustomUninstallCommands"; Title = "Custom Uninstall Commands" },
+    @{ Key = "PostUninstallCommands"; Title = "Post-Uninstall Commands" }
 )
 
 $helperTop = 0

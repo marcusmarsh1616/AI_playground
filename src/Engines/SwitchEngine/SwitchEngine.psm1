@@ -1305,6 +1305,51 @@ if (`$tempDrive -and `$tempDrive.Free -lt 6GB) {
         $uninstallCommandSuggestions = @("# Source: $sourceTag`r`n`$appUninstallCommandLine = '$webUninstall'") + $uninstallCommandSuggestions
     }
 
+    # Keep command-line sections switch-only. Strip variable assignments,
+    # comments, and executable launch fragments so technicians only see switches.
+    $toSwitchOnly = {
+        param([string]$Value)
+
+        if ([string]::IsNullOrWhiteSpace($Value)) { return "" }
+
+        $text = $Value.Trim()
+        if ($text -match '(?s)\$app(?:Install|Uninstall)CommandLine\s*=\s*''([^'']*)''') {
+            $text = $matches[1]
+        }
+        elseif ($text -match '(?s)\$app(?:Install|Uninstall)CommandLine\s*=\s*"([^"]*)"') {
+            $text = $matches[1]
+        }
+
+        $lines = $text -split "`r?`n"
+        $text = (($lines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and $_ -notmatch '^\s*#' }) -join ' ').Trim()
+        if ([string]::IsNullOrWhiteSpace($text)) { return "" }
+
+        $text = $text -replace '(?i)^\s*msiexec(?:\.exe)?\s*', ''
+        $text = $text -replace '(?i)^\s*/[ix]\s+[`"]?\$appMsiName[`"]?\s*', ''
+        $text = $text -replace '(?i)^\s*[`"]?[^`"\s]+\.(exe|msi)[`"]?\s*', ''
+        $text = $text.Trim()
+
+        if ($text -match '(?i)\.exe\b|\.msi\b|\$appMsiName') {
+            $switchMatches = [regex]::Matches($text, '(?i)(/[A-Za-z0-9?][^\s]*|-[A-Za-z0-9][^\s]*|[A-Za-z_?][A-Za-z0-9_?]*=[^\s]+)')
+            if ($switchMatches.Count -gt 0) {
+                $text = (($switchMatches | ForEach-Object { $_.Value }) -join ' ').Trim()
+            }
+        }
+
+        return $text
+    }
+
+    $installCommandSuggestions = @(
+        $installCommandSuggestions |
+            ForEach-Object { & $toSwitchOnly $_ } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+    $uninstallCommandSuggestions = @(
+        $uninstallCommandSuggestions |
+            ForEach-Object { & $toSwitchOnly $_ } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+
     $defaultUninstallExeOptions = @(
         "`$appUninstallExeName = 'unins000.exe'",
         "`$appUninstallExeName = '$($safeAppName -replace '\\s+', '')_Uninstall.exe'",
@@ -1553,15 +1598,20 @@ if (`$installContext -eq 'User' -and [Security.Principal.WindowsIdentity]::GetCu
                 Summary = "Selected install context and detection rationale for $productDisplay."
                 Suggestions = $contextSelectionSuggestions
             }
-            UninstallCommand = [ordered]@{
-                Title = "Uninstall Command Line"
-                Summary = "Uninstall command-line switches only for $productDisplay ($safeInstallerType)."
-                Suggestions = $uninstallCommandSuggestions
-            }
             UninstallExecutable = [ordered]@{
-                Title = "Uninstall Executable"
-                Summary = "Uninstall executable candidates ordered from existing field value, installer family heuristics, and install-media filename patterns."
+                Title = "Uninstall Media"
+                Summary = "Uninstall media candidates ordered from existing field value, installer family heuristics, and install-media filename patterns."
                 Suggestions = $defaultUninstallExeOptions
+            }
+            InstallCommand = [ordered]@{
+                Title = "Install Command-line Switch"
+                Summary = "Install switches only for $productDisplay ($safeInstallerType)."
+                Suggestions = $installCommandSuggestions
+            }
+            UninstallCommand = [ordered]@{
+                Title = "Uninstall Command-Line Switch"
+                Summary = "Uninstall switches only for $productDisplay ($safeInstallerType)."
+                Suggestions = $uninstallCommandSuggestions
             }
             PreInstallCommands = [ordered]@{
                 Title = "Pre-Install Commands"
