@@ -1,0 +1,5 @@
+﻿{
+  "_description": "Research results cache - Auto-populated during validation",
+  "_version": "1.0.0",
+  "_cache_expiry_days": 30
+}

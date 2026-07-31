@@ -1,0 +1,106 @@
+﻿{
+  "_description": "HTML parsing patterns and extraction rules",
+  "_version": "1.0.0",
+  
+  "common_selectors": {
+    "requirements_sections": [
+      "div[class*='requirement']",
+      "div[class*='system']",
+      "section[class*='spec']",
+      "table[class*='requirement']",
+      "div#requirements",
+      "section#system-requirements"
+    ],
+    
+    "table_data": [
+      "table tbody tr",
+      "table.specs tr",
+      "dl dt, dl dd"
+    ],
+    
+    "text_content": [
+      "p", "li", "span", "div"
+    ]
+  },
+  
+  "extraction_rules": {
+    "operating_system": {
+      "patterns": [
+        "Windows (\\d+)",
+        "Windows (\\w+)",
+        "macOS ([\\d.]+)",
+        "Linux",
+        "x64|64-bit|32-bit|x86"
+      ],
+      "keywords": ["OS", "Operating System", "Platform", "Windows", "macOS"]
+    },
+    
+    "memory": {
+      "patterns": [
+        "(\\d+)\\s*GB\\s*(RAM|Memory)",
+        "RAM:\\s*(\\d+)",
+        "Memory:\\s*(\\d+)"
+      ],
+      "keywords": ["RAM", "Memory", "GB"]
+    },
+    
+    "disk_space": {
+      "patterns": [
+        "(\\d+)\\s*(MB|GB)\\s*(disk|hard drive|storage)",
+        "disk space:\\s*(\\d+)",
+        "storage:\\s*(\\d+)"
+      ],
+      "keywords": ["Disk", "Storage", "Hard Drive", "Space"]
+    },
+    
+    "processor": {
+      "patterns": [
+        "Intel|AMD",
+        "(\\d+)\\s*GHz",
+        "Core (i\\d|\\d)",
+        "Processor|CPU"
+      ],
+      "keywords": ["Processor", "CPU", "GHz"]
+    },
+    
+    "prerequisites": {
+      "patterns": [
+        "\\.NET Framework ([\\d.]+)",
+        "Java ([\\d.]+)",
+        "Visual C\\+\\+ ([\\d]+)",
+        "DirectX ([\\d]+)"
+      ],
+      "keywords": [".NET", "Java", "Runtime", "Framework", "Visual C++", "VC++", "DirectX"]
+    },
+    
+    "conflicts": {
+      "patterns": [
+        "incompatible with ([\\w\\s]+)",
+        "conflicts with ([\\w\\s]+)",
+        "cannot (be installed|run) with ([\\w\\s]+)"
+      ],
+      "keywords": ["incompatible", "conflict", "cannot install", "not supported with"]
+    }
+  },
+  
+  "version_extraction": {
+    "patterns": [
+      "version\\s+([\\d.]+)",
+      "v([\\d.]+)",
+      "([\\d.]+)\\s+or (higher|later|newer)",
+      "minimum version:\\s*([\\d.]+)"
+    ]
+  },
+  
+  "data_cleaning": {
+    "remove_patterns": [
+      "Click here",
+      "Learn more",
+      "Read more",
+      "\\[Advertisement\\]",
+      "Cookie policy"
+    ],
+    "trim_whitespace": true,
+    "normalize_spaces": true
+  }
+}

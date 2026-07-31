@@ -1,0 +1,20 @@
+﻿{
+    "metrics":  {
+                    "cache_hit":  false,
+                    "report_generation_time":  0,
+                    "installer_analysis_time":  0,
+                    "research_method":  "skipped",
+                    "web_research_time":  0
+                },
+    "errors":  [
+                   "Report generation failed: The term \u0027New-ValidationReport\u0027 is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again."
+               ],
+    "version":  "24.08",
+    "session_id":  "e2d8624b-006d-41f3-b7e7-3f44eaf314d9",
+    "computer":  "P2MAM08L3",
+    "status":  "failed",
+    "application":  "7-Zip",
+    "installer_path":  "",
+    "start_time":  "2026-07-29 09:26:21",
+    "user":  "P1MAM08"
+}

@@ -1,0 +1,77 @@
+﻿{
+  "_description": "Application vendor URL mappings and search strategies",
+  "_version": "1.0.0",
+  "_last_updated": "2026-07-29",
+  
+  "applications": {
+    "Adobe Acrobat DC": {
+      "vendor": "Adobe",
+      "search_strategy": "direct_url",
+      "requirements_url": "https://helpx.adobe.com/acrobat/system-requirements.html",
+      "search_terms": ["Adobe Acrobat DC system requirements", "Acrobat DC prerequisites"],
+      "selectors": {
+        "requirements_section": "div.requirements-table",
+        "prerequisites": "table tbody tr",
+        "os_requirements": "h3:contains('Operating System')"
+      }
+    },
+    
+    "Snagit": {
+      "vendor": "TechSmith",
+      "search_strategy": "google_search",
+      "search_terms": ["Snagit system requirements", "Snagit technical specifications"],
+      "vendor_domain": "techsmith.com",
+      "selectors": {
+        "requirements_section": "div.system-requirements",
+        "content_area": "main article"
+      }
+    },
+    
+    "Google Chrome": {
+      "vendor": "Google",
+      "search_strategy": "fallback_apis",
+      "api_sources": ["chocolatey", "winget"],
+      "requirements_url": "https://support.google.com/chrome/answer/95346",
+      "search_terms": ["Chrome system requirements"]
+    },
+    
+    "Microsoft 365": {
+      "vendor": "Microsoft",
+      "search_strategy": "direct_url",
+      "requirements_url": "https://www.microsoft.com/en-us/microsoft-365/microsoft-365-and-office-resources",
+      "search_terms": ["Microsoft 365 system requirements", "Office system requirements"]
+    }
+  },
+  
+  "fallback_strategy": {
+    "order": ["chocolatey_api", "winget_api", "google_search", "vendor_site"],
+    "chocolatey_api": "https://community.chocolatey.org/api/v2/Packages()?$filter=Id eq '{package_id}'",
+    "winget_api": "https://winget.run/pkg/{package_id}"
+  },
+  
+  "search_patterns": {
+    "requirements_keywords": [
+      "system requirements",
+      "technical requirements",
+      "prerequisites",
+      "minimum requirements",
+      "recommended requirements",
+      "supported operating systems"
+    ],
+    
+    "conflict_keywords": [
+      "incompatible",
+      "conflicts with",
+      "cannot install with",
+      "must uninstall",
+      "known issues"
+    ],
+    
+    "upgrade_keywords": [
+      "upgrade from",
+      "migration path",
+      "upgrading from previous",
+      "replaces version"
+    ]
+  }
+}
