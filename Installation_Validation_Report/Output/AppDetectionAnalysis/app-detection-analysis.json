@@ -1,0 +1,44 @@
+﻿[
+    {
+        "DisplayName":  "7-Zip 24.09 (x64)",
+        "Executable":  "C:\\Program Files\\7-Zip\\7zFM.exe",
+        "LaunchOutcome":  "Skipped",
+        "Success":  false,
+        "Method":  null,
+        "Message":  "Launch skipped by parameter",
+        "DifferenceClass":  "Skipped",
+        "NextAction":  "Launch the app and re-run analysis on a real machine.",
+        "DetectionRuleHint":  "SkipLaunch",
+        "VersionText":  [
+
+                        ]
+    },
+    {
+        "DisplayName":  "GitHub Desktop",
+        "Executable":  "C:\\Users\\marcu\\AppData\\Local\\GitHubDesktop\\GitHubDesktop.exe",
+        "LaunchOutcome":  "Skipped",
+        "Success":  false,
+        "Method":  null,
+        "Message":  "Launch skipped by parameter",
+        "DifferenceClass":  "Skipped",
+        "NextAction":  "Launch the app and re-run analysis on a real machine.",
+        "DetectionRuleHint":  "SkipLaunch",
+        "VersionText":  [
+
+                        ]
+    },
+    {
+        "DisplayName":  "Copilot CLI",
+        "Executable":  "C:\\Users\\marcu\\AppData\\Local\\Microsoft\\WinGet\\Packages\\GitHub.Copilot_Microsoft.Winget.Source_8wekyb3d8bbwe\\copilot.exe",
+        "LaunchOutcome":  "Skipped",
+        "Success":  false,
+        "Method":  null,
+        "Message":  "Launch skipped by parameter",
+        "DifferenceClass":  "Skipped",
+        "NextAction":  "Launch the app and re-run analysis on a real machine.",
+        "DetectionRuleHint":  "SkipLaunch",
+        "VersionText":  [
+
+                        ]
+    }
+]

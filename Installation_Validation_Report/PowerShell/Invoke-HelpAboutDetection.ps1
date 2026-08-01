@@ -21,6 +21,10 @@ $results = Get-HelpAboutVerification -ApplicationName $ApplicationName
 
 if (-not $results -or $results.Count -eq 0) {
     Write-Host 'No matching Help/About-style windows were detected.' -ForegroundColor Yellow
+    Write-Host 'Current visible window titles:' -ForegroundColor Cyan
+    Get-Process | Where-Object { $_.MainWindowTitle -and $_.MainWindowTitle.Trim() } | ForEach-Object {
+        Write-Host ("- {0} :: {1}" -f $_.ProcessName, $_.MainWindowTitle) -ForegroundColor Cyan
+    }
     exit 0
 }
 

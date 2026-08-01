@@ -1,0 +1,4 @@
+﻿"DisplayName","Executable","Priority","Category","LaunchOutcome","Success","Method","DifferenceClass","DetectionRuleHint","Message","VersionText"
+"7-Zip 24.09 (x64)","C:\Program Files\7-Zip\7zFM.exe",,,"Skipped","False",,"Skipped","SkipLaunch","Launch skipped by parameter",""
+"GitHub Desktop","C:\Users\marcu\AppData\Local\GitHubDesktop\GitHubDesktop.exe",,,"Skipped","False",,"Skipped","SkipLaunch","Launch skipped by parameter",""
+"Copilot CLI","C:\Users\marcu\AppData\Local\Microsoft\WinGet\Packages\GitHub.Copilot_Microsoft.Winget.Source_8wekyb3d8bbwe\copilot.exe",,,"Skipped","False",,"Skipped","SkipLaunch","Launch skipped by parameter",""

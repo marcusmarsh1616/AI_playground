@@ -1,0 +1,16 @@
+Application Detection Analysis Summary
+====================================
+Analyzed apps: 3
+Skipped apps: 0
+
+Difference class counts:
+- Skipped: 3
+
+Highest-priority apps to review first:
+
+Suggested next actions:
+- 7-Zip 24.09 (x64): Launch the app and re-run analysis on a real machine.
+- GitHub Desktop: Launch the app and re-run analysis on a real machine.
+- Copilot CLI: Launch the app and re-run analysis on a real machine.
+
+Use the CSV/JSON outputs to feed a follow-on pass or to hand this workload to a technician with minimal effort.
