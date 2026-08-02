@@ -113,6 +113,41 @@ function Get-ExecutableCandidates {
     return @($candidates | Select-Object -Unique)
 }
 
+function Get-ExistingProcessForApp {
+    param(
+        [string]$AppName,
+        [string]$LaunchPath
+    )
+
+    $candidates = New-Object System.Collections.Generic.List[object]
+
+    if ($LaunchPath) {
+        try {
+            $baseName = [System.IO.Path]::GetFileNameWithoutExtension($LaunchPath)
+            if ($baseName) {
+                $matching = @(Get-Process -Name $baseName -ErrorAction SilentlyContinue)
+                foreach ($proc in $matching) { $candidates.Add($proc) }
+            }
+        } catch {
+        }
+    }
+
+    if ($AppName) {
+        $appLower = $AppName.ToLowerInvariant()
+        try {
+            $matching = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+                $procName = $_.ProcessName.ToLowerInvariant()
+                $title = $_.MainWindowTitle.ToLowerInvariant()
+                ($procName -like "*$appLower*" -or $title -like "*$appLower*")
+            })
+            foreach ($proc in $matching) { $candidates.Add($proc) }
+        } catch {
+        }
+    }
+
+    return @($candidates | Select-Object -Unique | Select-Object -First 1)
+}
+
 function Test-LikelyGuiApp {
     param([psobject]$App)
 
@@ -252,12 +287,22 @@ for ($i = 0; $i -lt $appCount; $i++) {
     $launchOutcome = 'Unknown'
     $versionText = @()
     $result = $null
+    $launchedByTool = $false
 
-    try {
-        $proc = Start-Process -FilePath $launchPath -PassThru
-        if ($proc) { $launchOutcome = 'Started' }
-    } catch {
-        $launchOutcome = "LaunchFailed:$($_.Exception.Message)"
+    $existingProc = Get-ExistingProcessForApp -AppName $appName -LaunchPath $launchPath
+    if ($existingProc) {
+        $proc = $existingProc
+        $launchOutcome = 'ExistingProcess'
+    } else {
+        try {
+            $proc = Start-Process -FilePath $launchPath -PassThru
+            if ($proc) {
+                $launchOutcome = 'Started'
+                $launchedByTool = $true
+            }
+        } catch {
+            $launchOutcome = "LaunchFailed:$($_.Exception.Message)"
+        }
     }
 
     if ($proc -and $proc.Id) {
@@ -270,10 +315,12 @@ for ($i = 0; $i -lt $appCount; $i++) {
 
         if ($result -and $result.DialogText) { $versionText = @($result.DialogText) }
 
-        try {
-            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-        } catch {
-            # leave process alone if it cannot be stopped cleanly
+        if ($launchedByTool) {
+            try {
+                Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            } catch {
+                # leave process alone if it cannot be stopped cleanly
+            }
         }
     } else {
         $result = [pscustomobject]@{ Success = $false; Method = $null; Message = 'Unable to start the application' }

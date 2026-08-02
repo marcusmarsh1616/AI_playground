@@ -150,6 +150,75 @@ public const uint WM_COMMAND = 0x0111;
     }
 }
 
+function Get-NormalizedMenuName {
+    param([string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) { return [string]::Empty }
+    return ($Text -replace '[&_\-]', '').Trim().ToLowerInvariant()
+}
+
+function Get-AboutLikeScore {
+    param([string]$Text)
+
+    $name = Get-NormalizedMenuName -Text $Text
+    if ([string]::IsNullOrWhiteSpace($name)) { return 0 }
+
+    if ($name -eq 'about') { return 100 }
+    if ($name -match '^about\b') { return 95 }
+    if ($name -match 'about') { return 90 }
+    if ($name -match '^help\b') { return 70 }
+    if ($name -match 'help') { return 65 }
+    if ($name -match 'version') { return 60 }
+    if ($name -match 'info') { return 55 }
+    if ($name -match 'license') { return 50 }
+    if ($name -match 'details|properties|register') { return 40 }
+
+    return 0
+}
+
+function Find-AboutLikeAutomationElement {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [object]$Window,
+
+        [Parameter(Mandatory=$true)]
+        [object]$Root,
+
+        [Parameter(Mandatory=$true)]
+        [int]$ProcessId
+    )
+
+    $candidates = New-Object System.Collections.Generic.List[object]
+    $descendants = @($Window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition))
+
+    foreach ($element in $descendants) {
+        $name = Get-UiAutomationElementText -Element $element
+        if ([string]::IsNullOrWhiteSpace($name)) { continue }
+
+        $score = Get-AboutLikeScore -Text $name
+        if ($score -lt 50) { continue }
+
+        $controlType = $element.Current.ControlType.ProgrammaticName
+        $candidates.Add([pscustomobject]@{
+            Element = $element
+            Name = $name
+            Score = $score
+            ControlType = $controlType
+        })
+    }
+
+    if ($candidates.Count -eq 0) { return $null }
+
+    $best = $candidates | Sort-Object Score -Descending | Select-Object -First 1
+    $inv = $null
+    if ($best.Element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$inv)) {
+        return $best
+    }
+
+    return $null
+}
+
 function Invoke-AboutDialogAutomation {
     [CmdletBinding()]
     param(
@@ -311,6 +380,19 @@ function Invoke-AboutDialogAutomation {
     }
 
     if (-not $invoked) {
+        $fallbackCandidate = Find-AboutLikeAutomationElement -Window $window -Root $root -ProcessId $process.Id
+        if ($fallbackCandidate) {
+            $result.AboutItemName = $fallbackCandidate.Name
+            $result.Method = "UIAElement:$($fallbackCandidate.ControlType)"
+            $inv = $null
+            if ($fallbackCandidate.Element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$inv)) {
+                $inv.Invoke()
+                $invoked = $true
+            }
+        }
+    }
+
+    if (-not $invoked) {
         if ($result.HelpMenuItems.Count -gt 0) {
             $result.Message = "Help menu found but it contains no About item. Help items: $($result.HelpMenuItems -join ' | ')"
         } elseif ($result.MenuBarItems.Count -gt 0) {
@@ -325,8 +407,8 @@ function Invoke-AboutDialogAutomation {
 
     # --- Detect the About dialog: new top-level window of same PID, or in-app dialog window (Electron) ---
     $winCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window)
-    $aboutWin = @($root.FindAll([System.Windows.Automation.TreeScope]::Children, (New-Object System.Windows.Automation.AndCondition($pidCond, $winCond)))) |
-        Where-Object { $_.Current.NativeWindowHandle -ne $process.MainWindowHandle.ToInt32() } | Select-Object -First 1
+    $aboutWin = @($root.FindAll([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition($pidCond, $winCond)))) |
+        Where-Object { $_.Current.NativeWindowHandle -ne $process.MainWindowHandle.ToInt32() -and $_.Current.NativeWindowHandle -ne 0 } | Select-Object -First 1
     if (-not $aboutWin) { $aboutWin = $window.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $winCond) }
 
     if (-not $aboutWin) {
