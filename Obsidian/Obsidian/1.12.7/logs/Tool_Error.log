@@ -1,0 +1,2 @@
+﻿[2026-07-27 09:34:14] [ERROR] Network deployment failed: Copy integrity verification failed: Total size mismatch: Source=311300414 bytes, Target=311300130 bytes
+[2026-07-27 09:41:26] [ERROR] Network deployment failed: Copy integrity verification failed: Total size mismatch: Source=311305228 bytes, Target=311304944 bytes

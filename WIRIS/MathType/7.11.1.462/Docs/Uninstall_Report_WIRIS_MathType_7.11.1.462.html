@@ -1,0 +1,110 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+<meta charset='UTF-8'>
+<title>Uninstallation Report - MathType</title>
+<style>
+body { font-family: 'Segoe UI', Arial, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; margin: 0; }
+.container { max-width: 1200px; margin: 0 auto; background: white; border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); overflow: hidden; }
+.header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 40px; text-align: center; }
+.header h1 { font-size: 2.5em; margin: 0 0 10px 0; font-weight: 300; }
+.status-banner { background-color: #28a745; color: white; padding: 20px; text-align: center; font-size: 1.5em; font-weight: bold; }
+.status-icon { font-size: 2em; margin-right: 10px; }
+.content { padding: 40px; }
+.section { margin-bottom: 40px; }
+.section-title { color: #667eea; font-size: 1.8em; margin-bottom: 20px; padding-bottom: 10px; border-bottom: 3px solid #667eea; }
+.info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-bottom: 20px; }
+.info-card { background: #f8f9fa; border-left: 4px solid #667eea; padding: 20px; border-radius: 8px; }
+.info-label { color: #6c757d; font-size: 0.9em; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+.info-value { font-size: 1.1em; color: #212529; word-break: break-all; white-space: pre-wrap; }
+.command-box { background: #2d2d2d; color: #f8f8f2; padding: 20px; border-radius: 8px; font-family: 'Consolas', 'Courier New', monospace; font-size: 0.95em; margin-top: 15px; border-left: 4px solid #667eea; overflow-x: auto; }
+.leftover-section { margin-bottom: 30px; }
+.leftover-section h3 { color: #495057; font-size: 1.3em; margin-bottom: 15px; }
+.leftover-list { background: #f8f9fa; padding: 20px; border-radius: 8px; border: 1px solid #dee2e6; max-height: 400px; overflow-y: auto; }
+.leftover-item { background: white; margin-bottom: 10px; padding: 15px; border-left: 4px solid #ffc107; border-radius: 4px; font-family: 'Consolas', 'Courier New', monospace; font-size: 0.9em; }
+.leftover-item.folder { border-left-color: #ff6b6b; }
+.leftover-item.registry { border-left-color: #ffc107; }
+.leftover-item.uninstall { border-left-color: #f39c12; }
+.leftover-item .item-type { display: inline-block; padding: 3px 10px; background: #ffc107; color: white; border-radius: 3px; font-size: 0.75em; margin-right: 10px; font-weight: bold; }
+.leftover-item.folder .item-type { background: #ff6b6b; }
+.leftover-item.registry .item-type { background: #ffc107; }
+.leftover-item.uninstall .item-type { background: #f39c12; }
+.leftover-item .item-path { color: #495057; word-break: break-all; }
+.leftover-item .item-detail { margin-top: 8px; font-size: 0.85em; color: #6c757d; padding-left: 75px; }
+.clean-message { background: linear-gradient(135deg, #28a745, #20c997); color: white; padding: 60px; text-align: center; border-radius: 12px; box-shadow: 0 10px 30px rgba(40, 167, 69, 0.3); }
+.cleanup-section { background: #e7f3ff; border: 2px solid #0066cc; border-radius: 8px; padding: 20px; margin-bottom: 30px; }
+.cleanup-header { color: #0066cc; font-size: 1.5em; margin-bottom: 15px; font-weight: bold; }
+.cleanup-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px; }
+.cleanup-stat { background: white; padding: 15px; border-radius: 6px; text-align: center; border-left: 4px solid #0066cc; }
+.cleanup-stat.success { border-left-color: #28a745; }
+.cleanup-stat.failed { border-left-color: #dc3545; }
+.cleanup-stat-value { font-size: 2em; font-weight: bold; color: #0066cc; }
+.cleanup-stat.success .cleanup-stat-value { color: #28a745; }
+.cleanup-stat.failed .cleanup-stat-value { color: #dc3545; }
+.cleanup-stat-label { font-size: 0.9em; color: #6c757d; text-transform: uppercase; letter-spacing: 1px; margin-top: 5px; }
+.cleanup-items { background: white; padding: 15px; border-radius: 6px; margin-top: 15px; }
+.cleanup-item { padding: 10px; margin-bottom: 8px; border-left: 3px solid #28a745; background: #f8f9fa; border-radius: 4px; font-family: 'Consolas', monospace; font-size: 0.85em; }
+.cleanup-item.failed { border-left-color: #dc3545; }
+.cleanup-item-type { display: inline-block; padding: 2px 8px; background: #28a745; color: white; border-radius: 3px; font-size: 0.75em; margin-right: 8px; }
+.cleanup-item.failed .cleanup-item-type { background: #dc3545; }
+.cleanup-item-error { margin-top: 5px; color: #dc3545; font-size: 0.8em; padding-left: 75px; }
+.clean-icon { font-size: 4em; margin-bottom: 20px; }
+.clean-text { font-size: 1.5em; font-weight: 300; }
+.footer { background: #f8f9fa; padding: 30px; text-align: center; color: #6c757d; border-top: 1px solid #dee2e6; }
+</style>
+</head>
+<body>
+<div class='container'>
+<div class='header'>
+<h1>Software Uninstallation Report</h1>
+<div>MathType 7.11.1.462</div>
+</div>
+<div class='status-banner'>
+<span class='status-icon'>[PASS]</span>
+Clean Uninstall
+</div>
+<div class='content'>
+<div class='section'>
+<h2 class='section-title'>Application Information</h2>
+<div class='info-grid'>
+<div class='info-card'><div class='info-label'>Software Name</div><div class='info-value'>MathType</div></div>
+<div class='info-card'><div class='info-label'>Version</div><div class='info-value'>7.11.1.462</div></div>
+<div class='info-card'><div class='info-label'>Vendor</div><div class='info-value'>WIRIS</div></div>
+<div class='info-card'><div class='info-label'>Uninstall Date</div><div class='info-value'>July 22, 2026 17:03:33</div></div>
+<div class='info-card'><div class='info-label'>Leftovers Found</div><div class='info-value'>0</div></div>
+<div class='info-card'><div class='info-label'>Technician</div><div class='info-value'>P1MAM08</div></div>
+</div>
+</div>
+<div class='section'>
+<h2 class='section-title'>Uninstall Command Used</h2>
+<div class='info-card'><div class='info-label'>Command</div><div class='command-box'>C:\Temp\AI_playground\Packaging folder\WIRIS\MathType\7.11.1.462\Install.exe /uninstall</div></div>
+</div>
+<div class='section'>
+<h2 class='section-title'>Leftover Detection Results</h2>
+<div class='clean-message'>
+<div class='clean-icon'>[OK]</div>
+<div class='clean-text'>No leftovers detected. The uninstallation was clean!</div>
+</div>
+
+</div>
+<div class='section'>
+<h2 class='section-title'>System Information</h2>
+<div class='info-grid'>
+<div class='info-card'><div class='info-label'>Computer Name</div><div class='info-value'>P2MAM08L4</div></div>
+<div class='info-card'><div class='info-label'>User Name</div><div class='info-value'>P1MAM08</div></div>
+<div class='info-card'><div class='info-label'>Operating System</div><div class='info-value'>Microsoft Windows 11 Enterprise</div></div>
+<div class='info-card'><div class='info-label'>OS Architecture</div><div class='info-value'>64-bit</div></div>
+<div class='info-card'><div class='info-label'>OS Version</div><div class='info-value'>10.0.26200</div></div>
+<div class='info-card'><div class='info-label'>Manufacturer</div><div class='info-value'>HP</div></div>
+<div class='info-card'><div class='info-label'>Model</div><div class='info-value'>HP ZBook Power 15.6 inch G10 Mobile Workstation PC</div></div>
+</div>
+</div>
+</div>
+<div class='footer'>
+<p><strong>FRB Package Creation Tool v3.1.0</strong></p>
+<p>Integrated Uninstallation Validation</p>
+<p>Report Generated: July 22, 2026 17:03:33</p>
+</div>
+</div>
+</body>
+</html>
