@@ -237,5 +237,93 @@ function Copy-InstallerToPackage {
     }
 }
 
+function Export-InstallMediaIconToDocs {
+    <#
+    .SYNOPSIS
+        Extracts installer icon and exports it as JPG to package Docs folder
+    .DESCRIPTION
+        Uses the install media associated icon and saves a deterministic JPG artifact in Docs.
+    .PARAMETER InstallerPath
+        Path to installer file (EXE/MSI/etc.)
+    .PARAMETER PackagePath
+        Path to packaging folder
+    .PARAMETER AppName
+        Optional app name used for output file naming
+    .OUTPUTS
+        Hashtable with keys: Success (bool), OutputPath (string), Message (string)
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$InstallerPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$PackagePath,
+
+        [Parameter(Mandatory = $false)]
+        [string]$AppName = ""
+    )
+
+    Write-Verbose "FolderEngine: Exporting install media icon to Docs"
+
+    $icon = $null
+    $bitmap = $null
+    try {
+        if (-not (Test-Path $InstallerPath)) {
+            throw "Installer file not found: $InstallerPath"
+        }
+
+        if (-not (Test-Path $PackagePath)) {
+            throw "Package path not found: $PackagePath"
+        }
+
+        $docsFolder = Join-Path $PackagePath "Docs"
+        if (-not (Test-Path $docsFolder)) {
+            New-Item -Path $docsFolder -ItemType Directory -Force | Out-Null
+        }
+
+        Add-Type -AssemblyName System.Drawing
+
+        $baseName = if (-not [string]::IsNullOrWhiteSpace($AppName)) { $AppName } else { [System.IO.Path]::GetFileNameWithoutExtension($InstallerPath) }
+        $safeBaseName = [regex]::Replace($baseName, '[^A-Za-z0-9._-]', '_').Trim('_')
+        if ([string]::IsNullOrWhiteSpace($safeBaseName)) {
+            $safeBaseName = "install-media"
+        }
+
+        $outputPath = Join-Path $docsFolder ("{0}-icon.jpg" -f $safeBaseName)
+
+        $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($InstallerPath)
+        if ($null -eq $icon) {
+            throw "Unable to extract icon from install media"
+        }
+
+        $bitmap = $icon.ToBitmap()
+        $bitmap.Save($outputPath, [System.Drawing.Imaging.ImageFormat]::Jpeg)
+
+        Write-Verbose "FolderEngine: Install media icon exported to $outputPath"
+        return @{
+            Success = $true
+            OutputPath = $outputPath
+            Message = "Install media icon exported successfully"
+        }
+    }
+    catch {
+        Write-Error "FolderEngine: Error exporting install media icon - $($_.Exception.Message)"
+        return @{
+            Success = $false
+            OutputPath = ""
+            Message = $_.Exception.Message
+        }
+    }
+    finally {
+        if ($bitmap) {
+            $bitmap.Dispose()
+        }
+        if ($icon) {
+            $icon.Dispose()
+        }
+    }
+}
+
 # Export public functions
-Export-ModuleMember -Function New-PackagingFolderStructure, Copy-TemplateFiles, Copy-InstallerToPackage
+Export-ModuleMember -Function New-PackagingFolderStructure, Copy-TemplateFiles, Copy-InstallerToPackage, Export-InstallMediaIconToDocs

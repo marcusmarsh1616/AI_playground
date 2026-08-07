@@ -35,11 +35,144 @@ function Test-IsAdministrator {
     }
 }
 
+function Get-SearchTokens {
+    [CmdletBinding()]
+    param(
+        [string]$AppName,
+        [string]$Vendor
+    )
+
+    $tokens = @()
+    foreach ($raw in @($AppName, $Vendor)) {
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            continue
+        }
+
+        $trimmed = $raw.Trim()
+        if (-not [string]::IsNullOrWhiteSpace($trimmed)) {
+            $tokens += $trimmed
+        }
+
+        foreach ($part in ($trimmed -split '[^A-Za-z0-9]+')) {
+            if (-not [string]::IsNullOrWhiteSpace($part) -and $part.Length -ge 3) {
+                $tokens += $part
+            }
+        }
+    }
+
+    return @($tokens | Sort-Object -Unique)
+}
+
+function Get-ShortcutTargetPath {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ShortcutPath
+    )
+
+    $targetPath = ""
+    $shell = $null
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut($ShortcutPath)
+        if ($shortcut -and -not [string]::IsNullOrWhiteSpace($shortcut.TargetPath)) {
+            $targetPath = [string]$shortcut.TargetPath
+        }
+    }
+    catch {
+    }
+    finally {
+        if ($shell) {
+            try {
+                [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($shell)
+            }
+            catch {
+            }
+        }
+    }
+
+    return $targetPath
+}
+
+function Stop-RunningAppExecutables {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$AppName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Vendor
+    )
+
+    $result = @{
+        Attempted = $false
+        Terminated = @()
+        Failed = @()
+    }
+
+    $tokens = Get-SearchTokens -AppName $AppName -Vendor $Vendor
+    if ($tokens.Count -eq 0) {
+        return $result
+    }
+
+    $result.Attempted = $true
+    $currentPid = $PID
+    $candidates = Get-Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.Id -ne $currentPid -and $_.ProcessName -notin @('Idle', 'System', 'Registry', 'Memory Compression')
+    }
+
+    foreach ($proc in @($candidates)) {
+        $processName = [string]$proc.ProcessName
+        $processPath = ""
+        try {
+            $processPath = [string]$proc.Path
+        }
+        catch {
+        }
+
+        $matched = $false
+        foreach ($token in $tokens) {
+            if ($processName -like "*$token*" -or (-not [string]::IsNullOrWhiteSpace($processPath) -and $processPath -like "*$token*")) {
+                $matched = $true
+                break
+            }
+        }
+
+        if (-not $matched) {
+            continue
+        }
+
+        try {
+            Stop-Process -Id $proc.Id -Force -ErrorAction Stop
+            $result.Terminated += [PSCustomObject]@{
+                Name = $processName
+                Id = $proc.Id
+                Path = $processPath
+            }
+            Write-Verbose "InstallTestEngine: Terminated running process before uninstall - $processName (PID: $($proc.Id))"
+        }
+        catch {
+            $result.Failed += [PSCustomObject]@{
+                Name = $processName
+                Id = $proc.Id
+                Path = $processPath
+                Error = $_.Exception.Message
+            }
+            Write-Warning "InstallTestEngine: Failed to terminate process $processName (PID: $($proc.Id)): $($_.Exception.Message)"
+        }
+    }
+
+    return $result
+}
+
 function Remove-InstalledDesktopShortcuts {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [string]$AppName
+        [string]$AppName,
+
+        [Parameter(Mandatory = $false)]
+        [string]$Vendor = ""
     )
 
     $result = @{
@@ -47,12 +180,15 @@ function Remove-InstalledDesktopShortcuts {
         Failed = @()
     }
 
-    if ([string]::IsNullOrWhiteSpace($AppName)) {
+    if ([string]::IsNullOrWhiteSpace($AppName) -and [string]::IsNullOrWhiteSpace($Vendor)) {
         return $result
     }
 
-    # AppName is passed from GUI app name during Start-InstallationTest.
-    $AppName = $AppName.Trim()
+    $tokens = Get-SearchTokens -AppName $AppName -Vendor $Vendor
+    if ($tokens.Count -eq 0) {
+        return $result
+    }
+
     $PublicDesktop = [Environment]::GetFolderPath("CommonDesktopDirectory")
     $UserDesktop = [Environment]::GetFolderPath("Desktop")
     $DesktopPaths = @($PublicDesktop, $UserDesktop)
@@ -63,9 +199,23 @@ function Remove-InstalledDesktopShortcuts {
         }
 
         $scope = if ($DesktopPath -eq $PublicDesktop) { "Machine" } else { "User" }
-        $Shortcuts = Get-ChildItem -Path $DesktopPath -Filter "*$AppName*.lnk" -File -ErrorAction SilentlyContinue
+        $Shortcuts = Get-ChildItem -Path $DesktopPath -Filter "*.lnk" -File -ErrorAction SilentlyContinue
 
         foreach ($Shortcut in $Shortcuts) {
+            $shortcutName = [string]$Shortcut.Name
+            $shortcutTarget = Get-ShortcutTargetPath -ShortcutPath $Shortcut.FullName
+            $isMatch = $false
+            foreach ($token in $tokens) {
+                if ($shortcutName -like "*$token*" -or (-not [string]::IsNullOrWhiteSpace($shortcutTarget) -and $shortcutTarget -like "*$token*")) {
+                    $isMatch = $true
+                    break
+                }
+            }
+
+            if (-not $isMatch) {
+                continue
+            }
+
             try {
                 Remove-Item -Path $Shortcut.FullName -Force -ErrorAction Stop
                 $result.Removed += [PSCustomObject]@{
@@ -236,7 +386,7 @@ function Start-InstallationTest {
 
             $result.Diagnostics = Get-ExecutionEvidence -SearchRoot $installWorkingDirectory -OperationStart $operationStart -OperationName "Install"
 
-            $shortcutCleanup = Remove-InstalledDesktopShortcuts -AppName $AppName
+            $shortcutCleanup = Remove-InstalledDesktopShortcuts -AppName $AppName -Vendor $Vendor
             $result.RemovedDesktopShortcuts = @($shortcutCleanup.Removed)
             $result.FailedDesktopShortcutRemovals = @($shortcutCleanup.Failed)
             
@@ -323,6 +473,8 @@ function Start-UninstallationTest {
         ReportPath = ""
         Diagnostics = $null
         ErrorMessage = ""
+        TerminatedProcesses = @()
+        FailedProcessTerminations = @()
     }
     
     try {
@@ -337,6 +489,12 @@ function Start-UninstallationTest {
         $installWorkingDirectory = Split-Path -Path $InstallExePath -Parent
         $result.WorkingDirectory = $installWorkingDirectory
         $operationStart = Get-Date
+
+        Write-Verbose "InstallTestEngine: Terminating running application executables before uninstall..."
+        $terminationResult = Stop-RunningAppExecutables -AppName $AppName -Vendor $Vendor
+        $result.TerminatedProcesses = @($terminationResult.Terminated)
+        $result.FailedProcessTerminations = @($terminationResult.Failed)
+        Start-Sleep -Seconds 1
         
         # Use Start-Process (no elevation - use embedded manifest)
         $uninstallProcess = Start-Process -FilePath $InstallExePath `
@@ -525,6 +683,14 @@ function Remove-UninstallLeftovers {
     }
     else {
         $cleanupCandidates = @($LeftoverData.Details | Where-Object { $_.Scope -eq "Machine" })
+    }
+
+    if ($PreserveUserLevel) {
+        $userDesktopShortcuts = @($LeftoverData.Details | Where-Object { $_.Scope -eq "User" -and $_.Type -eq "Desktop Shortcut" })
+        if ($userDesktopShortcuts.Count -gt 0) {
+            Write-Verbose "InstallTestEngine: Adding user desktop shortcuts to cleanup list by policy override"
+            $cleanupCandidates += $userDesktopShortcuts
+        }
     }
 
     if ($cleanupCandidates.Count -eq 0) {

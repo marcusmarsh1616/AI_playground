@@ -158,6 +158,7 @@ $script:PackageHelperPendingRefresh = $false
 $script:PackageHelperActiveJob = $null
 $script:PackageHelperPollTimer = $null
 $script:LastPackageHelperAutoTriggerSignature = ""
+$script:CustomCommandStyleChoices = @{}
 
 #region Configuration
 
@@ -1042,6 +1043,70 @@ function Convert-GlobalsAssistantLine {
         }
     }
 
+    # Convert Write-Host output to Write-Log so runtime output is persisted in deployment logs.
+    $writeHostMatch = [regex]::Match($Line, '^(?<indent>\s*)Write-Host\s*(?<args>.*)$')
+    if ($writeHostMatch.Success) {
+        $indent = $writeHostMatch.Groups['indent'].Value
+        $args = $writeHostMatch.Groups['args'].Value.Trim()
+
+        if ([string]::IsNullOrWhiteSpace($args)) {
+            $args = '"<message>"'
+        }
+        else {
+            $args = ($args -replace '(?i)\s+-ForegroundColor\s+\S+', '')
+            $args = ($args -replace '(?i)\s+-BackgroundColor\s+\S+', '')
+            $args = ($args -replace '(?i)\s+-NoNewline\b', '')
+            $args = $args.Trim()
+            if ([string]::IsNullOrWhiteSpace($args)) {
+                $args = '"<message>"'
+            }
+        }
+
+        $result.UpdatedLine = "$indent" + "Write-Log -Message $args -Severity 1"
+        $result.Changed = $true
+        $result.Reason = "Converted Write-Host to Write-Log so output is captured in deployment logs."
+        return $result
+    }
+
+    # Convert Start-Process into Execute-Process to align execution telemetry and exit handling.
+    $startProcessMatch = [regex]::Match($Line, '^(?<indent>\s*)Start-Process\s+(?<args>.+)$')
+    if ($startProcessMatch.Success) {
+        $indent = $startProcessMatch.Groups['indent'].Value
+        $args = $startProcessMatch.Groups['args'].Value
+
+        $fileToken = ""
+        $argToken = ""
+
+        $fileMatch = [regex]::Match($args, '(?i)-FilePath\s+(?<value>"[^"]+"|''[^'']+''|[^\s]+)')
+        if ($fileMatch.Success) {
+            $fileToken = $fileMatch.Groups['value'].Value
+        }
+        else {
+            $firstArgMatch = [regex]::Match($args, '^(?<value>"[^"]+"|''[^'']+''|[^\s]+)')
+            if ($firstArgMatch.Success) {
+                $fileToken = $firstArgMatch.Groups['value'].Value
+            }
+        }
+
+        $argMatch = [regex]::Match($args, '(?i)-ArgumentList\s+(?<value>"[^"]*"|''[^'']*''|[^\s]+)')
+        if ($argMatch.Success) {
+            $argToken = $argMatch.Groups['value'].Value
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($fileToken)) {
+            $updated = "$indent" + "Execute-Process -Path $fileToken"
+            if (-not [string]::IsNullOrWhiteSpace($argToken)) {
+                $updated += " -Parameters $argToken"
+            }
+            $updated += " -WindowStyle Hidden"
+
+            $result.UpdatedLine = $updated
+            $result.Changed = $true
+            $result.Reason = "Converted Start-Process to Execute-Process for wrapper-aligned logging and exit handling."
+            return $result
+        }
+    }
+
     return $result
 }
 
@@ -1310,6 +1375,185 @@ function Remove-TemplateDocsFromPackage {
             }
         }
     }
+}
+
+function Convert-CommandTextToStartupVariables {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Text
+    )
+
+    $result = $Text
+    $replacementMap = [ordered]@{
+        '\$Vendor\b' = '$appVendor'
+        '\$Name\b' = '$appName'
+        '\$Version\b' = '$appVersion'
+        '\$InstallSwitch\b' = '$appInstallCommandLine'
+        '\$UninstallSwitch\b' = '$appUninstallCommandLine'
+        '\$UninstallExeName\b' = '$appUninstallExeName'
+        '\$AppVendor\b' = '$appVendor'
+        '\$AppName\b' = '$appName'
+        '\$AppVersion\b' = '$appVersion'
+    }
+
+    foreach ($pattern in $replacementMap.Keys) {
+        $result = [regex]::Replace($result, $pattern, $replacementMap[$pattern], [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    }
+
+    return $result
+}
+
+function Get-GuiManagedCommandBlocks {
+    $preUninstallManaged = @'
+## START TOOL-MANAGED WRAPPER BLOCK: Pre-Uninstall Process Guard
+$frbProcessTokens = @($appNameMask, $appName, $appVendor) |
+	Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+	ForEach-Object { $_.Trim() } |
+	Select-Object -Unique
+
+if ($frbProcessTokens.Count -gt 0)
+{
+	Write-Log -Message "GUI managed pre-uninstall process guard started for token(s): $($frbProcessTokens -join ', ')" -Source 'Pre-Uninstall'
+	$frbRunningProcesses = Get-Process -ErrorAction SilentlyContinue | Where-Object {
+		$_.ProcessName -notin @('Idle', 'System', 'Registry', 'Memory Compression')
+	}
+
+	foreach ($frbProc in @($frbRunningProcesses))
+	{
+		$frbMatched = $false
+		foreach ($frbToken in $frbProcessTokens)
+		{
+			if ($frbProc.ProcessName -like "*$frbToken*")
+			{
+				$frbMatched = $true
+				break
+			}
+		}
+
+		if (-not $frbMatched) { continue }
+
+		try
+		{
+			Stop-Process -Id $frbProc.Id -Force -ErrorAction Stop
+			Write-Log -Message "GUI managed pre-uninstall stop succeeded for [$($frbProc.ProcessName)] (PID: $($frbProc.Id))." -Source 'Pre-Uninstall'
+		}
+		catch
+		{
+			Write-Log -Message "GUI managed pre-uninstall stop failed for [$($frbProc.ProcessName)] (PID: $($frbProc.Id)). $($_.Exception.Message)" -Severity 2 -Source 'Pre-Uninstall'
+		}
+	}
+}
+## END TOOL-MANAGED WRAPPER BLOCK
+'@
+
+    $postUninstallManaged = @'
+## START TOOL-MANAGED WRAPPER BLOCK: Post-Uninstall Desktop Shortcut Cleanup
+$frbShortcutTokens = @($appNameMask, $appName, $appVendor) |
+	Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+	ForEach-Object { $_.Trim() } |
+	Select-Object -Unique
+
+$frbDesktopPaths = @(
+	[Environment]::GetFolderPath('CommonDesktopDirectory'),
+	[Environment]::GetFolderPath('Desktop')
+)
+
+foreach ($frbDesktopPath in $frbDesktopPaths)
+{
+	if ([string]::IsNullOrWhiteSpace($frbDesktopPath) -or -not (Test-Path -Path $frbDesktopPath)) { continue }
+
+	foreach ($frbToken in $frbShortcutTokens)
+	{
+		$frbShortcutPattern = Join-Path $frbDesktopPath "*$frbToken*.lnk"
+		Remove-File -Path $frbShortcutPattern -ContinueOnError $true
+	}
+}
+
+Write-Log -Message 'GUI managed post-uninstall desktop shortcut cleanup complete.' -Source 'Post-Uninstall'
+## END TOOL-MANAGED WRAPPER BLOCK
+'@
+
+    return @{
+        PreUninstall = $preUninstallManaged.Trim()
+        PostUninstall = $postUninstallManaged.Trim()
+    }
+}
+
+function Merge-ManagedBlockIntoSection {
+    param(
+        [string]$SectionText,
+        [string]$ManagedBlock
+    )
+
+    $section = if ([string]::IsNullOrWhiteSpace($SectionText)) { '' } else { $SectionText.Trim() }
+    if ([string]::IsNullOrWhiteSpace($ManagedBlock)) {
+        return $section
+    }
+
+    if ($section -like '*START TOOL-MANAGED WRAPPER BLOCK*') {
+        return $section
+    }
+
+    if ([string]::IsNullOrWhiteSpace($section)) {
+        return $ManagedBlock
+    }
+
+    return ($ManagedBlock + [Environment]::NewLine + [Environment]::NewLine + $section)
+}
+
+function Normalize-CommandSectionForTemplate {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SectionText
+    )
+
+    if ([string]::IsNullOrWhiteSpace($SectionText)) {
+        return @{
+            Text = ''
+            AppliedChanges = @()
+        }
+    }
+
+    $startupAlignedText = Convert-CommandTextToStartupVariables -Text $SectionText
+    $rewriteResult = Get-GlobalsAssistantRewriteResult -CodeText $startupAlignedText
+
+    return @{
+        Text = (Format-CodeEditorText -Text $rewriteResult.RewrittenCode)
+        AppliedChanges = @($rewriteResult.AppliedChanges)
+    }
+}
+
+function Get-PreparedCommandSectionsForTemplate {
+    $rawSections = @{
+        PreInstall = $txtPreInstall.Text
+        CustomInstall = $txtCustomInstall.Text
+        PostInstall = $txtPostInstall.Text
+        PreUninstall = $txtPreUninstall.Text
+        CustomUninstall = $txtCustomUninstall.Text
+        PostUninstall = $txtPostUninstall.Text
+    }
+
+    $managedBlocks = Get-GuiManagedCommandBlocks
+    $preparedSections = @{}
+    $appliedNormalizationCount = 0
+
+    foreach ($key in @($rawSections.Keys)) {
+        $sectionText = [string]$rawSections[$key]
+        if ($managedBlocks.ContainsKey($key)) {
+            $sectionText = Merge-ManagedBlockIntoSection -SectionText $sectionText -ManagedBlock ([string]$managedBlocks[$key])
+        }
+
+        $normalized = Normalize-CommandSectionForTemplate -SectionText $sectionText
+        $preparedSections[$key] = [string]$normalized.Text
+
+        if ($normalized.AppliedChanges -and $normalized.AppliedChanges.Count -gt 0) {
+            $appliedNormalizationCount += $normalized.AppliedChanges.Count
+        }
+    }
+
+    Write-ProcessOutputLine -Message ("Command section preparation complete. Wrapper/variable normalization changes applied: {0}" -f $appliedNormalizationCount) -Level "INFO"
+
+    return $preparedSections
 }
 
 function Update-Status {
@@ -1594,6 +1838,18 @@ function New-PackagingFolder {
             }
             
             Update-Status "Installation media copied to Data folder"
+
+            $iconExportResult = Export-InstallMediaIconToDocs -InstallerPath $script:InstallationMediaPath `
+                                                               -PackagePath $newFolderPath `
+                                                               -AppName $Name
+            if ($iconExportResult.Success) {
+                Write-ProcessOutputLine -Message ("Install media icon exported: {0}" -f $iconExportResult.OutputPath) -Level "INFO"
+                Update-Status "Install media icon exported to Docs" "Green"
+            }
+            else {
+                Write-ProcessOutputLine -Message ("Install media icon export failed: {0}" -f $iconExportResult.Message) -Level "WARN"
+                Update-Status "Install media icon export failed (see log)" "Orange"
+            }
         }
         
         $progressBar.Value = 80
@@ -1640,14 +1896,7 @@ function New-PackagingFolder {
         # Insert custom commands if any provided (v3.2 CustomCommandsEngine integration)
         # Always process custom commands (v3.2 CustomCommandsEngine - FIXED 2026-07-23)
         # This ensures GUI is source of truth for BOTH adding AND removing commands
-        $commandSections = @{
-            PreInstall = $txtPreInstall.Text
-            CustomInstall = $txtCustomInstall.Text
-            PostInstall = $txtPostInstall.Text
-            PreUninstall = $txtPreUninstall.Text
-            CustomUninstall = $txtCustomUninstall.Text
-            PostUninstall = $txtPostUninstall.Text
-        }
+        $commandSections = Get-PreparedCommandSectionsForTemplate
         
         Update-Status "Updating custom commands in Startup.pss..." "Blue"
         $form.Refresh()
@@ -3294,6 +3543,556 @@ function Invoke-PackageHelperGeneration {
     Start-PackageHelperBackgroundWork -RequestData $requestData -IsScrapeCandidate:$isScrapeCandidate
 }
 
+function Get-PackageAnalyzerCodeSections {
+    param(
+        [bool]$IncludeManagedBlocks = $true,
+        [bool]$NormalizeForTemplate = $true
+    )
+
+    $sections = @(
+        [PSCustomObject]@{ Key = 'PreInstall'; Name = 'Pre-Install Commands'; Text = if ($script:txtPreInstall) { [string]$script:txtPreInstall.Text } else { '' } },
+        [PSCustomObject]@{ Key = 'CustomInstall'; Name = 'Custom Install Commands'; Text = if ($script:txtCustomInstall) { [string]$script:txtCustomInstall.Text } else { '' } },
+        [PSCustomObject]@{ Key = 'PostInstall'; Name = 'Post-Install Commands'; Text = if ($script:txtPostInstall) { [string]$script:txtPostInstall.Text } else { '' } },
+        [PSCustomObject]@{ Key = 'PreUninstall'; Name = 'Pre-Uninstall Commands'; Text = if ($script:txtPreUninstall) { [string]$script:txtPreUninstall.Text } else { '' } },
+        [PSCustomObject]@{ Key = 'CustomUninstall'; Name = 'Custom Uninstall Commands'; Text = if ($script:txtCustomUninstall) { [string]$script:txtCustomUninstall.Text } else { '' } },
+        [PSCustomObject]@{ Key = 'PostUninstall'; Name = 'Post-Uninstall Commands'; Text = if ($script:txtPostUninstall) { [string]$script:txtPostUninstall.Text } else { '' } }
+    )
+
+    if (-not $IncludeManagedBlocks -and -not $NormalizeForTemplate) {
+        return @($sections)
+    }
+
+    $managedBlocks = if ($IncludeManagedBlocks) { Get-GuiManagedCommandBlocks } else { @{} }
+    $prepared = New-Object System.Collections.Generic.List[object]
+
+    foreach ($section in @($sections)) {
+        $text = [string]$section.Text
+        if ($IncludeManagedBlocks -and $managedBlocks.ContainsKey($section.Key)) {
+            $text = Merge-ManagedBlockIntoSection -SectionText $text -ManagedBlock ([string]$managedBlocks[$section.Key])
+        }
+
+        if ($NormalizeForTemplate) {
+            $normalized = Normalize-CommandSectionForTemplate -SectionText $text
+            $text = [string]$normalized.Text
+        }
+
+        [void]$prepared.Add([PSCustomObject]@{
+                Key = $section.Key
+                Name = $section.Name
+                Text = $text
+            })
+    }
+
+    return @($prepared)
+}
+
+function Get-TextSignature {
+    param(
+        [string]$Text
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return ""
+    }
+
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Text)
+        return (([System.BitConverter]::ToString($sha.ComputeHash($bytes))) -replace '-', '')
+    }
+    finally {
+        $sha.Dispose()
+    }
+}
+
+function Show-FrbNativeChoiceDialog {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SectionTitle,
+
+        [Parameter(Mandatory = $true)]
+        [string]$SummaryText,
+
+        [Parameter(Mandatory = $false)]
+        [string]$SectionPreview = ""
+    )
+
+    $dialog = New-Object System.Windows.Forms.Form
+    $dialog.Text = "Choose Command Style"
+    $dialog.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterParent
+    $dialog.Size = New-Object System.Drawing.Size(920, 620)
+    $dialog.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+    $dialog.MaximizeBox = $false
+    $dialog.MinimizeBox = $false
+    $dialog.ControlBox = $false
+    $dialog.TopMost = $true
+
+    $lblTitle = New-Object System.Windows.Forms.Label
+    $lblTitle.AutoSize = $false
+    $lblTitle.Location = New-Object System.Drawing.Point(18, 14)
+    $lblTitle.Size = New-Object System.Drawing.Size(860, 28)
+    $lblTitle.Font = New-Object System.Drawing.Font('Segoe UI', 11, [System.Drawing.FontStyle]::Bold)
+    $lblTitle.Text = $SectionTitle
+    $dialog.Controls.Add($lblTitle)
+
+    $lblSummary = New-Object System.Windows.Forms.Label
+    $lblSummary.AutoSize = $false
+    $lblSummary.Location = New-Object System.Drawing.Point(18, 48)
+    $lblSummary.Size = New-Object System.Drawing.Size(860, 72)
+    $lblSummary.Text = $SummaryText
+    $lblSummary.ForeColor = [System.Drawing.Color]::FromArgb(70, 70, 70)
+    $dialog.Controls.Add($lblSummary)
+
+    $txtPreview = New-Object System.Windows.Forms.TextBox
+    $txtPreview.Location = New-Object System.Drawing.Point(18, 128)
+    $txtPreview.Size = New-Object System.Drawing.Size(860, 400)
+    $txtPreview.Multiline = $true
+    $txtPreview.ScrollBars = 'Both'
+    $txtPreview.WordWrap = $false
+    $txtPreview.ReadOnly = $true
+    $txtPreview.Font = $FontCode
+    $txtPreview.Text = $SectionPreview
+    $dialog.Controls.Add($txtPreview)
+
+    $btnFrb = New-Object System.Windows.Forms.Button
+    $btnFrb.Text = 'FRB Powershell Cmdlet'
+    $btnFrb.Location = New-Object System.Drawing.Point(528, 540)
+    $btnFrb.Size = New-Object System.Drawing.Size(170, 34)
+    $btnFrb.BackColor = [System.Drawing.Color]::FromArgb(0, 105, 160)
+    $btnFrb.ForeColor = [System.Drawing.Color]::White
+    $btnFrb.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnFrb.FlatAppearance.BorderSize = 0
+    $btnFrb.DialogResult = [System.Windows.Forms.DialogResult]::Yes
+    $dialog.Controls.Add($btnFrb)
+
+    $btnNative = New-Object System.Windows.Forms.Button
+    $btnNative.Text = 'Native PowerShell'
+    $btnNative.Location = New-Object System.Drawing.Point(710, 540)
+    $btnNative.Size = New-Object System.Drawing.Size(168, 34)
+    $btnNative.BackColor = [System.Drawing.Color]::FromArgb(140, 140, 140)
+    $btnNative.ForeColor = [System.Drawing.Color]::White
+    $btnNative.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnNative.FlatAppearance.BorderSize = 0
+    $btnNative.DialogResult = [System.Windows.Forms.DialogResult]::No
+    $dialog.Controls.Add($btnNative)
+
+    $dialog.AcceptButton = $btnFrb
+    $dialog.CancelButton = $btnNative
+
+    $result = $dialog.ShowDialog($form)
+    $dialog.Dispose()
+    return $result
+}
+
+function Resolve-CustomCommandSectionStyle {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SectionKey,
+
+        [Parameter(Mandatory = $true)]
+        [string]$SectionTitle,
+
+        [Parameter(Mandatory = $true)]
+        [string]$SectionText,
+
+        [bool]$PromptForChoice = $true
+    )
+
+    $result = @{
+        Key = $SectionKey
+        Title = $SectionTitle
+        OriginalText = $SectionText
+        SelectedStyle = 'Native'
+        UpdatedText = $SectionText
+        PromptShown = $false
+        HasNativeCandidates = $false
+        RecommendationCount = 0
+    }
+
+    if ([string]::IsNullOrWhiteSpace($SectionText)) {
+        return $result
+    }
+
+    $signature = Get-TextSignature -Text $SectionText
+    if ($script:CustomCommandStyleChoices.ContainsKey($SectionKey)) {
+        $cached = $script:CustomCommandStyleChoices[$SectionKey]
+        if ($cached -and $cached.Signature -eq $signature) {
+            $result.SelectedStyle = [string]$cached.SelectedStyle
+            if ($result.SelectedStyle -eq 'FRB') {
+                $result.UpdatedText = [string]$cached.UpdatedText
+            }
+            return $result
+        }
+    }
+
+    $commandReview = Get-GlobalsAssistantCommandRecommendations -CodeText $SectionText
+    $rewriteCandidate = Get-GlobalsAssistantRewriteResult -CodeText (Convert-CommandTextToStartupVariables -Text $SectionText)
+    $result.RecommendationCount = @($commandReview.Recommendations).Count
+    $result.HasNativeCandidates = ($result.RecommendationCount -gt 0)
+
+    if (-not $PromptForChoice -or -not $result.HasNativeCandidates) {
+        $script:CustomCommandStyleChoices[$SectionKey] = @{
+            Signature = $signature
+            SelectedStyle = 'Native'
+            UpdatedText = $SectionText
+        }
+        return $result
+    }
+
+    $summary = @(
+        'This section contains native PowerShell that can be kept as-is, or rewritten to FRB wrapper cmdlets when a wrapper exists.',
+        'FRB cmdlets are recommended unless the wrapper will not work for this task.',
+        "Detected wrapper opportunities: $($result.RecommendationCount)."
+    ) -join [Environment]::NewLine
+
+    $preview = if (-not [string]::IsNullOrWhiteSpace($rewriteCandidate.RewrittenCode)) { [string]$rewriteCandidate.RewrittenCode } else { $SectionText }
+    $choice = Show-FrbNativeChoiceDialog -SectionTitle $SectionTitle -SummaryText $summary -SectionPreview $preview
+    $result.PromptShown = $true
+
+    if ($choice -eq [System.Windows.Forms.DialogResult]::Yes) {
+        $result.SelectedStyle = 'FRB'
+        $result.UpdatedText = [string]$rewriteCandidate.RewrittenCode
+    }
+    else {
+        $result.SelectedStyle = 'Native'
+        $result.UpdatedText = $SectionText
+    }
+
+    $script:CustomCommandStyleChoices[$SectionKey] = @{
+        Signature = $signature
+        SelectedStyle = $result.SelectedStyle
+        UpdatedText = $result.UpdatedText
+    }
+
+    return $result
+}
+
+function Invoke-CustomCommandStyleReview {
+    param(
+        [bool]$PromptForChoice = $true
+    )
+
+    $sectionMap = @(
+        @{ Key = 'PreInstall'; Title = 'Pre-Install Commands'; Editor = $script:txtPreInstall },
+        @{ Key = 'CustomInstall'; Title = 'Custom Install Commands'; Editor = $script:txtCustomInstall },
+        @{ Key = 'PostInstall'; Title = 'Post-Install Commands'; Editor = $script:txtPostInstall },
+        @{ Key = 'PreUninstall'; Title = 'Pre-Uninstall Commands'; Editor = $script:txtPreUninstall },
+        @{ Key = 'CustomUninstall'; Title = 'Custom Uninstall Commands'; Editor = $script:txtCustomUninstall },
+        @{ Key = 'PostUninstall'; Title = 'Post-Uninstall Commands'; Editor = $script:txtPostUninstall }
+    )
+
+    $results = New-Object System.Collections.Generic.List[object]
+
+    foreach ($section in @($sectionMap)) {
+        $editor = $section.Editor
+        if (-not $editor -or [string]::IsNullOrWhiteSpace($editor.Text)) {
+            continue
+        }
+
+        $sectionResult = Resolve-CustomCommandSectionStyle -SectionKey $section.Key -SectionTitle $section.Title -SectionText ([string]$editor.Text) -PromptForChoice:$PromptForChoice
+        if ($sectionResult.PromptShown -or $sectionResult.HasNativeCandidates) {
+            [void]$results.Add([PSCustomObject]@{
+                    Section = $section.Title
+                    Style = $sectionResult.SelectedStyle
+                    RecommendationCount = $sectionResult.RecommendationCount
+                })
+        }
+
+        if ($sectionResult.SelectedStyle -eq 'FRB' -and -not [string]::IsNullOrWhiteSpace($sectionResult.UpdatedText)) {
+            $editor.Text = Format-CodeEditorText -Text $sectionResult.UpdatedText
+        }
+    }
+
+    if ($results.Count -gt 0) {
+        Write-ProcessOutputLine -Message ("Custom command style review completed for {0} section(s)." -f $results.Count) -Level 'INFO'
+    }
+
+    return @($results)
+}
+
+function Get-PackageAnalyzerCombinedCode {
+    $blocks = New-Object System.Collections.Generic.List[string]
+
+    foreach ($section in @(Get-PackageAnalyzerCodeSections)) {
+        if (-not [string]::IsNullOrWhiteSpace($section.Text)) {
+            [void]$blocks.Add("# ===== $($section.Name) =====")
+            [void]$blocks.Add($section.Text)
+            [void]$blocks.Add("")
+        }
+    }
+
+    if ($txtInstallSwitch -and -not [string]::IsNullOrWhiteSpace($txtInstallSwitch.Text)) {
+        [void]$blocks.Add("# ===== Install Switch =====")
+        [void]$blocks.Add("`$appInstallCommandLine = '$($txtInstallSwitch.Text.Trim())'")
+        [void]$blocks.Add("")
+    }
+
+    if ($txtUninstallSwitch -and -not [string]::IsNullOrWhiteSpace($txtUninstallSwitch.Text)) {
+        [void]$blocks.Add("# ===== Uninstall Switch =====")
+        [void]$blocks.Add("`$appUninstallCommandLine = '$($txtUninstallSwitch.Text.Trim())'")
+        [void]$blocks.Add("")
+    }
+
+    if ($txtUninstallExecutable -and -not [string]::IsNullOrWhiteSpace($txtUninstallExecutable.Text)) {
+        [void]$blocks.Add("# ===== Uninstall Executable =====")
+        [void]$blocks.Add("`$appUninstallExeName = '$($txtUninstallExecutable.Text.Trim())'")
+        [void]$blocks.Add("")
+    }
+
+    return ($blocks -join [Environment]::NewLine)
+}
+
+function Test-PackageAnalyzerVariableUniformity {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CodeText
+    )
+
+    $issues = New-Object System.Collections.Generic.List[string]
+
+    $guiVarPattern = '(?i)\$(Vendor|Name|Version|Edition|InstallSwitch|UninstallSwitch|UninstallExeName)\b'
+    if ($CodeText -match $guiVarPattern) {
+        [void]$issues.Add('GUI-only variable names were detected (for example $Vendor or $Name). Use Startup.pss runtime variables such as $appVendor, $appName, and $appVersion in package command code.')
+    }
+
+    $vendorValue = if ($txtVendor) { [string]$txtVendor.Text.Trim() } else { '' }
+    $nameValue = if ($txtName) { [string]$txtName.Text.Trim() } else { '' }
+    $versionValue = if ($txtVersion) { [string]$txtVersion.Text.Trim() } else { '' }
+
+    if (-not [string]::IsNullOrWhiteSpace($vendorValue)) {
+        $vendorLiteralPattern = '(?i)[\x22\x27]' + [regex]::Escape($vendorValue) + '[\x22\x27]'
+        if ($CodeText -match $vendorLiteralPattern -and $CodeText -notmatch '(?i)\$appVendor\b') {
+            [void]$issues.Add('Hardcoded vendor text was detected in command code. Prefer $appVendor for uniform Startup.pss variable usage.')
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($nameValue)) {
+        $nameLiteralPattern = '(?i)[\x22\x27]' + [regex]::Escape($nameValue) + '[\x22\x27]'
+        if ($CodeText -match $nameLiteralPattern -and $CodeText -notmatch '(?i)\$appName\b|\$appNameMask\b') {
+            [void]$issues.Add('Hardcoded app name text was detected in command code. Prefer $appName or $appNameMask for uniform Startup.pss variable usage.')
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($versionValue)) {
+        $versionLiteralPattern = '(?i)[\x22\x27]' + [regex]::Escape($versionValue) + '[\x22\x27]'
+        if ($CodeText -match $versionLiteralPattern -and $CodeText -notmatch '(?i)\$appVersion\b') {
+            [void]$issues.Add('Hardcoded app version text was detected in command code. Prefer $appVersion for uniform Startup.pss variable usage.')
+        }
+    }
+
+    return @($issues)
+}
+
+function Test-PackageAnalyzerNativeGuarding {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CodeText
+    )
+
+    $recommendations = New-Object System.Collections.Generic.List[string]
+
+    $nativeRiskPattern = '(?im)^\s*(Remove-Item|Stop-Process|Set-ItemProperty|New-ItemProperty|Start-Process)\b'
+    if ($CodeText -match $nativeRiskPattern) {
+        $hasGuarding = ($CodeText -match '(?im)^\s*if\s*\(') -or ($CodeText -match '(?im)^\s*try\s*\{') -or ($CodeText -match '(?i)-ErrorAction\s+(Stop|SilentlyContinue|Continue)')
+        if (-not $hasGuarding) {
+            [void]$recommendations.Add('Native PowerShell cmdlets were detected without obvious guard rails. Add if/else checks (for example Test-Path, Get-Process) and try/catch handling before destructive actions.')
+        }
+    }
+
+    return @($recommendations)
+}
+
+function Show-PackageAnalysisDialog {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ReportText
+    )
+
+    $dialog = New-Object System.Windows.Forms.Form
+    $dialog.Text = 'Analyze Package Report'
+    $dialog.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterParent
+    $dialog.Size = New-Object System.Drawing.Size(980, 700)
+
+    $txtReport = New-Object System.Windows.Forms.TextBox
+    $txtReport.Multiline = $true
+    $txtReport.ScrollBars = 'Both'
+    $txtReport.WordWrap = $false
+    $txtReport.ReadOnly = $true
+    $txtReport.Font = $FontCode
+    $txtReport.Dock = [System.Windows.Forms.DockStyle]::Fill
+    $txtReport.Text = $ReportText
+
+    $dialog.Controls.Add($txtReport)
+    [void]$dialog.ShowDialog($form)
+}
+
+function Invoke-AnalyzePackage {
+    param(
+        [bool]$OpenReportWindow = $true,
+        [bool]$TriggerWebSuggestions = $true,
+        [bool]$PromptForStyleChoice = $true
+    )
+
+    Refresh-GlobalsCommandMetadata
+
+    Write-ProcessOutputLine -Message 'Analyze Package | Stage=Start | Outcome=Running full GUI/package audit.' -Level 'INFO'
+
+    if ($PromptForStyleChoice) {
+        Invoke-CustomCommandStyleReview -PromptForChoice $true | Out-Null
+    }
+
+    $combinedCode = Get-PackageAnalyzerCombinedCode
+    $sections = @(Get-PackageAnalyzerCodeSections)
+    $commandReview = Get-GlobalsAssistantCommandRecommendations -CodeText $combinedCode
+    $rewriteResult = Get-GlobalsAssistantRewriteResult -CodeText $combinedCode
+    $uniformityIssues = Test-PackageAnalyzerVariableUniformity -CodeText $combinedCode
+    $nativeGuardingRecommendations = Test-PackageAnalyzerNativeGuarding -CodeText $combinedCode
+
+    $errors = New-Object System.Collections.Generic.List[string]
+    $warnings = New-Object System.Collections.Generic.List[string]
+    $info = New-Object System.Collections.Generic.List[string]
+
+    if ([string]::IsNullOrWhiteSpace($script:InstallationMediaPath) -or -not (Test-Path $script:InstallationMediaPath)) {
+        [void]$errors.Add('Install media is not selected or path is invalid. Select installer media before packaging.')
+    }
+    else {
+        $mediaItem = Get-Item -LiteralPath $script:InstallationMediaPath -ErrorAction SilentlyContinue
+        if ($mediaItem) {
+            [void]$info.Add("Install media: $($mediaItem.Name) | Type: $([System.IO.Path]::GetExtension($mediaItem.Name).ToLower()) | SizeMB: $([Math]::Round(($mediaItem.Length / 1MB), 2))")
+        }
+
+        if ([string]::IsNullOrWhiteSpace($script:DetectedInstallerType)) {
+            try {
+                $script:DetectedInstallerType = Get-InstallerType -FilePath $script:InstallationMediaPath
+            }
+            catch {
+                $script:DetectedInstallerType = 'Generic'
+            }
+        }
+
+        [void]$info.Add("Detected installer type: $script:DetectedInstallerType")
+    }
+
+    if ([string]::IsNullOrWhiteSpace($txtVendor.Text)) { [void]$errors.Add('App Vendor is empty.') }
+    if ([string]::IsNullOrWhiteSpace($txtName.Text)) { [void]$errors.Add('App Name is empty.') }
+    if ([string]::IsNullOrWhiteSpace($txtVersion.Text)) { [void]$errors.Add('App Version is empty.') }
+
+    foreach ($section in $sections) {
+        if (-not [string]::IsNullOrWhiteSpace($section.Text)) {
+            $sectionParse = Get-GlobalsAssistantCommandRecommendations -CodeText $section.Text
+            if ($sectionParse.ParseErrors -and $sectionParse.ParseErrors.Count -gt 0) {
+                [void]$errors.Add("$($section.Name): syntax issues detected (`$($sectionParse.ParseErrors.Count)`).")
+            }
+        }
+    }
+
+    foreach ($issue in @($uniformityIssues)) {
+        [void]$warnings.Add($issue)
+    }
+
+    foreach ($guardingSuggestion in @($nativeGuardingRecommendations)) {
+        [void]$warnings.Add($guardingSuggestion)
+    }
+
+    if ($commandReview.Recommendations -and $commandReview.Recommendations.Count -gt 0) {
+        [void]$warnings.Add("Wrapper alignment opportunities detected: $($commandReview.Recommendations.Count).")
+    }
+
+    if ($rewriteResult.AppliedChanges -and $rewriteResult.AppliedChanges.Count -gt 0) {
+        [void]$info.Add("Automatic wrapper rewrite opportunities: $($rewriteResult.AppliedChanges.Count)")
+    }
+
+    $canRunWebSuggestions = $TriggerWebSuggestions -and -not [string]::IsNullOrWhiteSpace($txtVendor.Text) -and -not [string]::IsNullOrWhiteSpace($txtName.Text)
+    if ($canRunWebSuggestions) {
+        Write-ProcessOutputLine -Message 'Analyze Package | Stage=WebSuggestions | Outcome=Invoking Package Helper generation for web-backed suggestions.' -Level 'INFO'
+        Invoke-PackageHelperGeneration
+        [void]$info.Add('Package Helper generation triggered (includes Playwright/web-backed suggestions when media is present).')
+    }
+    elseif ($TriggerWebSuggestions) {
+        [void]$info.Add('Package Helper web suggestions were skipped until Vendor and Name are populated.')
+    }
+
+    $reportLines = New-Object System.Collections.Generic.List[string]
+    [void]$reportLines.Add('Analyze Package Report')
+    [void]$reportLines.Add('')
+    [void]$reportLines.Add("Timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')")
+    [void]$reportLines.Add("Vendor: $($txtVendor.Text.Trim())")
+    [void]$reportLines.Add("Name: $($txtName.Text.Trim())")
+    [void]$reportLines.Add("Edition: $($txtEdition.Text.Trim())")
+    [void]$reportLines.Add("Version: $($txtVersion.Text.Trim())")
+    [void]$reportLines.Add("Install Context: $script:SelectedInstallContext")
+    [void]$reportLines.Add('')
+
+    [void]$reportLines.Add('Blocking Issues:')
+    if ($errors.Count -eq 0) {
+        [void]$reportLines.Add('- None')
+    }
+    else {
+        foreach ($line in @($errors)) { [void]$reportLines.Add("- $line") }
+    }
+
+    [void]$reportLines.Add('')
+    [void]$reportLines.Add('Warnings:')
+    if ($warnings.Count -eq 0) {
+        [void]$reportLines.Add('- None')
+    }
+    else {
+        foreach ($line in @($warnings | Select-Object -Unique)) { [void]$reportLines.Add("- $line") }
+    }
+
+    [void]$reportLines.Add('')
+    [void]$reportLines.Add('Information:')
+    if ($info.Count -eq 0) {
+        [void]$reportLines.Add('- None')
+    }
+    else {
+        foreach ($line in @($info | Select-Object -Unique)) { [void]$reportLines.Add("- $line") }
+    }
+
+    if ($commandReview.Recommendations -and $commandReview.Recommendations.Count -gt 0) {
+        [void]$reportLines.Add('')
+        [void]$reportLines.Add('Globals Wrapper Recommendations:')
+        foreach ($rec in @($commandReview.Recommendations)) {
+            [void]$reportLines.Add("- Line $($rec.Line): $($rec.SourceCommand) -> $($rec.SuggestedCommand)")
+            [void]$reportLines.Add("  Why: $($rec.Reason)")
+            [void]$reportLines.Add("  Pattern: $($rec.Template)")
+        }
+    }
+
+    if ($commandReview.ParseErrors -and $commandReview.ParseErrors.Count -gt 0) {
+        [void]$reportLines.Add('')
+        [void]$reportLines.Add('Syntax Notes:')
+        foreach ($parseLine in @($commandReview.ParseErrors)) {
+            [void]$reportLines.Add("- $parseLine")
+        }
+    }
+
+    $reportText = $reportLines -join [Environment]::NewLine
+
+    if ($txtGlobalsAssistantOutput) {
+        $txtGlobalsAssistantOutput.Text = $reportText
+    }
+
+    if ($lblGlobalsAssistantCount) {
+        $lblGlobalsAssistantCount.Text = "Analyze Package completed | Wrappers loaded: $($script:GlobalsCommandNames.Count)"
+    }
+
+    Write-ProcessOutputLine -Message ("Analyze Package | Stage=Complete | Outcome=Errors:{0} Warnings:{1} Info:{2}" -f $errors.Count, ($warnings | Select-Object -Unique).Count, ($info | Select-Object -Unique).Count) -Level 'INFO'
+
+    if ($OpenReportWindow) {
+        Show-PackageAnalysisDialog -ReportText $reportText
+    }
+
+    return @{
+        ReportText = $reportText
+        Errors = @($errors)
+        Warnings = @($warnings | Select-Object -Unique)
+        Info = @($info | Select-Object -Unique)
+        ErrorCount = $errors.Count
+        WarningCount = (@($warnings | Select-Object -Unique)).Count
+    }
+}
+
 function Set-InstallContextState {
     param(
         [Parameter(Mandatory = $true)]
@@ -4531,6 +5330,17 @@ $btnCreate.FlatAppearance.BorderSize = 0
 $btnCreate.Visible = $false
 $statusBar.Controls.Add($btnCreate)
 
+$btnAnalyzePackage = New-Object System.Windows.Forms.Button
+$btnAnalyzePackage.Text = "Analyze Package"
+$btnAnalyzePackage.Location = New-Object System.Drawing.Point(440, 65)
+$btnAnalyzePackage.Size = New-Object System.Drawing.Size(130, 35)
+$btnAnalyzePackage.BackColor = [System.Drawing.Color]::FromArgb(0, 105, 160)
+$btnAnalyzePackage.ForeColor = [System.Drawing.Color]::White
+$btnAnalyzePackage.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+$btnAnalyzePackage.FlatAppearance.BorderSize = 0
+$btnAnalyzePackage.Visible = $true
+$statusBar.Controls.Add($btnAnalyzePackage)
+
 $btnCancel = New-Object System.Windows.Forms.Button
 $btnCancel.Text = "Cancel"
 $btnCancel.Location = New-Object System.Drawing.Point(720, 65)
@@ -4830,11 +5640,66 @@ $btnBrowse.Add_Click({
 
 })
 
+$btnAnalyzePackage.Add_Click({
+    Start-ProcessSession
+    if ($script:ProcessTab) {
+        $tabControl.SelectedTab = $script:ProcessTab
+    }
+
+    Update-Status "Analyze Package running across GUI code, variables, wrappers, and media..." "Blue"
+    $form.Refresh()
+
+    $analysisResult = Invoke-AnalyzePackage -OpenReportWindow $true -TriggerWebSuggestions $true -PromptForStyleChoice $true
+
+    if ($analysisResult.ErrorCount -gt 0) {
+        Update-Status "Analyze Package found blocking issues. Review report before packaging." "Red"
+    }
+    elseif ($analysisResult.WarningCount -gt 0) {
+        Update-Status "Analyze Package complete with warnings. Review report and suggestions." "Orange"
+    }
+    else {
+        Update-Status "Analyze Package complete. No blocking issues found." "Green"
+    }
+
+    if ($tabControl -and $tabGlobalsAssistant) {
+        $tabControl.SelectedTab = $tabGlobalsAssistant
+    }
+})
+
 # Start Packaging Button Click Event (validation only - workflow in New-PackagingFolder)
 $btnCreate.Add_Click({
     Start-ProcessSession
     if ($script:ProcessTab) {
         $tabControl.SelectedTab = $script:ProcessTab
+    }
+
+    Update-Status "Running Analyze Package pre-check..." "Blue"
+    $form.Refresh()
+
+    $precheckResult = Invoke-AnalyzePackage -OpenReportWindow $false -TriggerWebSuggestions $true -PromptForStyleChoice $false
+    if ($precheckResult.ErrorCount -gt 0) {
+        $decision = [System.Windows.Forms.MessageBox]::Show(
+            "Analyze Package found blocking issues before build.`n`nWould you like to continue packaging anyway?`n`nChoose No to stop and fix issues first.",
+            "Analyze Package Pre-Check",
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        )
+
+        if ($decision -ne [System.Windows.Forms.DialogResult]::Yes) {
+            Update-Status "Packaging cancelled by pre-check. Review Analyze Package report." "Red"
+            if ($tabControl -and $tabGlobalsAssistant) {
+                $tabControl.SelectedTab = $tabGlobalsAssistant
+            }
+            return
+        }
+
+        Write-ProcessOutputLine -Message "Analyze Package pre-check had blocking issues but technician chose to continue." -Level "WARN"
+    }
+    elseif ($precheckResult.WarningCount -gt 0) {
+        Write-ProcessOutputLine -Message "Analyze Package pre-check completed with warnings." -Level "WARN"
+    }
+    else {
+        Write-ProcessOutputLine -Message "Analyze Package pre-check passed with no blocking issues." -Level "INFO"
     }
 
     # Use ValidationEngine to validate inputs
