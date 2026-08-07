@@ -1,16 +1,19 @@
 Application Detection Analysis Summary
 ====================================
-Analyzed apps: 3
+Analyzed apps: 6
 Skipped apps: 0
 
 Difference class counts:
-- Skipped: 3
+- Other: 6
 
 Highest-priority apps to review first:
 
 Suggested next actions:
-- 7-Zip 24.09 (x64): Launch the app and re-run analysis on a real machine.
-- GitHub Desktop: Launch the app and re-run analysis on a real machine.
-- Copilot CLI: Launch the app and re-run analysis on a real machine.
+- Python 3.14.5 (64-bit): Record the raw result and inspect the UIA tree manually to determine whether the app uses a custom menu or dialog model.
+- Atkinson Hyperlegible Font: Record the raw result and inspect the UIA tree manually to determine whether the app uses a custom menu or dialog model.
+- Cisco Secure Client - AnyConnect VPN : Record the raw result and inspect the UIA tree manually to determine whether the app uses a custom menu or dialog model.
+- Claude Code: Record the raw result and inspect the UIA tree manually to determine whether the app uses a custom menu or dialog model.
+- Claude Code CodeAssist Settings: Record the raw result and inspect the UIA tree manually to determine whether the app uses a custom menu or dialog model.
+- EUS Certificate Signer: Record the raw result and inspect the UIA tree manually to determine whether the app uses a custom menu or dialog model.
 
 Use the CSV/JSON outputs to feed a follow-on pass or to hand this workload to a technician with minimal effort.
