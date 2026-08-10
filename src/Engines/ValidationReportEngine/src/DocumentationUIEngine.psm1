@@ -43,6 +43,25 @@ function Write-UIStatus {
     }
 }
 
+function Resolve-ElevatedInstallInfoScriptPath {
+    [CmdletBinding()]
+    param()
+
+    $candidatePaths = @(
+        (Join-Path (Split-Path -Parent $PSScriptRoot) "scripts\Get-ElevatedInstallInfo.ps1"),
+        (Join-Path $PSScriptRoot "..\..\..\..\Validation Report\scripts\Get-ElevatedInstallInfo.ps1"),
+        (Join-Path (Get-Location).Path "scripts\Get-ElevatedInstallInfo.ps1")
+    )
+
+    foreach ($candidatePath in $candidatePaths) {
+        if (Test-Path $candidatePath) {
+            return (Resolve-Path $candidatePath).Path
+        }
+    }
+
+    throw "Get-ElevatedInstallInfo.ps1 not found. Checked: $($candidatePaths -join '; ')"
+}
+
 function Show-CaptureNameOverrideDialog {
     [CmdletBinding()]
     param(
@@ -506,17 +525,14 @@ function Start-AutomatedDocumentation {
         # Step 5: Collect installation details (elevated)
         Write-UIStatus "Collecting installation details (will prompt for elevation)..." "Blue"
 
-        $helperScript = ".\scripts\Get-ElevatedInstallInfo.ps1"
-        if (-not (Test-Path $helperScript)) {
-            throw "Helper script not found: $helperScript"
-        }
-
-        $helperFullPath = (Resolve-Path $helperScript).Path
+        $helperFullPath = Resolve-ElevatedInstallInfoScriptPath
+        Write-UIStatus "Installation details helper resolved: $helperFullPath" "Blue"
         $detailsCollected = $false
         $detailsAttempt = 0
 
         while (-not $detailsCollected) {
             $detailsAttempt++
+            $attemptFailureReason = "Unknown failure"
 
             $tempFile = [System.IO.Path]::GetTempFileName()
             $tempFile = $tempFile.Replace('.tmp', '.txt')
@@ -538,33 +554,61 @@ exit `$LASTEXITCODE
             [System.IO.File]::WriteAllText($wrapperScript, $wrapperContent, $utf8)
 
             $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$wrapperScript`""
-            $process = Start-Process powershell.exe -Verb RunAs -ArgumentList $arguments -Wait -PassThru
+            $process = $null
+            try {
+                $process = Start-Process powershell.exe -Verb RunAs -ArgumentList $arguments -Wait -PassThru -ErrorAction Stop
+            }
+            catch {
+                $attemptFailureReason = "Elevation launch failed: $($_.Exception.Message)"
+            }
 
             Remove-Item $wrapperScript -Force -ErrorAction SilentlyContinue
 
-            if ($process.ExitCode -eq 0 -and (Test-Path $tempFile)) {
-                $rawOutput = Get-Content $tempFile -Raw -Encoding UTF8
-                Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+            if ($null -ne $process -and $process.ExitCode -eq 0 -and (Test-Path $tempFile)) {
+                try {
+                    $rawOutput = Get-Content $tempFile -Raw -Encoding UTF8
 
-                # Parse the helper output into sections
-                $parsed = Parse-HelperOutput -RawOutput $rawOutput
+                    # Parse the helper output into sections
+                    $parsed = Parse-HelperOutput -RawOutput $rawOutput
 
-                $script:CurrentSession = Update-DocumentationSessionDetails `
-                    -Session $script:CurrentSession `
-                    -InstallDirectory $parsed.InstallDirs `
-                    -RegistryKeys $parsed.ConfigKeys `
-                    -ServicesCreated $parsed.Services `
-                    -UninstallKeys $parsed.UninstallKeys
+                    $script:CurrentSession = Update-DocumentationSessionDetails `
+                        -Session $script:CurrentSession `
+                        -InstallDirectory $parsed.InstallDirs `
+                        -RegistryKeys $parsed.ConfigKeys `
+                        -ServicesCreated $parsed.Services `
+                        -UninstallKeys $parsed.UninstallKeys
 
-                $detailsCollected = $true
-                Write-UIStatus "Installation details collected successfully" "Green"
-                continue
+                    $detailsCollected = $true
+                    Write-UIStatus "Installation details collected successfully" "Green"
+                    continue
+                }
+                catch {
+                    $attemptFailureReason = "Helper output parsing failed: $($_.Exception.Message)"
+                }
+                finally {
+                    Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+                }
+            }
+            else {
+                $exitCode = if ($null -ne $process) { [string]$process.ExitCode } else { "no process" }
+                if (Test-Path $tempFile) {
+                    $rawOutput = Get-Content $tempFile -Raw -Encoding UTF8
+                    $preview = if ([string]::IsNullOrWhiteSpace($rawOutput)) { "(no output)" } else { $rawOutput.Trim() }
+                    if ($preview.Length -gt 300) {
+                        $preview = $preview.Substring(0, 300) + "..."
+                    }
+                    $attemptFailureReason = "Helper exited with code $exitCode. Output: $preview"
+                }
+                else {
+                    $attemptFailureReason = "Helper exited with code $exitCode and produced no output file."
+                }
             }
 
             Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+            Write-UIStatus "Installation details attempt $detailsAttempt failed: $attemptFailureReason" "Orange"
 
             $response = [System.Windows.Forms.MessageBox]::Show(
-                "Installation details collection failed or was cancelled.`n`nYes = Retry collection`nNo = Continue without details`nCancel = Stop validation workflow",
+                "Installation details collection failed.`n`nReason: $attemptFailureReason`n`nYes = Retry collection`nNo = Continue without details`nCancel = Stop validation workflow",
                 "Installation Details Collection",
                 [System.Windows.Forms.MessageBoxButtons]::YesNoCancel,
                 [System.Windows.Forms.MessageBoxIcon]::Warning
@@ -580,7 +624,7 @@ exit `$LASTEXITCODE
                 break
             }
 
-            throw "Installation details collection failed or was cancelled"
+            throw "Installation details collection failed: $attemptFailureReason"
         }
         
         Start-Sleep -Milliseconds 500
