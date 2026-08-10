@@ -328,7 +328,7 @@ function Get-CustomCommandsFromStartupPss {
         $foundUninstallExe = $false
         $foundInstallCmd = $false
         $foundUninstallCmd = $false
-        $assignmentRegex = '^\s*\[string\]\s*\$(?<varName>appUninstallExeName|appInstallCommandLine|appUninstallCommandLine)\s*=\s*[\x27\x22](?<value>.*?)[\x27\x22]'
+        $assignmentRegex = '^\s*\[string\]\s*\$(?<varName>appUninstallExeName|appInstallCommandLine|appUninstallCommandLine)\s*='
         
         foreach ($line in $lines) {
             # Find section boundaries
@@ -344,7 +344,22 @@ function Get-CustomCommandsFromStartupPss {
             if ($inVarDeclaration) {
                 if ($line -match $assignmentRegex) {
                     $varName = $matches['varName']
-                    $value = $matches['value']
+                    $value = ($line -split '=', 2)[1].Trim()
+
+                    if ($value.Length -ge 2) {
+                        $firstChar = $value.Substring(0, 1)
+                        $lastChar = $value.Substring($value.Length - 1, 1)
+                        if (($firstChar -eq "'" -or $firstChar -eq '"') -and $lastChar -eq $firstChar) {
+                            $value = $value.Substring(1, $value.Length - 2)
+
+                            if ($firstChar -eq "'") {
+                                $value = $value -replace "''", "'"
+                            }
+                            elseif ($firstChar -eq '"') {
+                                $value = $value -replace '""', '"'
+                            }
+                        }
+                    }
 
                     if ($varName -eq 'appUninstallExeName' -and -not $foundUninstallExe) {
                         $result.AppUninstallExeName = $value
