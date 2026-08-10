@@ -30,6 +30,24 @@ class RequirementsResearcher:
         # Load configuration
         with open(config_path, 'r', encoding='utf-8-sig') as f:
             self.config = json.load(f)
+
+    def _launch_browser(self, playwright, headless=True):
+        """Launch Playwright browser with robust fallback across workstation setups."""
+        try:
+            browser = playwright.chromium.launch(channel='msedge', headless=headless)
+            print("[BROWSER] Using Playwright browser channel: msedge")
+            return browser
+        except Exception as edge_error:
+            print(f"[BROWSER] msedge launch failed, falling back to chromium: {edge_error}")
+            try:
+                browser = playwright.chromium.launch(headless=headless)
+                print("[BROWSER] Using Playwright browser channel: chromium")
+                return browser
+            except Exception as chromium_error:
+                raise RuntimeError(
+                    f"Unable to launch Playwright browser via msedge or chromium. "
+                    f"msedge error: {edge_error}; chromium error: {chromium_error}"
+                )
     
     def research_application(self, app_name, version=None):
         """
@@ -118,7 +136,7 @@ class RequirementsResearcher:
         
         try:
             with sync_playwright() as p:
-                browser = p.chromium.launch(channel='msedge', headless=True)
+                browser = self._launch_browser(p, headless=True)
                 page = browser.new_page()
                 
                 page.goto(url, wait_until='networkidle', timeout=30000)
@@ -182,7 +200,7 @@ class RequirementsResearcher:
                 return self._create_success_result(app_name, version, requirements, 'https://support.techsmith.com/hc/en-us/search?query=camtasia%20system%20requirements', 'techsmith_support_search')
 
             with sync_playwright() as p:
-                browser = p.chromium.launch(channel='msedge', headless=True)
+                browser = self._launch_browser(p, headless=True)
                 page = browser.new_page()
 
                 # Perform Google search
@@ -231,7 +249,7 @@ class RequirementsResearcher:
         
         try:
             with sync_playwright() as p:
-                browser = p.chromium.launch(channel='msedge', headless=True)
+                browser = self._launch_browser(p, headless=True)
                 page = browser.new_page()
                 
                 search_url = f"https://www.google.com/search?q={query.replace(' ', '+')}"

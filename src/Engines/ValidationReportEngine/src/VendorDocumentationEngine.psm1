@@ -10,6 +10,49 @@
 
 $script:NoDataMessage = "The Vendor has nothing to report"
 
+function Resolve-PythonRuntimeForPlaywright {
+    [CmdletBinding()]
+    param()
+
+    $candidates = @(
+        @{ Name = 'python'; Command = 'python'; PrefixArgs = @() },
+        @{ Name = 'py-3'; Command = 'py'; PrefixArgs = @('-3') },
+        @{ Name = 'python3'; Command = 'python3'; PrefixArgs = @() }
+    )
+
+    foreach ($candidate in $candidates) {
+        $cmd = Get-Command $candidate.Command -ErrorAction SilentlyContinue
+        if (-not $cmd) {
+            continue
+        }
+
+        $commandPath = $cmd.Source
+        try {
+            $versionOutput = & $commandPath @($candidate.PrefixArgs + @('--version')) 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                continue
+            }
+
+            & $commandPath @($candidate.PrefixArgs + @('-c', 'import playwright, playwright.sync_api')) 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                continue
+            }
+
+            return @{
+                Name = $candidate.Name
+                CommandPath = $commandPath
+                PrefixArgs = @($candidate.PrefixArgs)
+                Version = ([string]$versionOutput).Trim()
+            }
+        }
+        catch {
+            continue
+        }
+    }
+
+    return $null
+}
+
 function Resolve-RequirementsResearchScriptPath {
     [CmdletBinding()]
     param()
@@ -52,9 +95,9 @@ function Invoke-PlaywrightRequirementsResearch {
         Message = ""
     }
 
-    $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
-    if (-not $pythonCmd) {
-        $result.Message = "Playwright requirements research unavailable: python not found on PATH."
+    $pythonRuntime = Resolve-PythonRuntimeForPlaywright
+    if (-not $pythonRuntime) {
+        $result.Message = "Playwright requirements research unavailable: no usable Python runtime with Playwright was found (tried: python, py -3, python3). Install dependencies from Installation_Validation_Report\\Python\\requirements.txt and run: python -m playwright install msedge"
         return $result
     }
 
@@ -79,6 +122,9 @@ function Invoke-PlaywrightRequirementsResearch {
 
     try {
         $argList = New-Object System.Collections.Generic.List[string]
+        foreach ($prefixArg in @($pythonRuntime.PrefixArgs)) {
+            [void]$argList.Add([string]$prefixArg)
+        }
         [void]$argList.Add($researchScriptPath)
         [void]$argList.Add($AppName)
         if (-not [string]::IsNullOrWhiteSpace($AppVersion)) {
@@ -92,11 +138,12 @@ function Invoke-PlaywrightRequirementsResearch {
         [void]$argList.Add("--output")
         [void]$argList.Add($outputPath)
 
-        $process = Start-Process -FilePath $pythonCmd.Source -ArgumentList $argList.ToArray() -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -ErrorAction Stop
+        $process = Start-Process -FilePath $pythonRuntime.CommandPath -ArgumentList $argList.ToArray() -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -ErrorAction Stop
 
         if (-not (Test-Path $outputPath)) {
             $stderrTail = if (Test-Path $stderrPath) { (Get-Content $stderrPath -Tail 10 -ErrorAction SilentlyContinue) -join " | " } else { "" }
-            $result.Message = "Playwright requirements research did not produce output JSON (exit code $($process.ExitCode)). $stderrTail"
+            $runtimeLabel = if ($pythonRuntime.Version) { "$($pythonRuntime.Name) [$($pythonRuntime.Version)]" } else { $pythonRuntime.Name }
+            $result.Message = "Playwright requirements research did not produce output JSON (exit code $($process.ExitCode), runtime: $runtimeLabel). $stderrTail"
             return $result
         }
 
@@ -164,7 +211,8 @@ function Invoke-PlaywrightRequirementsResearch {
         return $result
     }
     catch {
-        $result.Message = "Playwright requirements research execution failed: $($_.Exception.Message)"
+        $runtimeLabel = if ($pythonRuntime -and $pythonRuntime.Version) { "$($pythonRuntime.Name) [$($pythonRuntime.Version)]" } elseif ($pythonRuntime) { $pythonRuntime.Name } else { 'unknown' }
+        $result.Message = "Playwright requirements research execution failed (runtime: $runtimeLabel): $($_.Exception.Message)"
         return $result
     }
     finally {
