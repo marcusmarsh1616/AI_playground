@@ -169,6 +169,7 @@ function Invoke-ScreenCapture {
             
         } else {
             Write-Warning "Capture failed or was cancelled"
+            $failureReason = if ($result.Error) { [string]$result.Error } else { "Capture failed or cancelled" }
             
             $captureResult = [PSCustomObject]@{
                 Success = $false
@@ -177,7 +178,7 @@ function Invoke-ScreenCapture {
                 Description = $Description
                 Dimensions = $null
                 CaptureTime = Get-Date
-                ErrorMessage = "Capture failed or cancelled"
+                ErrorMessage = $failureReason
             }
             
             return $captureResult

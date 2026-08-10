@@ -41,6 +41,125 @@ public enum snagOuputFileNamingMethod {
 # Module variables
 $script:SnagitCOM = $null
 $script:IsInitialized = $false
+$script:SnagitBaselinePids = @()
+
+function Get-SnagitProcessCandidates {
+    [CmdletBinding()]
+    param(
+        [switch]$OnlyAutomationStarted
+    )
+
+    $snagitProcesses = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+            $_.ProcessName -match '(?i)^snag' -or
+            ($_.MainWindowTitle -and $_.MainWindowTitle -match '(?i)snagit')
+        })
+
+    if ($OnlyAutomationStarted -and $script:SnagitBaselinePids) {
+        return @($snagitProcesses | Where-Object { $_.Id -notin $script:SnagitBaselinePids })
+    }
+
+    return $snagitProcesses
+}
+
+function Wait-ForSnagitCaptureFile {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+
+        [int]$TimeoutSeconds = 15
+    )
+
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $lastLength = -1
+    $stableSamples = 0
+
+    while ($sw.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
+        if (Test-Path -Path $FilePath) {
+            try {
+                $item = Get-Item -Path $FilePath -ErrorAction Stop
+                $length = [int64]$item.Length
+
+                if ($length -gt 0) {
+                    if ($length -eq $lastLength) {
+                        $stableSamples++
+                    } else {
+                        $stableSamples = 0
+                    }
+
+                    $lastLength = $length
+
+                    # Require one stable sample to reduce races with delayed writes.
+                    if ($stableSamples -ge 1) {
+                        return $true
+                    }
+                }
+            }
+            catch {
+            }
+        }
+
+        Start-Sleep -Milliseconds 250
+    }
+
+    return $false
+}
+
+function Close-SnagitWindows {
+    [CmdletBinding()]
+    param(
+        [switch]$OnlyAutomationStarted,
+
+        [int]$CloseTimeoutSeconds = 8,
+
+        [switch]$ForceTerminate
+    )
+
+    try {
+        $snagitProcesses = @(Get-SnagitProcessCandidates -OnlyAutomationStarted:$OnlyAutomationStarted)
+
+        foreach ($snagitProcess in $snagitProcesses) {
+            try {
+                if ($snagitProcess.MainWindowHandle -ne 0) {
+                    [void]$snagitProcess.CloseMainWindow()
+                }
+            }
+            catch {
+            }
+        }
+
+        $deadline = (Get-Date).AddSeconds($CloseTimeoutSeconds)
+        do {
+            Start-Sleep -Milliseconds 300
+            $remaining = @(Get-SnagitProcessCandidates -OnlyAutomationStarted:$OnlyAutomationStarted)
+        } while ($remaining.Count -gt 0 -and (Get-Date) -lt $deadline)
+
+        if ($ForceTerminate -and $remaining.Count -gt 0) {
+            foreach ($snagitProcess in $remaining) {
+                try {
+                    Stop-Process -Id $snagitProcess.Id -Force -ErrorAction Stop
+                }
+                catch {
+                }
+            }
+        }
+
+        $finalRemaining = @(Get-SnagitProcessCandidates -OnlyAutomationStarted:$OnlyAutomationStarted)
+        return [PSCustomObject]@{
+            Success = ($finalRemaining.Count -eq 0)
+            RemainingProcessCount = $finalRemaining.Count
+            RemainingProcesses = @($finalRemaining | ForEach-Object { "$($_.ProcessName)#$($_.Id)" })
+        }
+    }
+    catch {
+        Write-Error "Error closing Snagit windows: $_"
+        return [PSCustomObject]@{
+            Success = $false
+            RemainingProcessCount = -1
+            RemainingProcesses = @()
+        }
+    }
+}
 
 function Initialize-Snagit {
     [CmdletBinding()]
@@ -72,6 +191,9 @@ function Initialize-Snagit {
         
         # Set quality
         $script:SnagitCOM.OutputImageFile.Quality = 90
+
+        # Record baseline Snagit processes so cleanup can avoid killing pre-existing user sessions.
+        $script:SnagitBaselinePids = @((Get-SnagitProcessCandidates).Id)
         
         $script:IsInitialized = $true
         Write-Verbose "Snagit initialized (auto-save mode, no dialogs)"
@@ -162,19 +284,30 @@ function Invoke-SnagitCapture {
         # Get auto-saved file
         $capturedFile = $script:SnagitCOM.LastFileWritten
         
-        if ([string]::IsNullOrWhiteSpace($capturedFile) -or -not (Test-Path $capturedFile)) {
+        if ([string]::IsNullOrWhiteSpace($capturedFile)) {
+            throw "Capture cancelled or failed"
+        }
+
+        if (-not (Wait-ForSnagitCaptureFile -FilePath $capturedFile -TimeoutSeconds 20)) {
             throw "Capture cancelled or failed"
         }
         
         Write-Verbose "Auto-saved to: $capturedFile"
         
-        # Move to desired location
+        # Copy then remove from temp so we can verify output deterministically.
         if (Test-Path $OutputPath) {
             Remove-Item $OutputPath -Force
         }
-        Move-Item $capturedFile $OutputPath -Force
+        Copy-Item $capturedFile $OutputPath -Force
+
+        if (-not (Wait-ForSnagitCaptureFile -FilePath $OutputPath -TimeoutSeconds 10)) {
+            throw "Capture saved path was not created correctly"
+        }
+
+        Remove-Item $capturedFile -Force -ErrorAction SilentlyContinue
         
         Write-Verbose "Moved to: $OutputPath"
+        [void](Close-SnagitWindows -OnlyAutomationStarted -ForceTerminate)
         
         return @{
             Success = $true
@@ -184,6 +317,7 @@ function Invoke-SnagitCapture {
         }
     }
     catch {
+        [void](Close-SnagitWindows -OnlyAutomationStarted -ForceTerminate)
         Write-Error "Capture failed: $_"
         return @{
             Success = $false
@@ -222,10 +356,13 @@ function Close-Snagit {
     param()
     
     try {
+        [void](Close-SnagitWindows -OnlyAutomationStarted -ForceTerminate)
+
         if ($null -ne $script:SnagitCOM) {
             [System.Runtime.Interopservices.Marshal]::ReleaseComObject($script:SnagitCOM) | Out-Null
             $script:SnagitCOM = $null
             $script:IsInitialized = $false
+            $script:SnagitBaselinePids = @()
             Write-Verbose "Snagit closed"
         }
     }
@@ -239,5 +376,6 @@ Export-ModuleMember -Function @(
     'Test-SnagitInstalled',
     'Invoke-SnagitCapture',
     'Set-SnagitCaptureSettings',
-    'Close-Snagit'
+    'Close-Snagit',
+    'Close-SnagitWindows'
 )

@@ -52,8 +52,6 @@ function Show-CaptureNameOverrideDialog {
         [int]$CountdownSeconds = 20
     )
 
-    $selectedInstalledAppsName = $InitialName
-    $selectedStartMenuName = $InitialName
     $remaining = if ($CountdownSeconds -lt 5) { 5 } else { $CountdownSeconds }
 
     $form = New-Object System.Windows.Forms.Form
@@ -116,12 +114,6 @@ function Show-CaptureNameOverrideDialog {
     $btnStart.ForeColor = [System.Drawing.Color]::White
     $btnStart.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $btnStart.Add_Click({
-        if (-not [string]::IsNullOrWhiteSpace($txtInstalledAppsName.Text)) {
-            $selectedInstalledAppsName = $txtInstalledAppsName.Text.Trim()
-        }
-        if (-not [string]::IsNullOrWhiteSpace($txtStartMenuName.Text)) {
-            $selectedStartMenuName = $txtStartMenuName.Text.Trim()
-        }
         $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
         $form.Close()
     })
@@ -134,12 +126,6 @@ function Show-CaptureNameOverrideDialog {
         $lblCountdown.Text = "Capture begins automatically in $remaining seconds."
         if ($remaining -le 0) {
             $timer.Stop()
-            if (-not [string]::IsNullOrWhiteSpace($txtInstalledAppsName.Text)) {
-                $selectedInstalledAppsName = $txtInstalledAppsName.Text.Trim()
-            }
-            if (-not [string]::IsNullOrWhiteSpace($txtStartMenuName.Text)) {
-                $selectedStartMenuName = $txtStartMenuName.Text.Trim()
-            }
             $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
             $form.Close()
         }
@@ -149,6 +135,20 @@ function Show-CaptureNameOverrideDialog {
     $form.Add_FormClosed({ $timer.Stop(); $timer.Dispose() })
 
     [void]$form.ShowDialog()
+
+    $selectedInstalledAppsName = if (-not [string]::IsNullOrWhiteSpace($txtInstalledAppsName.Text)) {
+        $txtInstalledAppsName.Text.Trim()
+    }
+    else {
+        $InitialName
+    }
+
+    $selectedStartMenuName = if (-not [string]::IsNullOrWhiteSpace($txtStartMenuName.Text)) {
+        $txtStartMenuName.Text.Trim()
+    }
+    else {
+        $InitialName
+    }
 
     if ([string]::IsNullOrWhiteSpace($selectedInstalledAppsName)) {
         $selectedInstalledAppsName = $InitialName
@@ -221,7 +221,8 @@ function Start-AutomatedDocumentation {
             $script:CurrentSession = Update-DocumentationSessionCapture -Session $script:CurrentSession -FigureNumber 2 -FilePath $outputPath2
             Write-UIStatus "Figure 2 captured successfully" "Green"
         } else {
-            throw "Figure 2 capture failed"
+            $figure2Reason = if ($result2.ErrorMessage) { [string]$result2.ErrorMessage } else { "unknown reason" }
+            throw "Figure 2 capture failed: $figure2Reason"
         }
         
         Start-Sleep -Milliseconds 500
@@ -241,7 +242,8 @@ function Start-AutomatedDocumentation {
             $script:CurrentSession = Update-DocumentationSessionCapture -Session $script:CurrentSession -FigureNumber 3 -FilePath $outputPath3
             Write-UIStatus "Figure 3 captured successfully; launching application for Figure 4..." "Green"
         } else {
-            throw "Figure 3 capture failed"
+            $figure3Reason = if ($result3.ErrorMessage) { [string]$result3.ErrorMessage } else { "unknown reason" }
+            throw "Figure 3 capture failed: $figure3Reason"
         }
 
         Start-Sleep -Milliseconds 500
@@ -261,7 +263,8 @@ function Start-AutomatedDocumentation {
             $script:CurrentSession = Update-DocumentationSessionCapture -Session $script:CurrentSession -FigureNumber 4 -FilePath $outputPath4
             Write-UIStatus "Figure 4 captured successfully" "Green"
         } else {
-            throw "Figure 4 capture failed"
+            $figure4Reason = if ($result4.ErrorMessage) { [string]$result4.ErrorMessage } else { "unknown reason" }
+            throw "Figure 4 capture failed: $figure4Reason"
         }
         
         Start-Sleep -Milliseconds 500
@@ -404,6 +407,7 @@ exit `$LASTEXITCODE
         # Session cleanup handled by setting to null
         
         Write-UIStatus "Documentation complete." "Green"
+        Close-Snagit
         Close-InstalledAppsWindow
         
         # Reset UI
@@ -422,6 +426,7 @@ exit `$LASTEXITCODE
         }
         
     } catch {
+        Close-Snagit
         Close-InstalledAppsWindow
         Write-UIStatus "Error: $($_.Exception.Message)" "Red"
         [System.Windows.Forms.MessageBox]::Show("Error occurred:" + [Environment]::NewLine + [Environment]::NewLine + $_.Exception.Message, "Error", 'OK', 'Error')
