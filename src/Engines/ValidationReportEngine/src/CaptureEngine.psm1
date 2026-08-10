@@ -200,6 +200,28 @@ function Invoke-ScreenCapture {
     }
 }
 
+function Set-AutomationSearchText {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$SearchText,
+
+        [int]$PauseMilliseconds = 250
+    )
+
+    Add-Type -AssemblyName System.Windows.Forms
+
+    # Clear any stale search text so override names replace defaults instead of appending.
+    [System.Windows.Forms.SendKeys]::SendWait('^a')
+    Start-Sleep -Milliseconds $PauseMilliseconds
+    [System.Windows.Forms.SendKeys]::SendWait('{BACKSPACE}')
+    Start-Sleep -Milliseconds $PauseMilliseconds
+
+    if (-not [string]::IsNullOrWhiteSpace($SearchText)) {
+        [System.Windows.Forms.SendKeys]::SendWait($SearchText)
+    }
+}
+
 function Invoke-AutomatedInstalledAppsCapture {
     <#
     .SYNOPSIS
@@ -261,7 +283,7 @@ function Invoke-AutomatedInstalledAppsCapture {
         # Step 3: Send search text
         Write-Verbose "Searching for: $AppName"
         Add-Type -AssemblyName System.Windows.Forms
-        [System.Windows.Forms.SendKeys]::SendWait($AppName)
+        Set-AutomationSearchText -SearchText $AppName
         Start-Sleep -Seconds 2
         
         Write-Verbose "Ready for user to capture"
@@ -320,7 +342,7 @@ function Invoke-AutomatedStartMenuCapture {
         
         # Step 2: Search for app
         Write-Verbose "Searching for: $AppName"
-        [System.Windows.Forms.SendKeys]::SendWait($AppName)
+        Set-AutomationSearchText -SearchText $AppName
         Start-Sleep -Seconds 2
         
         Write-Verbose "Ready for user to capture"
