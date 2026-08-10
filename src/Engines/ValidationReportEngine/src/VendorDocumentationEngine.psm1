@@ -10,6 +10,170 @@
 
 $script:NoDataMessage = "The Vendor has nothing to report"
 
+function Resolve-RequirementsResearchScriptPath {
+    [CmdletBinding()]
+    param()
+
+    $candidatePaths = @(
+        (Join-Path $PSScriptRoot "..\..\..\..\Installation_Validation_Report\Python\research_requirements.py"),
+        (Join-Path $PSScriptRoot "..\..\..\..\Validation Report\Python\research_requirements.py"),
+        (Join-Path (Get-Location).Path "Installation_Validation_Report\Python\research_requirements.py")
+    )
+
+    foreach ($candidate in $candidatePaths) {
+        if (Test-Path $candidate) {
+            return (Resolve-Path $candidate).Path
+        }
+    }
+
+    return $null
+}
+
+function Invoke-PlaywrightRequirementsResearch {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Vendor,
+
+        [Parameter(Mandatory = $true)]
+        [string]$AppName,
+
+        [Parameter(Mandatory = $false)]
+        [string]$AppVersion
+    )
+
+    $result = [ordered]@{
+        Success = $false
+        OSCompatibility = $script:NoDataMessage
+        Prerequisites = $script:NoDataMessage
+        ApplicationConflicts = $script:NoDataMessage
+        UpgradePaths = $script:NoDataMessage
+        SourcesUsed = @()
+        Message = ""
+    }
+
+    $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $pythonCmd) {
+        $result.Message = "Playwright requirements research unavailable: python not found on PATH."
+        return $result
+    }
+
+    $researchScriptPath = Resolve-RequirementsResearchScriptPath
+    if ([string]::IsNullOrWhiteSpace($researchScriptPath)) {
+        $result.Message = "Playwright requirements research unavailable: research_requirements.py not found."
+        return $result
+    }
+
+    $pythonRoot = Split-Path -Parent (Split-Path -Parent $researchScriptPath)
+    $configPath = Join-Path $pythonRoot "Config\application_sources.json"
+    $cachePath = Join-Path $pythonRoot "Cache\research_cache.json"
+
+    if (-not (Test-Path $configPath)) {
+        $result.Message = "Playwright requirements research unavailable: configuration file not found at $configPath"
+        return $result
+    }
+
+    $outputPath = [System.IO.Path]::GetTempFileName().Replace('.tmp', '.json')
+    $stdoutPath = [System.IO.Path]::GetTempFileName().Replace('.tmp', '.log')
+    $stderrPath = [System.IO.Path]::GetTempFileName().Replace('.tmp', '.log')
+
+    try {
+        $argList = New-Object System.Collections.Generic.List[string]
+        [void]$argList.Add($researchScriptPath)
+        [void]$argList.Add($AppName)
+        if (-not [string]::IsNullOrWhiteSpace($AppVersion)) {
+            [void]$argList.Add("--version")
+            [void]$argList.Add($AppVersion)
+        }
+        [void]$argList.Add("--config")
+        [void]$argList.Add($configPath)
+        [void]$argList.Add("--cache")
+        [void]$argList.Add($cachePath)
+        [void]$argList.Add("--output")
+        [void]$argList.Add($outputPath)
+
+        $process = Start-Process -FilePath $pythonCmd.Source -ArgumentList $argList.ToArray() -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -ErrorAction Stop
+
+        if (-not (Test-Path $outputPath)) {
+            $stderrTail = if (Test-Path $stderrPath) { (Get-Content $stderrPath -Tail 10 -ErrorAction SilentlyContinue) -join " | " } else { "" }
+            $result.Message = "Playwright requirements research did not produce output JSON (exit code $($process.ExitCode)). $stderrTail"
+            return $result
+        }
+
+        $raw = Get-Content -Path $outputPath -Raw -Encoding UTF8
+        $payload = $raw | ConvertFrom-Json -ErrorAction Stop
+        if (-not $payload -or -not $payload.success) {
+            $err = if ($payload -and $payload.error) { [string]$payload.error } else { "unknown error" }
+            $result.Message = "Playwright requirements research failed: $err"
+            return $result
+        }
+
+        $requirements = $payload.requirements
+        $osLines = New-Object System.Collections.Generic.List[string]
+        foreach ($line in @($requirements.operating_system)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
+                [void]$osLines.Add([string]$line)
+            }
+        }
+
+        $prereqLines = New-Object System.Collections.Generic.List[string]
+        foreach ($line in @($requirements.prerequisites)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
+                [void]$prereqLines.Add([string]$line)
+            }
+        }
+        if (-not [string]::IsNullOrWhiteSpace([string]$requirements.memory)) {
+            [void]$prereqLines.Add("Memory: $($requirements.memory)")
+        }
+        if (-not [string]::IsNullOrWhiteSpace([string]$requirements.disk_space)) {
+            [void]$prereqLines.Add("Disk Space: $($requirements.disk_space)")
+        }
+        if (-not [string]::IsNullOrWhiteSpace([string]$requirements.processor)) {
+            [void]$prereqLines.Add("Processor: $($requirements.processor)")
+        }
+
+        $conflictLines = New-Object System.Collections.Generic.List[string]
+        foreach ($line in @($requirements.conflicts)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
+                [void]$conflictLines.Add([string]$line)
+            }
+        }
+
+        $upgradeLines = New-Object System.Collections.Generic.List[string]
+        foreach ($line in @($requirements.upgrade_path)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
+                [void]$upgradeLines.Add([string]$line)
+            }
+        }
+
+        if ($osLines.Count -gt 0) { $result.OSCompatibility = ($osLines | Select-Object -Unique) -join [Environment]::NewLine }
+        if ($prereqLines.Count -gt 0) { $result.Prerequisites = ($prereqLines | Select-Object -Unique) -join [Environment]::NewLine }
+        if ($conflictLines.Count -gt 0) { $result.ApplicationConflicts = ($conflictLines | Select-Object -Unique) -join [Environment]::NewLine }
+        if ($upgradeLines.Count -gt 0) { $result.UpgradePaths = ($upgradeLines | Select-Object -Unique) -join [Environment]::NewLine }
+
+        $sourceList = New-Object System.Collections.Generic.List[string]
+        if ($payload.source_url) {
+            [void]$sourceList.Add([string]$payload.source_url)
+        }
+        $result.SourcesUsed = @($sourceList | Select-Object -Unique)
+
+        $method = if ($payload.research_method) { [string]$payload.research_method } else { "playwright" }
+        $cacheNote = if ($payload.cached -eq $true) { " (cache hit)" } else { "" }
+        $result.Message = "Playwright requirements research completed via $method$cacheNote."
+        $result.Success = $true
+        return $result
+    }
+    catch {
+        $result.Message = "Playwright requirements research execution failed: $($_.Exception.Message)"
+        return $result
+    }
+    finally {
+        Remove-Item $outputPath -Force -ErrorAction SilentlyContinue
+        Remove-Item $stdoutPath -Force -ErrorAction SilentlyContinue
+        Remove-Item $stderrPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Get-VendorDocumentationSources {
     [CmdletBinding()]
     param(
@@ -282,6 +446,12 @@ function Get-VendorDocumentationSummary {
         return $result
     }
 
+    $playwrightResult = Invoke-PlaywrightRequirementsResearch -Vendor $safeVendor -AppName $safeApp -AppVersion $safeVersion
+    if ($playwrightResult.Success) {
+        return $playwrightResult
+    }
+    $playwrightFailureMessage = $playwrightResult.Message
+
     $seedSources = @(Get-VendorDocumentationSources -Vendor $safeVendor -AppName $safeApp -AppVersion $safeVersion)
 
     $queryBase = @($safeVendor, $safeApp, $safeVersion) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
@@ -393,10 +563,20 @@ function Get-VendorDocumentationSummary {
     $result.SourcesUsed = @($usedSources | Select-Object -Unique | Select-Object -First 20)
 
     if ($result.SourcesUsed.Count -eq 0) {
-        $result.Message = $script:NoDataMessage
+        if ([string]::IsNullOrWhiteSpace($playwrightFailureMessage)) {
+            $result.Message = $script:NoDataMessage
+        }
+        else {
+            $result.Message = "Playwright unavailable/failed; fallback web crawl returned no trusted sources. Detail: $playwrightFailureMessage"
+        }
     }
     else {
-        $result.Message = "Live web scraping completed using $($result.SourcesUsed.Count) source(s)."
+        if ([string]::IsNullOrWhiteSpace($playwrightFailureMessage)) {
+            $result.Message = "Live web scraping completed using $($result.SourcesUsed.Count) source(s)."
+        }
+        else {
+            $result.Message = "Live web scraping completed using fallback crawl ($($result.SourcesUsed.Count) source(s)); Playwright path detail: $playwrightFailureMessage"
+        }
     }
 
     return $result

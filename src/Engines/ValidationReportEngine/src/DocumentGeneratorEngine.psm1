@@ -399,13 +399,38 @@ function Set-ValidationDetails {
     )
     
     Write-Verbose "Setting installation details"
+
+    Add-Type -AssemblyName System.Net
+    $safeInstallDirectory = if ([string]::IsNullOrWhiteSpace($InstallDirectory)) { 'None detected' } else { $InstallDirectory }
+    $safeRegistryKeys = if ([string]::IsNullOrWhiteSpace($RegistryKeys)) { 'None detected' } else { $RegistryKeys }
+    $safeUninstallKeys = if ([string]::IsNullOrWhiteSpace($UninstallKeys)) { 'None detected' } else { $UninstallKeys }
+    $safeServicesCreated = if ([string]::IsNullOrWhiteSpace($ServicesCreated)) { 'None detected' } else { $ServicesCreated }
+    $safeConfigFiles = if ([string]::IsNullOrWhiteSpace($ConfigFiles)) { 'None detected' } else { $ConfigFiles }
+
+    $encodeWithBreaks = {
+        param([string]$text)
+        return [System.Net.WebUtility]::HtmlEncode($text).Replace("`r`n", '<br>').Replace("`n", '<br>').Replace("`r", '<br>')
+    }
+
+    $detailsTable = @"
+<h2>3.1 Installation Details</h2>
+<table class="details-table">
+    <tr><td>Installation Directory:</td><td>$(& $encodeWithBreaks $safeInstallDirectory)</td></tr>
+    <tr><td>Install Registry Keys:</td><td>$(& $encodeWithBreaks $safeRegistryKeys)</td></tr>
+    <tr><td>Uninstall Registry Keys:</td><td>$(& $encodeWithBreaks $safeUninstallKeys)</td></tr>
+    <tr><td>Services Created:</td><td>$(& $encodeWithBreaks $safeServicesCreated)</td></tr>
+    <tr><td>Configuration Files:</td><td>$(& $encodeWithBreaks $safeConfigFiles)</td></tr>
+</table>
+"@
+
+    $HtmlContent = $HtmlContent.Replace('[INSTALLATION_DETAILS_CONTENT]', $detailsTable)
     
     # Replace installation details using simple string replace
-    $HtmlContent = $HtmlContent.Replace('C:\Program Files\[Application]', $InstallDirectory)
-    $HtmlContent = $HtmlContent.Replace('<td>Services Created:</td><td>None</td>', "<td>Services Created:</td><td>$ServicesCreated</td>")
-    $HtmlContent = $HtmlContent.Replace('<td>Configuration Files:</td><td>None</td>', "<td>Configuration Files:</td><td>$ConfigFiles</td>")
-    $HtmlContent = $HtmlContent.Replace('HKLM\SOFTWARE\[Application]', $RegistryKeys)
-    $HtmlContent = $HtmlContent.Replace('[Uninstall Registry Keys]', $UninstallKeys)
+    $HtmlContent = $HtmlContent.Replace('C:\Program Files\[Application]', $safeInstallDirectory)
+    $HtmlContent = $HtmlContent.Replace('<td>Services Created:</td><td>None</td>', "<td>Services Created:</td><td>$safeServicesCreated</td>")
+    $HtmlContent = $HtmlContent.Replace('<td>Configuration Files:</td><td>None</td>', "<td>Configuration Files:</td><td>$safeConfigFiles</td>")
+    $HtmlContent = $HtmlContent.Replace('HKLM\SOFTWARE\[Application]', $safeRegistryKeys)
+    $HtmlContent = $HtmlContent.Replace('[Uninstall Registry Keys]', $safeUninstallKeys)
     $HtmlContent = $HtmlContent.Replace('<td>Reboot Required:</td><td>No</td>', "<td>Reboot Required:</td><td>$RebootRequired</td>")
     
     Write-Verbose "Installation details updated"

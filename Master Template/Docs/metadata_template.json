@@ -140,6 +140,11 @@
         "error_code": "1603",
         "description": "Generic MSI installation failure",
         "resolution": "Check installer logs in C:\\Windows\\Temp for details"
+      },
+      {
+        "error_code": "VALIDATION-RESEARCH",
+        "description": "Validation report Section 1 Playwright research unavailable",
+        "resolution": "Install Python dependencies from Installation_Validation_Report\\Python\\requirements.txt and run: python -m playwright install msedge"
       }
     ],
     "support_contacts": {

@@ -490,6 +490,9 @@ function Start-AutomatedDocumentation {
                 $sourceCount = @($vendorSummary.SourcesUsed).Count
             }
             Write-UIStatus "Section 1 vendor documentation collected (sources: $sourceCount)." "Blue"
+            if ($vendorSummary -and -not [string]::IsNullOrWhiteSpace([string]$vendorSummary.Message)) {
+                Write-UIStatus "Section 1 details: $([string]$vendorSummary.Message)" "Blue"
+            }
         }
         catch {
             $vendorSummary = @{
@@ -597,92 +600,111 @@ function Start-AutomatedDocumentation {
         Write-UIStatus "Installation details helper resolved: $helperFullPath" "Blue"
         $detailsCollected = $false
         $detailsAttempt = 0
+        $detailLookupNames = New-Object System.Collections.Generic.List[string]
+        if (-not [string]::IsNullOrWhiteSpace([string]$script:CurrentSession.AppName)) {
+            [void]$detailLookupNames.Add([string]$script:CurrentSession.AppName)
+        }
+        if (-not [string]::IsNullOrWhiteSpace([string]$captureInstalledAppsName) -and @($detailLookupNames) -notcontains [string]$captureInstalledAppsName) {
+            [void]$detailLookupNames.Add([string]$captureInstalledAppsName)
+        }
 
         while (-not $detailsCollected) {
             $detailsAttempt++
             $attemptFailureReason = "Unknown failure"
+            foreach ($lookupName in @($detailLookupNames)) {
+                if ([string]::IsNullOrWhiteSpace([string]$lookupName)) {
+                    continue
+                }
 
-            $tempFile = [System.IO.Path]::GetTempFileName()
-            $tempFile = $tempFile.Replace('.tmp', '.txt')
+                $tempFile = [System.IO.Path]::GetTempFileName()
+                $tempFile = $tempFile.Replace('.tmp', '.txt')
 
-            $wrapperScript = [System.IO.Path]::GetTempFileName()
-            $wrapperScript = $wrapperScript.Replace('.tmp', '.ps1')
+                $wrapperScript = [System.IO.Path]::GetTempFileName()
+                $wrapperScript = $wrapperScript.Replace('.tmp', '.ps1')
 
-            $wrapperContent = @"
+                $wrapperContent = @"
 #Requires -Version 5.1
 `$helperScriptPath = '$($helperFullPath.Replace("'", "''"))'
-`$appName = '$($captureInstalledAppsName.Replace("'", "''"))'
+`$appName = '$($lookupName.Replace("'", "''"))'
 `$outputFile = '$($tempFile.Replace("'", "''"))'
 
 & "`$helperScriptPath" -AppName "`$appName" -OutputFile "`$outputFile"
 exit `$LASTEXITCODE
 "@
 
-            $utf8 = New-Object System.Text.UTF8Encoding $false
-            [System.IO.File]::WriteAllText($wrapperScript, $wrapperContent, $utf8)
+                $utf8 = New-Object System.Text.UTF8Encoding $false
+                [System.IO.File]::WriteAllText($wrapperScript, $wrapperContent, $utf8)
 
-            $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$wrapperScript`""
-            $process = $null
-            try {
-                if ($InstallContext -eq 'User') {
-                    $process = Start-Process powershell.exe -ArgumentList $arguments -Wait -PassThru -ErrorAction Stop
-                }
-                else {
-                    $process = Start-Process powershell.exe -Verb RunAs -ArgumentList $arguments -Wait -PassThru -ErrorAction Stop
-                }
-            }
-            catch {
-                $attemptFailureReason = if ($InstallContext -eq 'User') {
-                    "User-level helper launch failed: $($_.Exception.Message)"
-                }
-                else {
-                    "Elevation launch failed: $($_.Exception.Message)"
-                }
-            }
-
-            Remove-Item $wrapperScript -Force -ErrorAction SilentlyContinue
-
-            if ($null -ne $process -and $process.ExitCode -eq 0 -and (Test-Path $tempFile)) {
+                $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$wrapperScript`""
+                $process = $null
                 try {
-                    $rawOutput = Get-Content $tempFile -Raw -Encoding UTF8
-
-                    # Parse the helper output into sections
-                    $parsed = Parse-HelperOutput -RawOutput $rawOutput
-
-                    $script:CurrentSession = Update-DocumentationSessionDetails `
-                        -Session $script:CurrentSession `
-                        -InstallDirectory $parsed.InstallDirs `
-                        -RegistryKeys $parsed.ConfigKeys `
-                        -ServicesCreated $parsed.Services `
-                        -UninstallKeys $parsed.UninstallKeys
-
-                    $detailsCollected = $true
-                    Write-UIStatus "Installation details collected successfully" "Green"
-                    continue
+                    Write-UIStatus "Installation details lookup using app identity '$lookupName'..." "Blue"
+                    if ($InstallContext -eq 'User') {
+                        $process = Start-Process powershell.exe -ArgumentList $arguments -Wait -PassThru -ErrorAction Stop
+                    }
+                    else {
+                        $process = Start-Process powershell.exe -Verb RunAs -ArgumentList $arguments -Wait -PassThru -ErrorAction Stop
+                    }
                 }
                 catch {
-                    $attemptFailureReason = "Helper output parsing failed: $($_.Exception.Message)"
-                }
-                finally {
-                    Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
-                }
-            }
-            else {
-                $exitCode = if ($null -ne $process) { [string]$process.ExitCode } else { "no process" }
-                if (Test-Path $tempFile) {
-                    $rawOutput = Get-Content $tempFile -Raw -Encoding UTF8
-                    $preview = if ([string]::IsNullOrWhiteSpace($rawOutput)) { "(no output)" } else { $rawOutput.Trim() }
-                    if ($preview.Length -gt 300) {
-                        $preview = $preview.Substring(0, 300) + "..."
+                    $attemptFailureReason = if ($InstallContext -eq 'User') {
+                        "User-level helper launch failed: $($_.Exception.Message)"
                     }
-                    $attemptFailureReason = "Helper exited with code $exitCode. Output: $preview"
+                    else {
+                        "Elevation launch failed: $($_.Exception.Message)"
+                    }
+                }
+
+                Remove-Item $wrapperScript -Force -ErrorAction SilentlyContinue
+
+                if ($null -ne $process -and $process.ExitCode -eq 0 -and (Test-Path $tempFile)) {
+                    try {
+                        $rawOutput = Get-Content $tempFile -Raw -Encoding UTF8
+
+                        # Parse the helper output into sections
+                        $parsed = Parse-HelperOutput -RawOutput $rawOutput
+
+                        $script:CurrentSession = Update-DocumentationSessionDetails `
+                            -Session $script:CurrentSession `
+                            -InstallDirectory $parsed.InstallDirs `
+                            -RegistryKeys $parsed.ConfigKeys `
+                            -ServicesCreated $parsed.Services `
+                            -UninstallKeys $parsed.UninstallKeys
+
+                        $detailsCollected = $true
+                        Write-UIStatus "Installation details collected successfully" "Green"
+                        Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+                        break
+                    }
+                    catch {
+                        $attemptFailureReason = "Helper output parsing failed for '$lookupName': $($_.Exception.Message)"
+                    }
+                    finally {
+                        Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+                    }
                 }
                 else {
-                    $attemptFailureReason = "Helper exited with code $exitCode and produced no output file."
+                    $exitCode = if ($null -ne $process) { [string]$process.ExitCode } else { "no process" }
+                    if (Test-Path $tempFile) {
+                        $rawOutput = Get-Content $tempFile -Raw -Encoding UTF8
+                        $preview = if ([string]::IsNullOrWhiteSpace($rawOutput)) { "(no output)" } else { $rawOutput.Trim() }
+                        if ($preview.Length -gt 300) {
+                            $preview = $preview.Substring(0, 300) + "..."
+                        }
+                        $attemptFailureReason = "Helper exited with code $exitCode for '$lookupName'. Output: $preview"
+                    }
+                    else {
+                        $attemptFailureReason = "Helper exited with code $exitCode for '$lookupName' and produced no output file."
+                    }
                 }
+
+                Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
             }
 
-            Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+            if ($detailsCollected) {
+                continue
+            }
+
             Write-UIStatus "Installation details attempt $detailsAttempt failed: $attemptFailureReason" "Orange"
 
             $response = [System.Windows.Forms.MessageBox]::Show(
@@ -747,6 +769,18 @@ exit `$LASTEXITCODE
             -PrerequisitesText $vendorSummary.Prerequisites `
             -ApplicationConflictsText $vendorSummary.ApplicationConflicts `
             -UpgradePathsText $vendorSummary.UpgradePaths
+
+        if ($doc -match '\[OS_COMPATIBILITY_CONTENT\]|\[CONFLICT_CONTENT\]|\[PREREQUISITE_CONTENT\]|\[UPGRADE_PATH_CONTENT\]') {
+            Write-UIStatus "Section 1 placeholders remained after rendering; applying explicit fallback content." "Orange"
+            $doc = $doc.Replace('[OS_COMPATIBILITY_CONTENT]', '<li>The Vendor has nothing to report</li>')
+            $doc = $doc.Replace('[CONFLICT_CONTENT]', '<li>The Vendor has nothing to report</li>')
+            $doc = $doc.Replace('[PREREQUISITE_CONTENT]', '<li>The Vendor has nothing to report</li>')
+            $doc = $doc.Replace('[UPGRADE_PATH_CONTENT]', '<li>The Vendor has nothing to report</li>')
+        }
+        if ($doc -match '\[INSTALLATION_DETAILS_CONTENT\]') {
+            Write-UIStatus "Section 3 placeholder remained after rendering; applying explicit fallback content." "Orange"
+            $doc = $doc.Replace('[INSTALLATION_DETAILS_CONTENT]', '<p>The Publisher has not provided additional system details</p>')
+        }
         
         $docFolder = if ([string]::IsNullOrWhiteSpace($DocumentationOutputFolder)) {
             ".\documentation"
