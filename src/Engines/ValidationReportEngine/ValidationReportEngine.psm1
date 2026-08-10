@@ -128,7 +128,6 @@ function Start-ValidationReportCapture {
     try {
         $engineRoot = $PSScriptRoot
         $uiEnginePath = Join-Path $engineRoot "src\DocumentationUIEngine.psm1"
-        $outputFolder = Join-Path $engineRoot "documentation"
 
         $mode = Show-ValidationCaptureModeDialog -AppName $AppName -AppVersion $AppVersion
         $result.Mode = $mode
@@ -150,9 +149,13 @@ function Start-ValidationReportCapture {
             return $result
         }
 
-        $docsFolder = Join-Path $PackagePath "docs"
+        $docsFolder = Join-Path $PackagePath "Docs"
         if (-not (Test-Path $docsFolder)) {
             New-Item -Path $docsFolder -ItemType Directory -Force | Out-Null
+        }
+        $imagesFolder = Join-Path $docsFolder "images"
+        if (-not (Test-Path $imagesFolder)) {
+            New-Item -Path $imagesFolder -ItemType Directory -Force | Out-Null
         }
 
         $nameParts = @($AppVendor, $AppName)
@@ -196,10 +199,10 @@ function Start-ValidationReportCapture {
             Import-Module $uiEnginePath -Force -ErrorAction Stop
             $result.Launched = $true
             if ($mode -eq "Manual") {
-                $launcherResult = Show-DocumentationCaptureUI -AppName $AppName -AppVersion $AppVersion
+                $launcherResult = Show-DocumentationCaptureUI -AppName $AppName -AppVersion $AppVersion -CaptureWorkingDirectory $imagesFolder -DocumentationOutputFolder $docsFolder
             }
             else {
-                $launcherResult = Invoke-DocumentationCaptureFromContext -AppVendor $AppVendor -AppName $AppName -AppVersion $AppVersion
+                $launcherResult = Invoke-DocumentationCaptureFromContext -AppVendor $AppVendor -AppName $AppName -AppVersion $AppVersion -CaptureWorkingDirectory $imagesFolder -DocumentationOutputFolder $docsFolder
             }
         }
         finally {
@@ -231,8 +234,8 @@ function Start-ValidationReportCapture {
 
         if ([string]::IsNullOrWhiteSpace($sourceReportPath)) {
             $outputFoldersToProbe = @(
-                $outputFolder,
-                (Join-Path $previousLocation.Path "documentation")
+                $docsFolder,
+                (Join-Path $PackagePath "Docs")
             ) | Select-Object -Unique
 
             $resolvedOutputFolder = ""
@@ -267,7 +270,9 @@ function Start-ValidationReportCapture {
             $sourceReportPath = $latestReport.FullName
         }
 
-        Copy-Item -Path $sourceReportPath -Destination $targetReportPath -Force
+        if ((Resolve-Path $sourceReportPath).Path -ne (Resolve-Path (Split-Path -Path $targetReportPath -Parent)).Path + "\" + (Split-Path -Path $targetReportPath -Leaf)) {
+            Copy-Item -Path $sourceReportPath -Destination $targetReportPath -Force
+        }
 
         try {
             Start-Process -FilePath $targetReportPath | Out-Null

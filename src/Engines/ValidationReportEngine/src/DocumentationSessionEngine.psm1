@@ -39,6 +39,16 @@ function Get-OSVersion {
     }
 }
 
+function Resolve-ValidationOutputRoot {
+    [CmdletBinding()]
+    param()
+
+    # PSScriptRoot is ...\src\Engines\ValidationReportEngine\src
+    # Repository root is 4 levels up from this module path.
+    $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..\..")).Path
+    return Join-Path $repoRoot "Docs"
+}
+
 #endregion
 #region Public Functions
 
@@ -98,9 +108,8 @@ function New-DocumentationSession {
     
     # Create working directory if not specified
     if ([string]::IsNullOrWhiteSpace($WorkingDirectory)) {
-        # Use .\screenshots\ relative to module location (dynamic, portable)
-        $moduleRoot = Split-Path -Parent $PSScriptRoot
-        $WorkingDirectory = Join-Path $moduleRoot "screenshots"
+        $outputRoot = Resolve-ValidationOutputRoot
+        $WorkingDirectory = Join-Path $outputRoot "images"
     }
     
     # Ensure directory exists

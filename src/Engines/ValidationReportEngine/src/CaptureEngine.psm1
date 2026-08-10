@@ -31,7 +31,8 @@ $script:CaptureSettings = @{
 function Get-HelpAboutAutomationModulePath {
     $candidatePaths = @(
         (Join-Path $PSScriptRoot "..\..\..\..\Installation_Validation_Report\PowerShell\Modules\AboutDialogAutomation.psm1"),
-        (Join-Path (Split-Path -Parent $PSScriptRoot) "Installation_Validation_Report\PowerShell\Modules\AboutDialogAutomation.psm1")
+        (Join-Path (Split-Path -Parent $PSScriptRoot) "Installation_Validation_Report\PowerShell\Modules\AboutDialogAutomation.psm1"),
+        (Join-Path (Get-Location).Path "Installation_Validation_Report\PowerShell\Modules\AboutDialogAutomation.psm1")
     )
 
     foreach ($candidatePath in $candidatePaths) {
@@ -41,6 +42,94 @@ function Get-HelpAboutAutomationModulePath {
     }
 
     return $null
+}
+
+function Get-ForegroundProcessId {
+    [CmdletBinding()]
+    param()
+
+    try {
+        if (-not ('ValidationReport.WindowApi' -as [type])) {
+            Add-Type -Namespace ValidationReport -Name WindowApi -MemberDefinition @'
+    [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+'@
+        }
+
+        $hWnd = [ValidationReport.WindowApi]::GetForegroundWindow()
+        if ($hWnd -eq [IntPtr]::Zero) {
+            return 0
+        }
+
+        $pid = 0
+        [void][ValidationReport.WindowApi]::GetWindowThreadProcessId($hWnd, [ref]$pid)
+        return [int]$pid
+    }
+    catch {
+        return 0
+    }
+}
+
+function Invoke-FallbackAboutShortcut {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$AppName,
+
+        [int]$ForegroundProcessId = 0
+    )
+
+    try {
+        Add-Type -AssemblyName System.Windows.Forms
+
+        $beforeTitle = ""
+        if ($ForegroundProcessId -gt 0) {
+            $beforeTitle = (Get-Process -Id $ForegroundProcessId -ErrorAction SilentlyContinue).MainWindowTitle
+        }
+
+        # Best-effort keystrokes used by common desktop apps.
+        $sequences = @(
+            @{ Menu = '%h'; Item = 'a'; Name = 'Alt+H,A' },
+            @{ Menu = '%f'; Item = 'a'; Name = 'Alt+F,A' },
+            @{ Menu = '%h'; Item = 'v'; Name = 'Alt+H,V' }
+        )
+
+        foreach ($sequence in $sequences) {
+            [System.Windows.Forms.SendKeys]::SendWait($sequence.Menu)
+            Start-Sleep -Milliseconds 300
+            [System.Windows.Forms.SendKeys]::SendWait($sequence.Item)
+            Start-Sleep -Milliseconds 1200
+
+            $activePid = Get-ForegroundProcessId
+            $activeProcess = if ($activePid -gt 0) { Get-Process -Id $activePid -ErrorAction SilentlyContinue } else { $null }
+            $activeTitle = if ($activeProcess) { [string]$activeProcess.MainWindowTitle } else { "" }
+
+            if ($activeTitle -match '(?i)about|version|information|info|license|licence') {
+                return [PSCustomObject]@{
+                    Success = $true
+                    Message = "Fallback About shortcut succeeded via $($sequence.Name)."
+                }
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($beforeTitle) -and $activeTitle -and $activeTitle -ne $beforeTitle -and $activeTitle -match [regex]::Escape($AppName)) {
+                return [PSCustomObject]@{
+                    Success = $true
+                    Message = "Fallback About shortcut likely succeeded via $($sequence.Name)."
+                }
+            }
+        }
+
+        return [PSCustomObject]@{
+            Success = $false
+            Message = "Fallback About shortcuts did not open a detectable dialog."
+        }
+    }
+    catch {
+        return [PSCustomObject]@{
+            Success = $false
+            Message = "Fallback About shortcut failed: $($_.Exception.Message)"
+        }
+    }
 }
 
 #endregion
@@ -451,14 +540,48 @@ function Invoke-AutomatedAboutWindowCapture {
 
     try {
         $modulePath = Get-HelpAboutAutomationModulePath
-        if ([string]::IsNullOrWhiteSpace($modulePath)) {
-            throw "Help/About automation module not found."
+        $failureReasons = New-Object System.Collections.Generic.List[string]
+        $detectionSucceeded = $false
+        $foregroundPid = Get-ForegroundProcessId
+
+        if (-not [string]::IsNullOrWhiteSpace($modulePath)) {
+            Import-Module $modulePath -Force -ErrorAction Stop
+
+            $attempts = @()
+            if (-not [string]::IsNullOrWhiteSpace($AppName)) {
+                $attempts += @{ ApplicationName = $AppName; ProcessId = 0; Label = "AppName" }
+            }
+            if ($foregroundPid -gt 0) {
+                $attempts += @{ ApplicationName = ""; ProcessId = $foregroundPid; Label = "ForegroundPid" }
+            }
+
+            foreach ($attempt in $attempts) {
+                $detectionResult = Invoke-AboutDialogAutomation -ApplicationName $attempt.ApplicationName -ProcessId $attempt.ProcessId -LeaveOpen
+                if ($detectionResult.Success) {
+                    $detectionSucceeded = $true
+                    break
+                }
+
+                $reason = if ($detectionResult.Message) { [string]$detectionResult.Message } else { "unknown detection failure" }
+                $failureReasons.Add("$($attempt.Label): $reason")
+            }
+        }
+        else {
+            $failureReasons.Add("About automation module not found.")
         }
 
-        Import-Module $modulePath -Force -ErrorAction Stop
-        $detectionResult = Invoke-AboutDialogAutomation -ApplicationName $AppName -LeaveOpen
-        if (-not $detectionResult.Success) {
-            $failureReason = if ($detectionResult.Message) { [string]$detectionResult.Message } else { "Help/About detection did not find a window." }
+        if (-not $detectionSucceeded) {
+            $fallbackResult = Invoke-FallbackAboutShortcut -AppName $AppName -ForegroundProcessId $foregroundPid
+            if ($fallbackResult.Success) {
+                $detectionSucceeded = $true
+            }
+            else {
+                $failureReasons.Add($fallbackResult.Message)
+            }
+        }
+
+        if (-not $detectionSucceeded) {
+            $failureReason = if ($failureReasons.Count -gt 0) { $failureReasons -join " | " } else { "Help/About detection did not find a window." }
             return [PSCustomObject]@{
                 Success = $false
                 ErrorMessage = $failureReason

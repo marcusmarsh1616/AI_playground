@@ -419,7 +419,11 @@ function Show-ManualCaptureChecklistDialog {
 
 function Start-AutomatedDocumentation {
     param(
-        [switch]$ManualOnly
+        [switch]$ManualOnly,
+
+        [string]$CaptureWorkingDirectory,
+
+        [string]$DocumentationOutputFolder
     )
     # Validate inputs
     if ([string]::IsNullOrWhiteSpace($script:Controls.txtAppName.Text)) {
@@ -441,11 +445,21 @@ function Start-AutomatedDocumentation {
     try {
         # Step 1: Create session
         Write-UIStatus "Creating documentation session..." "Blue"
-        $script:CurrentSession = New-DocumentationSession `
-            -AppName $script:Controls.txtAppName.Text `
-            -AppVersion $script:Controls.txtAppVersion.Text `
-            -TicketNumber "AUTO" `
-            -TechName $env:USERNAME
+        if ([string]::IsNullOrWhiteSpace($CaptureWorkingDirectory)) {
+            $script:CurrentSession = New-DocumentationSession `
+                -AppName $script:Controls.txtAppName.Text `
+                -AppVersion $script:Controls.txtAppVersion.Text `
+                -TicketNumber "AUTO" `
+                -TechName $env:USERNAME
+        }
+        else {
+            $script:CurrentSession = New-DocumentationSession `
+                -AppName $script:Controls.txtAppName.Text `
+                -AppVersion $script:Controls.txtAppVersion.Text `
+                -TicketNumber "AUTO" `
+                -TechName $env:USERNAME `
+                -WorkingDirectory $CaptureWorkingDirectory
+        }
         
         Start-Sleep -Milliseconds 500
 
@@ -671,7 +685,12 @@ exit `$LASTEXITCODE
             -ApplicationConflictsText $vendorSummary.ApplicationConflicts `
             -UpgradePathsText $vendorSummary.UpgradePaths
         
-        $docFolder = ".\documentation"
+        $docFolder = if ([string]::IsNullOrWhiteSpace($DocumentationOutputFolder)) {
+            ".\documentation"
+        }
+        else {
+            $DocumentationOutputFolder
+        }
         if (-not (Test-Path $docFolder)) {
             New-Item -ItemType Directory -Path $docFolder -Force | Out-Null
         }
@@ -742,6 +761,16 @@ function Invoke-DocumentationCaptureFromContext {
 
         [Parameter(Mandatory = $true)]
         [string]$AppVersion
+
+        ,
+
+        [Parameter(Mandatory = $false)]
+        [string]$CaptureWorkingDirectory = ""
+
+        ,
+
+        [Parameter(Mandatory = $false)]
+        [string]$DocumentationOutputFolder = ""
     )
 
     if ([string]::IsNullOrWhiteSpace($AppName)) {
@@ -763,7 +792,7 @@ function Invoke-DocumentationCaptureFromContext {
     $script:Controls.txtAppVersion.Text = $AppVersion
     $script:CurrentAppVendor = $AppVendor
 
-    return (Start-AutomatedDocumentation)
+    return (Start-AutomatedDocumentation -CaptureWorkingDirectory $CaptureWorkingDirectory -DocumentationOutputFolder $DocumentationOutputFolder)
 }
 
 
@@ -828,7 +857,13 @@ function Show-DocumentationCaptureUI {
         [string]$AppName = "",
 
         [Parameter(Mandatory = $false)]
-        [string]$AppVersion = ""
+        [string]$AppVersion = "",
+
+        [Parameter(Mandatory = $false)]
+        [string]$CaptureWorkingDirectory = "",
+
+        [Parameter(Mandatory = $false)]
+        [string]$DocumentationOutputFolder = ""
     )
 
     $script:UiRunResult = $null
@@ -908,7 +943,7 @@ function Show-DocumentationCaptureUI {
     $Controls.btnStart.ForeColor = [System.Drawing.Color]::White
     $Controls.btnStart.FlatStyle = "Flat"
     $Controls.btnStart.Add_Click({
-        $runResult = Start-AutomatedDocumentation
+        $runResult = Start-AutomatedDocumentation -CaptureWorkingDirectory $CaptureWorkingDirectory -DocumentationOutputFolder $DocumentationOutputFolder
         if ($runResult) {
             $script:UiRunResult = $runResult
             if ($runResult.Success) {
@@ -929,7 +964,7 @@ function Show-DocumentationCaptureUI {
     $Controls.btnManual.ForeColor = [System.Drawing.Color]::Black
     $Controls.btnManual.FlatStyle = "Flat"
     $Controls.btnManual.Add_Click({
-        $runResult = Start-AutomatedDocumentation -ManualOnly
+        $runResult = Start-AutomatedDocumentation -ManualOnly -CaptureWorkingDirectory $CaptureWorkingDirectory -DocumentationOutputFolder $DocumentationOutputFolder
         if ($runResult) {
             $script:UiRunResult = $runResult
             if ($runResult.Success) {
