@@ -2509,7 +2509,7 @@ function Start-BuildTestDeployWorkflow {
             Write-ProcessOutputLine -Message "Technician confirmed installation functioned as designed." -Level "INFO"
 
             :ValidationDocumentationLoop while ($true) {
-                $docResult = Start-IntegratedValidationDocumentation -PackagePath $script:LastCreatedPackagePath -AppVendor $script:SavedVendor -AppName $script:SavedName -AppEdition $script:SavedEdition -AppVersion $script:SavedVersion
+                $docResult = Start-IntegratedValidationDocumentation -PackagePath $script:LastCreatedPackagePath -AppVendor $script:SavedVendor -AppName $script:SavedName -AppEdition $script:SavedEdition -AppVersion $script:SavedVersion -InstallContext $script:SelectedInstallContext
                 if (-not [string]::IsNullOrWhiteSpace([string]$docResult.Mode)) {
                     Write-ProcessOutputLine -Message ("Validation mode selected by technician: {0}" -f $docResult.Mode) -Level "INFO"
                 }
@@ -2861,7 +2861,11 @@ function Start-IntegratedValidationDocumentation {
         [string]$AppEdition,
 
         [Parameter(Mandatory = $true)]
-        [string]$AppVersion
+        [string]$AppVersion,
+
+        [Parameter(Mandatory = $false)]
+        [ValidateSet('System', 'User')]
+        [string]$InstallContext = 'System'
     )
 
     $result = @{
@@ -2875,7 +2879,7 @@ function Start-IntegratedValidationDocumentation {
 
     try {
         Write-ProcessOutputLine -Message ("Validation workflow started for {0} {1}. Awaiting mode selection." -f $AppName, $AppVersion) -Level "INFO"
-        $result = Start-ValidationReportCapture -PackagePath $PackagePath -AppVendor $AppVendor -AppName $AppName -AppEdition $AppEdition -AppVersion $AppVersion
+        $result = Start-ValidationReportCapture -PackagePath $PackagePath -AppVendor $AppVendor -AppName $AppName -AppEdition $AppEdition -AppVersion $AppVersion -InstallContext $InstallContext
 
         $modeLabel = if (-not [string]::IsNullOrWhiteSpace([string]$result.Mode)) { [string]$result.Mode } else { "Unknown" }
         if ($result.Success) {

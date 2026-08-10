@@ -113,7 +113,11 @@ function Start-ValidationReportCapture {
         [string]$AppEdition,
 
         [Parameter(Mandatory = $true)]
-        [string]$AppVersion
+        [string]$AppVersion,
+
+        [Parameter(Mandatory = $false)]
+        [ValidateSet('System', 'User')]
+        [string]$InstallContext = 'System'
     )
 
     $result = @{
@@ -199,10 +203,10 @@ function Start-ValidationReportCapture {
             Import-Module $uiEnginePath -Force -ErrorAction Stop
             $result.Launched = $true
             if ($mode -eq "Manual") {
-                $launcherResult = Show-DocumentationCaptureUI -AppName $AppName -AppVersion $AppVersion -CaptureWorkingDirectory $imagesFolder -DocumentationOutputFolder $docsFolder
+                $launcherResult = Show-DocumentationCaptureUI -AppName $AppName -AppVersion $AppVersion -CaptureWorkingDirectory $imagesFolder -DocumentationOutputFolder $docsFolder -InstallContext $InstallContext
             }
             else {
-                $launcherResult = Invoke-DocumentationCaptureFromContext -AppVendor $AppVendor -AppName $AppName -AppVersion $AppVersion -CaptureWorkingDirectory $imagesFolder -DocumentationOutputFolder $docsFolder
+                $launcherResult = Invoke-DocumentationCaptureFromContext -AppVendor $AppVendor -AppName $AppName -AppVersion $AppVersion -CaptureWorkingDirectory $imagesFolder -DocumentationOutputFolder $docsFolder -InstallContext $InstallContext
             }
         }
         finally {

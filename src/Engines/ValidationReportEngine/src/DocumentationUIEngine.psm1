@@ -423,7 +423,10 @@ function Start-AutomatedDocumentation {
 
         [string]$CaptureWorkingDirectory,
 
-        [string]$DocumentationOutputFolder
+        [string]$DocumentationOutputFolder,
+
+        [ValidateSet('System', 'User')]
+        [string]$InstallContext = 'System'
     )
     # Validate inputs
     if ([string]::IsNullOrWhiteSpace($script:Controls.txtAppName.Text)) {
@@ -489,6 +492,14 @@ function Start-AutomatedDocumentation {
             Write-UIStatus "Section 1 vendor documentation collected (sources: $sourceCount)." "Blue"
         }
         catch {
+            $vendorSummary = @{
+                OSCompatibility = "The Vendor has nothing to report"
+                Prerequisites = "The Vendor has nothing to report"
+                ApplicationConflicts = "The Vendor has nothing to report"
+                UpgradePaths = "The Vendor has nothing to report"
+                SourcesUsed = @()
+                Message = "The Vendor has nothing to report"
+            }
             Write-UIStatus "Section 1 vendor documentation collection failed; default fallback text will be used." "Orange"
         }
         
@@ -578,8 +589,9 @@ function Start-AutomatedDocumentation {
             throw ("Missing required screenshots: Figure {0}. Report generation is blocked until all required images exist." -f ($missingAfterManual -join ', Figure '))
         }
         
-        # Step 5: Collect installation details (elevated)
-        Write-UIStatus "Collecting installation details (will prompt for elevation)..." "Blue"
+        # Step 5: Collect installation details
+        $detailsRunMode = if ($InstallContext -eq 'User') { 'User-level (non-elevated)' } else { 'System-level (elevated)' }
+        Write-UIStatus "Collecting installation details ($detailsRunMode)..." "Blue"
 
         $helperFullPath = Resolve-ElevatedInstallInfoScriptPath
         Write-UIStatus "Installation details helper resolved: $helperFullPath" "Blue"
@@ -612,10 +624,20 @@ exit `$LASTEXITCODE
             $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$wrapperScript`""
             $process = $null
             try {
-                $process = Start-Process powershell.exe -Verb RunAs -ArgumentList $arguments -Wait -PassThru -ErrorAction Stop
+                if ($InstallContext -eq 'User') {
+                    $process = Start-Process powershell.exe -ArgumentList $arguments -Wait -PassThru -ErrorAction Stop
+                }
+                else {
+                    $process = Start-Process powershell.exe -Verb RunAs -ArgumentList $arguments -Wait -PassThru -ErrorAction Stop
+                }
             }
             catch {
-                $attemptFailureReason = "Elevation launch failed: $($_.Exception.Message)"
+                $attemptFailureReason = if ($InstallContext -eq 'User') {
+                    "User-level helper launch failed: $($_.Exception.Message)"
+                }
+                else {
+                    "Elevation launch failed: $($_.Exception.Message)"
+                }
             }
 
             Remove-Item $wrapperScript -Force -ErrorAction SilentlyContinue
@@ -664,7 +686,7 @@ exit `$LASTEXITCODE
             Write-UIStatus "Installation details attempt $detailsAttempt failed: $attemptFailureReason" "Orange"
 
             $response = [System.Windows.Forms.MessageBox]::Show(
-                "Installation details collection failed.`n`nReason: $attemptFailureReason`n`nYes = Retry collection`nNo = Continue without details`nCancel = Stop validation workflow",
+                "Installation details collection failed.`n`nMode: $detailsRunMode`nReason: $attemptFailureReason`n`nYes = Retry collection`nNo = Continue without details`nCancel = Stop validation workflow",
                 "Installation Details Collection",
                 [System.Windows.Forms.MessageBoxButtons]::YesNoCancel,
                 [System.Windows.Forms.MessageBoxIcon]::Warning
@@ -719,9 +741,6 @@ exit `$LASTEXITCODE
             -ServicesCreated $script:CurrentSession.InstallDetails.ServicesCreated `
             -UninstallKeys $formattedUninstall
 
-        if (-not $vendorSummary) {
-            $vendorSummary = Get-VendorDocumentationSummary -Vendor $script:CurrentAppVendor -AppName $script:CurrentSession.AppName -AppVersion $script:CurrentSession.AppVersion
-        }
         $doc = Set-VendorDocumentationDetails `
             -HtmlContent $doc `
             -OSCompatibilityText $vendorSummary.OSCompatibility `
@@ -815,6 +834,12 @@ function Invoke-DocumentationCaptureFromContext {
 
         [Parameter(Mandatory = $false)]
         [string]$DocumentationOutputFolder = ""
+
+        ,
+
+        [Parameter(Mandatory = $false)]
+        [ValidateSet('System', 'User')]
+        [string]$InstallContext = 'System'
     )
 
     if ([string]::IsNullOrWhiteSpace($AppName)) {
@@ -836,7 +861,7 @@ function Invoke-DocumentationCaptureFromContext {
     $script:Controls.txtAppVersion.Text = $AppVersion
     $script:CurrentAppVendor = $AppVendor
 
-    return (Start-AutomatedDocumentation -CaptureWorkingDirectory $CaptureWorkingDirectory -DocumentationOutputFolder $DocumentationOutputFolder)
+    return (Start-AutomatedDocumentation -CaptureWorkingDirectory $CaptureWorkingDirectory -DocumentationOutputFolder $DocumentationOutputFolder -InstallContext $InstallContext)
 }
 
 
@@ -907,7 +932,11 @@ function Show-DocumentationCaptureUI {
         [string]$CaptureWorkingDirectory = "",
 
         [Parameter(Mandatory = $false)]
-        [string]$DocumentationOutputFolder = ""
+        [string]$DocumentationOutputFolder = "",
+
+        [Parameter(Mandatory = $false)]
+        [ValidateSet('System', 'User')]
+        [string]$InstallContext = 'System'
     )
 
     $script:UiRunResult = $null
@@ -987,7 +1016,7 @@ function Show-DocumentationCaptureUI {
     $Controls.btnStart.ForeColor = [System.Drawing.Color]::White
     $Controls.btnStart.FlatStyle = "Flat"
     $Controls.btnStart.Add_Click({
-        $runResult = Start-AutomatedDocumentation -CaptureWorkingDirectory $CaptureWorkingDirectory -DocumentationOutputFolder $DocumentationOutputFolder
+        $runResult = Start-AutomatedDocumentation -CaptureWorkingDirectory $CaptureWorkingDirectory -DocumentationOutputFolder $DocumentationOutputFolder -InstallContext $InstallContext
         if ($runResult) {
             $script:UiRunResult = $runResult
             if ($runResult.Success) {
@@ -1008,7 +1037,7 @@ function Show-DocumentationCaptureUI {
     $Controls.btnManual.ForeColor = [System.Drawing.Color]::Black
     $Controls.btnManual.FlatStyle = "Flat"
     $Controls.btnManual.Add_Click({
-        $runResult = Start-AutomatedDocumentation -ManualOnly -CaptureWorkingDirectory $CaptureWorkingDirectory -DocumentationOutputFolder $DocumentationOutputFolder
+        $runResult = Start-AutomatedDocumentation -ManualOnly -CaptureWorkingDirectory $CaptureWorkingDirectory -DocumentationOutputFolder $DocumentationOutputFolder -InstallContext $InstallContext
         if ($runResult) {
             $script:UiRunResult = $runResult
             if ($runResult.Success) {
