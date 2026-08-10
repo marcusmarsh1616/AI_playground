@@ -1001,6 +1001,35 @@ function Get-GlobalsCommandPreview {
     return (($script:GlobalsCommandNames | Sort-Object | Select-Object -First 60) -join ', ')
 }
 
+function Get-StartProcessNativeFallbackReason {
+    param(
+        [string]$CommandText,
+        [string]$FullCodeText = ""
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CommandText)) {
+        return ""
+    }
+
+    if ($FullCodeText -match '(?im)Bypass\s+Execute-Process\s+since\s+it\s+errors\s+out\s+due\s+to\s+filename') {
+        return 'Scenario fallback: package code explicitly documents Execute-Process filename errors and uses Start-Process as the stable path.'
+    }
+
+    if ($CommandText -match '(?i)-Wait\b|-PassThru\b|-NoNewWindow\b|-UseNewEnvironment\b') {
+        return 'Scenario fallback: Start-Process is being used with wait/passthru/new-window process control options that are intentionally native in some package workflows.'
+    }
+
+    if (($CommandText -match '(?i)msiexec(?:\.exe)?') -and ($CommandText -match '(?i)-ArgumentList\s+[^\r\n]*,')) {
+        return 'Scenario fallback: Start-Process is launching msiexec with argument-list tokenization used by package-specific install/uninstall scripts.'
+    }
+
+    if ($CommandText -match '(?i)-FilePath\s+\$[A-Za-z0-9_]*uninstaller[A-Za-z0-9_]*') {
+        return 'Scenario fallback: Start-Process targets a runtime uninstaller path variable where native invocation can be more reliable in package-specific cases.'
+    }
+
+    return ""
+}
+
 function Convert-GlobalsAssistantLine {
     param(
         [string]$Line
@@ -1073,6 +1102,11 @@ function Convert-GlobalsAssistantLine {
     if ($startProcessMatch.Success) {
         $indent = $startProcessMatch.Groups['indent'].Value
         $args = $startProcessMatch.Groups['args'].Value
+
+        $nativeFallbackReason = Get-StartProcessNativeFallbackReason -CommandText $Line
+        if (-not [string]::IsNullOrWhiteSpace($nativeFallbackReason)) {
+            return $result
+        }
 
         $fileToken = ""
         $argToken = ""
@@ -1155,6 +1189,7 @@ function Get-GlobalsAssistantCommandRecommendations {
         DetectedCommands = @()
         WrapperCommandsDetected = @()
         Recommendations = @()
+        NativeFallbacks = @()
     }
 
     if ([string]::IsNullOrWhiteSpace($CodeText)) {
@@ -1174,6 +1209,7 @@ function Get-GlobalsAssistantCommandRecommendations {
     $recommendations = New-Object System.Collections.Generic.List[object]
     $detectedCommands = New-Object System.Collections.Generic.List[string]
     $wrapperDetected = New-Object System.Collections.Generic.List[string]
+    $nativeFallbacks = New-Object System.Collections.Generic.List[object]
     $recommendationLookup = @{}
 
     $commandAsts = @($ast.FindAll({
@@ -1238,6 +1274,17 @@ function Get-GlobalsAssistantCommandRecommendations {
                 }
             }
             'start-process' {
+                $nativeFallbackReason = Get-StartProcessNativeFallbackReason -CommandText $commandText -FullCodeText $CodeText
+                if (-not [string]::IsNullOrWhiteSpace($nativeFallbackReason)) {
+                    [void]$nativeFallbacks.Add([PSCustomObject]@{
+                            Line = $lineNumber
+                            SourceCommand = $commandName
+                            Reason = $nativeFallbackReason
+                            SourceText = $commandText
+                        })
+                    continue
+                }
+
                 if ($script:GlobalsCommandLookup.ContainsKey('Execute-Process')) {
                     $suggestedCommand = 'Execute-Process'
                     $reason = 'Execute-Process provides standardized process execution telemetry and exit handling.'
@@ -1265,6 +1312,7 @@ function Get-GlobalsAssistantCommandRecommendations {
     $results.DetectedCommands = @($detectedCommands | Select-Object -Unique)
     $results.WrapperCommandsDetected = @($wrapperDetected | Select-Object -Unique)
     $results.Recommendations = @($recommendations | Sort-Object Line)
+    $results.NativeFallbacks = @($nativeFallbacks | Sort-Object Line)
     return $results
 }
 
@@ -3614,7 +3662,10 @@ function Show-FrbNativeChoiceDialog {
         [string]$SummaryText,
 
         [Parameter(Mandatory = $false)]
-        [string]$SectionPreview = ""
+        [string]$SectionPreview = "",
+
+        [ValidateSet('FRB', 'Native')]
+        [string]$RecommendedStyle = 'FRB'
     )
 
     $dialog = New-Object System.Windows.Forms.Form
@@ -3642,6 +3693,21 @@ function Show-FrbNativeChoiceDialog {
     $lblSummary.Text = $SummaryText
     $lblSummary.ForeColor = [System.Drawing.Color]::FromArgb(70, 70, 70)
     $dialog.Controls.Add($lblSummary)
+
+    $lblRecommended = New-Object System.Windows.Forms.Label
+    $lblRecommended.AutoSize = $false
+    $lblRecommended.Location = New-Object System.Drawing.Point(18, 102)
+    $lblRecommended.Size = New-Object System.Drawing.Size(860, 22)
+    $lblRecommended.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
+    if ($RecommendedStyle -eq 'Native') {
+        $lblRecommended.Text = 'Recommended for this section: Native PowerShell (scenario-based fallback detected).'
+        $lblRecommended.ForeColor = [System.Drawing.Color]::FromArgb(153, 101, 21)
+    }
+    else {
+        $lblRecommended.Text = 'Recommended for this section: FRB Powershell Cmdlet.'
+        $lblRecommended.ForeColor = [System.Drawing.Color]::FromArgb(0, 105, 160)
+    }
+    $dialog.Controls.Add($lblRecommended)
 
     $txtPreview = New-Object System.Windows.Forms.TextBox
     $txtPreview.Location = New-Object System.Drawing.Point(18, 128)
@@ -3676,8 +3742,14 @@ function Show-FrbNativeChoiceDialog {
     $btnNative.DialogResult = [System.Windows.Forms.DialogResult]::No
     $dialog.Controls.Add($btnNative)
 
-    $dialog.AcceptButton = $btnFrb
-    $dialog.CancelButton = $btnNative
+    if ($RecommendedStyle -eq 'Native') {
+        $dialog.AcceptButton = $btnNative
+        $dialog.CancelButton = $btnFrb
+    }
+    else {
+        $dialog.AcceptButton = $btnFrb
+        $dialog.CancelButton = $btnNative
+    }
 
     $result = $dialog.ShowDialog($form)
     $dialog.Dispose()
@@ -3707,6 +3779,7 @@ function Resolve-CustomCommandSectionStyle {
         PromptShown = $false
         HasNativeCandidates = $false
         RecommendationCount = 0
+        NativeFallbackCount = 0
     }
 
     if ([string]::IsNullOrWhiteSpace($SectionText)) {
@@ -3728,7 +3801,18 @@ function Resolve-CustomCommandSectionStyle {
     $commandReview = Get-GlobalsAssistantCommandRecommendations -CodeText $SectionText
     $rewriteCandidate = Get-GlobalsAssistantRewriteResult -CodeText (Convert-CommandTextToStartupVariables -Text $SectionText)
     $result.RecommendationCount = @($commandReview.Recommendations).Count
-    $result.HasNativeCandidates = ($result.RecommendationCount -gt 0)
+    $result.NativeFallbackCount = @($commandReview.NativeFallbacks).Count
+
+    $nativeCommands = @()
+    if ($commandReview.DetectedCommands -and $commandReview.DetectedCommands.Count -gt 0) {
+        foreach ($detected in @($commandReview.DetectedCommands)) {
+            if (-not $script:GlobalsCommandLookup.ContainsKey([string]$detected)) {
+                $nativeCommands += [string]$detected
+            }
+        }
+    }
+
+    $result.HasNativeCandidates = (@($nativeCommands | Select-Object -Unique).Count -gt 0)
 
     if (-not $PromptForChoice -or -not $result.HasNativeCandidates) {
         $script:CustomCommandStyleChoices[$SectionKey] = @{
@@ -3742,11 +3826,28 @@ function Resolve-CustomCommandSectionStyle {
     $summary = @(
         'This section contains native PowerShell that can be kept as-is, or rewritten to FRB wrapper cmdlets when a wrapper exists.',
         'FRB cmdlets are recommended unless the wrapper will not work for this task.',
-        "Detected wrapper opportunities: $($result.RecommendationCount)."
+        "Detected native commands: $((@($nativeCommands | Select-Object -Unique)).Count).",
+        "Detected wrapper opportunities: $($result.RecommendationCount).",
+        "Detected scenario-native fallbacks: $($result.NativeFallbackCount)."
     ) -join [Environment]::NewLine
 
+    $recommendedStyle = 'FRB'
+    if ($result.NativeFallbackCount -gt 0 -and $result.RecommendationCount -eq 0) {
+        $recommendedStyle = 'Native'
+    }
+    elseif ($result.NativeFallbackCount -gt 0 -and $result.NativeFallbackCount -ge $result.RecommendationCount) {
+        $recommendedStyle = 'Native'
+    }
+
     $preview = if (-not [string]::IsNullOrWhiteSpace($rewriteCandidate.RewrittenCode)) { [string]$rewriteCandidate.RewrittenCode } else { $SectionText }
-    $choice = Show-FrbNativeChoiceDialog -SectionTitle $SectionTitle -SummaryText $summary -SectionPreview $preview
+    if ($result.NativeFallbackCount -gt 0) {
+        $fallbackLines = @($commandReview.NativeFallbacks | ForEach-Object { "Line $($_.Line): $($_.Reason)" })
+        if ($fallbackLines.Count -gt 0) {
+            $summary += [Environment]::NewLine + [Environment]::NewLine + 'Native fallback details:' + [Environment]::NewLine + ($fallbackLines -join [Environment]::NewLine)
+        }
+    }
+
+    $choice = Show-FrbNativeChoiceDialog -SectionTitle $SectionTitle -SummaryText $summary -SectionPreview $preview -RecommendedStyle $recommendedStyle
     $result.PromptShown = $true
 
     if ($choice -eq [System.Windows.Forms.DialogResult]::Yes) {
@@ -3902,6 +4003,68 @@ function Test-PackageAnalyzerNativeGuarding {
     return @($recommendations)
 }
 
+function Get-ExistingPackageStartupPath {
+    $vendorValue = if ($txtVendor) { $txtVendor.Text.Trim() } else { '' }
+    $nameValue = if ($txtName) { $txtName.Text.Trim() } else { '' }
+    $editionValue = if ($txtEdition) { $txtEdition.Text.Trim() } else { '' }
+    $versionValue = if ($txtVersion) { $txtVersion.Text.Trim() } else { '' }
+
+    if ([string]::IsNullOrWhiteSpace($script:BasePackagingPath) -or [string]::IsNullOrWhiteSpace($vendorValue) -or [string]::IsNullOrWhiteSpace($nameValue) -or [string]::IsNullOrWhiteSpace($versionValue)) {
+        return ""
+    }
+
+    $baseVendorPath = Join-Path $script:BasePackagingPath $vendorValue
+    $baseNamePath = Join-Path $baseVendorPath $nameValue
+    $candidatePaths = @()
+
+    if (-not [string]::IsNullOrWhiteSpace($editionValue)) {
+        $candidatePaths += (Join-Path (Join-Path $baseNamePath $editionValue) $versionValue)
+    }
+    $candidatePaths += (Join-Path $baseNamePath $versionValue)
+
+    foreach ($candidate in @($candidatePaths)) {
+        $startupPath = Join-Path $candidate $script:ProjectFileName
+        if (Test-Path $startupPath) {
+            return $startupPath
+        }
+    }
+
+    return ""
+}
+
+function Test-PackageAnalyzerKnownPatternRisks {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CodeText,
+
+        [string]$StartupCodeText = ""
+    )
+
+    $warnings = New-Object System.Collections.Generic.List[string]
+    $inspectionTargets = @($CodeText)
+    if (-not [string]::IsNullOrWhiteSpace($StartupCodeText)) {
+        $inspectionTargets += $StartupCodeText
+    }
+
+    foreach ($target in @($inspectionTargets)) {
+        if ([string]::IsNullOrWhiteSpace($target)) {
+            continue
+        }
+
+        $contextReversalPattern = '(?is)if\s*\(\s*\$Context\s*-eq\s*[\x22\x27]System[\x22\x27]\s*\)\s*\{\s*\$regPaths\s*=\s*@\(\s*[\x22\x27]Registry::HKCU'
+        if ($target -match $contextReversalPattern) {
+            [void]$warnings.Add('Potential detection context reversal: code maps Context=System to HKCU registry paths. Verify HKLM/HKCU mapping logic before release.')
+        }
+
+        $uninstallMappingPattern = '(?is)\$appUninstallExeNameRegex\s*=\s*\(\$jsonContent\.Apps\[0\]\)\.appUninstallCommandLine'
+        if ($target -match $uninstallMappingPattern) {
+            [void]$warnings.Add('Potential uninstall mapping mismatch: appUninstallCommandLine appears assigned to appUninstallExeNameRegex. Verify uninstall command and regex variable targets.')
+        }
+    }
+
+    return @($warnings | Select-Object -Unique)
+}
+
 function Show-PackageAnalysisDialog {
     param(
         [Parameter(Mandatory = $true)]
@@ -3947,6 +4110,16 @@ function Invoke-AnalyzePackage {
     $rewriteResult = Get-GlobalsAssistantRewriteResult -CodeText $combinedCode
     $uniformityIssues = Test-PackageAnalyzerVariableUniformity -CodeText $combinedCode
     $nativeGuardingRecommendations = Test-PackageAnalyzerNativeGuarding -CodeText $combinedCode
+    $existingStartupPath = Get-ExistingPackageStartupPath
+    $startupCodeText = ''
+    if (-not [string]::IsNullOrWhiteSpace($existingStartupPath)) {
+        try {
+            $startupCodeText = Get-Content -Path $existingStartupPath -Raw -Encoding UTF8
+        }
+        catch {
+        }
+    }
+    $knownPatternWarnings = Test-PackageAnalyzerKnownPatternRisks -CodeText $combinedCode -StartupCodeText $startupCodeText
 
     $errors = New-Object System.Collections.Generic.List[string]
     $warnings = New-Object System.Collections.Generic.List[string]
@@ -3994,12 +4167,20 @@ function Invoke-AnalyzePackage {
         [void]$warnings.Add($guardingSuggestion)
     }
 
+    foreach ($patternWarning in @($knownPatternWarnings)) {
+        [void]$errors.Add($patternWarning)
+    }
+
     if ($commandReview.Recommendations -and $commandReview.Recommendations.Count -gt 0) {
         [void]$warnings.Add("Wrapper alignment opportunities detected: $($commandReview.Recommendations.Count).")
     }
 
     if ($rewriteResult.AppliedChanges -and $rewriteResult.AppliedChanges.Count -gt 0) {
         [void]$info.Add("Automatic wrapper rewrite opportunities: $($rewriteResult.AppliedChanges.Count)")
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($existingStartupPath)) {
+        [void]$info.Add("Existing package Startup.pss was included in risk pattern checks: $existingStartupPath")
     }
 
     $canRunWebSuggestions = $TriggerWebSuggestions -and -not [string]::IsNullOrWhiteSpace($txtVendor.Text) -and -not [string]::IsNullOrWhiteSpace($txtName.Text)
@@ -5673,34 +5854,8 @@ $btnCreate.Add_Click({
         $tabControl.SelectedTab = $script:ProcessTab
     }
 
-    Update-Status "Running Analyze Package pre-check..." "Blue"
+    Update-Status "Start Packaging initiated..." "Blue"
     $form.Refresh()
-
-    $precheckResult = Invoke-AnalyzePackage -OpenReportWindow $false -TriggerWebSuggestions $true -PromptForStyleChoice $false
-    if ($precheckResult.ErrorCount -gt 0) {
-        $decision = [System.Windows.Forms.MessageBox]::Show(
-            "Analyze Package found blocking issues before build.`n`nWould you like to continue packaging anyway?`n`nChoose No to stop and fix issues first.",
-            "Analyze Package Pre-Check",
-            [System.Windows.Forms.MessageBoxButtons]::YesNo,
-            [System.Windows.Forms.MessageBoxIcon]::Warning
-        )
-
-        if ($decision -ne [System.Windows.Forms.DialogResult]::Yes) {
-            Update-Status "Packaging cancelled by pre-check. Review Analyze Package report." "Red"
-            if ($tabControl -and $tabGlobalsAssistant) {
-                $tabControl.SelectedTab = $tabGlobalsAssistant
-            }
-            return
-        }
-
-        Write-ProcessOutputLine -Message "Analyze Package pre-check had blocking issues but technician chose to continue." -Level "WARN"
-    }
-    elseif ($precheckResult.WarningCount -gt 0) {
-        Write-ProcessOutputLine -Message "Analyze Package pre-check completed with warnings." -Level "WARN"
-    }
-    else {
-        Write-ProcessOutputLine -Message "Analyze Package pre-check passed with no blocking issues." -Level "INFO"
-    }
 
     # Use ValidationEngine to validate inputs
     $errors = @()
