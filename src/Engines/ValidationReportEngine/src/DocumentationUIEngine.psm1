@@ -75,7 +75,7 @@ function Show-CaptureNameOverrideDialog {
 
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "Validation Capture Name"
-    $form.Size = New-Object System.Drawing.Size(620, 300)
+    $form.Size = New-Object System.Drawing.Size(620, 370)
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedDialog"
     $form.MaximizeBox = $false
@@ -117,8 +117,22 @@ function Show-CaptureNameOverrideDialog {
     $txtStartMenuName.Text = $InitialName
     $form.Controls.Add($txtStartMenuName)
 
+    $lblValidationLookup = New-Object System.Windows.Forms.Label
+    $lblValidationLookup.Location = New-Object System.Drawing.Point(20, 196)
+    $lblValidationLookup.Size = New-Object System.Drawing.Size(560, 20)
+    $lblValidationLookup.Text = "WebScrape + Install/Registry Name (Section 1 / Section 3):"
+    $lblValidationLookup.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+    $form.Controls.Add($lblValidationLookup)
+
+    $txtValidationLookupName = New-Object System.Windows.Forms.TextBox
+    $txtValidationLookupName.Location = New-Object System.Drawing.Point(20, 218)
+    $txtValidationLookupName.Size = New-Object System.Drawing.Size(560, 28)
+    $txtValidationLookupName.Font = New-Object System.Drawing.Font("Segoe UI", 11)
+    $txtValidationLookupName.Text = $InitialName
+    $form.Controls.Add($txtValidationLookupName)
+
     $lblCountdown = New-Object System.Windows.Forms.Label
-    $lblCountdown.Location = New-Object System.Drawing.Point(20, 196)
+    $lblCountdown.Location = New-Object System.Drawing.Point(20, 254)
     $lblCountdown.Size = New-Object System.Drawing.Size(560, 24)
     $lblCountdown.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Italic)
     $lblCountdown.ForeColor = [System.Drawing.Color]::FromArgb(100, 100, 100)
@@ -127,7 +141,7 @@ function Show-CaptureNameOverrideDialog {
 
     $btnStart = New-Object System.Windows.Forms.Button
     $btnStart.Text = "Start Capture Now"
-    $btnStart.Location = New-Object System.Drawing.Point(420, 226)
+    $btnStart.Location = New-Object System.Drawing.Point(420, 286)
     $btnStart.Size = New-Object System.Drawing.Size(160, 32)
     $btnStart.BackColor = [System.Drawing.Color]::FromArgb(0, 176, 80)
     $btnStart.ForeColor = [System.Drawing.Color]::White
@@ -169,16 +183,27 @@ function Show-CaptureNameOverrideDialog {
         $InitialName
     }
 
+    $selectedValidationLookupName = if (-not [string]::IsNullOrWhiteSpace($txtValidationLookupName.Text)) {
+        $txtValidationLookupName.Text.Trim()
+    }
+    else {
+        $InitialName
+    }
+
     if ([string]::IsNullOrWhiteSpace($selectedInstalledAppsName)) {
         $selectedInstalledAppsName = $InitialName
     }
     if ([string]::IsNullOrWhiteSpace($selectedStartMenuName)) {
         $selectedStartMenuName = $InitialName
     }
+    if ([string]::IsNullOrWhiteSpace($selectedValidationLookupName)) {
+        $selectedValidationLookupName = $InitialName
+    }
 
     return @{
         InstalledAppsName = $selectedInstalledAppsName
         StartMenuName = $selectedStartMenuName
+        ValidationLookupName = $selectedValidationLookupName
     }
 }
 
@@ -477,14 +502,19 @@ function Start-AutomatedDocumentation {
         } else {
             $script:CurrentSession.AppName
         }
-        Write-UIStatus "Capture names set. Figure2='$captureInstalledAppsName' Figure3/4/5='$captureStartMenuName'" "Blue"
+        $captureValidationLookupName = if ($captureNames -and -not [string]::IsNullOrWhiteSpace([string]$captureNames.ValidationLookupName)) {
+            [string]$captureNames.ValidationLookupName
+        } else {
+            $script:CurrentSession.AppName
+        }
+        Write-UIStatus "Capture names set. Figure2='$captureInstalledAppsName' Figure3/4/5='$captureStartMenuName' Section1/3='$captureValidationLookupName'" "Blue"
         Start-Sleep -Milliseconds 500
 
         # Section 1 vendor documentation is intentionally collected before capture steps.
         $vendorSummary = $null
         Write-UIStatus "Collecting Section 1 vendor documentation..." "Blue"
         try {
-            $vendorSummary = Get-VendorDocumentationSummary -Vendor $script:CurrentAppVendor -AppName $script:CurrentSession.AppName -AppVersion $script:CurrentSession.AppVersion
+            $vendorSummary = Get-VendorDocumentationSummary -Vendor $script:CurrentAppVendor -AppName $captureValidationLookupName -AppVersion $script:CurrentSession.AppVersion
             $sourceCount = 0
             if ($vendorSummary -and $vendorSummary.SourcesUsed) {
                 $sourceCount = @($vendorSummary.SourcesUsed).Count
@@ -601,8 +631,13 @@ function Start-AutomatedDocumentation {
         $detailsCollected = $false
         $detailsAttempt = 0
         $detailLookupNames = New-Object System.Collections.Generic.List[string]
+        if (-not [string]::IsNullOrWhiteSpace([string]$captureValidationLookupName)) {
+            [void]$detailLookupNames.Add([string]$captureValidationLookupName)
+        }
         if (-not [string]::IsNullOrWhiteSpace([string]$script:CurrentSession.AppName)) {
-            [void]$detailLookupNames.Add([string]$script:CurrentSession.AppName)
+            if (@($detailLookupNames) -notcontains [string]$script:CurrentSession.AppName) {
+                [void]$detailLookupNames.Add([string]$script:CurrentSession.AppName)
+            }
         }
         if (-not [string]::IsNullOrWhiteSpace([string]$captureInstalledAppsName) -and @($detailLookupNames) -notcontains [string]$captureInstalledAppsName) {
             [void]$detailLookupNames.Add([string]$captureInstalledAppsName)
