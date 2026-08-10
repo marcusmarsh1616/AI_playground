@@ -158,6 +158,8 @@ $script:PackageHelperPendingRefresh = $false
 $script:PackageHelperActiveJob = $null
 $script:PackageHelperPollTimer = $null
 $script:LastPackageHelperAutoTriggerSignature = ""
+$script:PackageHelperAutoRefreshEnabled = $false
+$script:PackageHelperAutoRefreshInfoLogged = $false
 $script:CustomCommandStyleChoices = @{}
 
 #region Configuration
@@ -1552,6 +1554,7 @@ function Merge-ManagedBlockIntoSection {
 function Normalize-CommandSectionForTemplate {
     param(
         [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
         [string]$SectionText
     )
 
@@ -2810,6 +2813,18 @@ function Invoke-PackageHelperAutoRefresh {
         [string]$Reason = ""
     )
 
+    if (-not $script:PackageHelperAutoRefreshEnabled) {
+        if (-not $script:PackageHelperAutoRefreshInfoLogged) {
+            Write-ProcessOutputLine -Message "Package Helper auto-refresh is disabled. Use Analyze Package to run unified analysis and web-backed suggestion checks." -Level "INFO"
+            $script:PackageHelperAutoRefreshInfoLogged = $true
+        }
+        if ($script:lblPackageHelperContext -and -not [string]::IsNullOrWhiteSpace($Reason)) {
+            $script:lblPackageHelperContext.Text = "Auto-refresh disabled. Run Analyze Package to generate helper/web-backed suggestions."
+            $script:lblPackageHelperContext.ForeColor = [System.Drawing.Color]::FromArgb(186, 103, 0)
+        }
+        return
+    }
+
     if ([string]::IsNullOrWhiteSpace($script:InstallationMediaPath)) {
         return
     }
@@ -2838,6 +2853,223 @@ function Invoke-PackageHelperAutoRefresh {
     }
 
     Invoke-PackageHelperGeneration
+}
+
+function Get-CommandTokensFromText {
+    param(
+        [string]$Text
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return @()
+    }
+
+    $ignore = @('if', 'elseif', 'else', 'foreach', 'for', 'while', 'switch', 'function', 'return', 'try', 'catch', 'finally', 'param', 'begin', 'process', 'end')
+    $tokens = New-Object System.Collections.Generic.List[string]
+
+    foreach ($match in [regex]::Matches($Text, '(?im)^\s*([A-Za-z][A-Za-z0-9-]*)\b')) {
+        $value = [string]$match.Groups[1].Value
+        if ([string]::IsNullOrWhiteSpace($value)) {
+            continue
+        }
+
+        $normalized = $value.ToLowerInvariant()
+        if ($ignore -contains $normalized) {
+            continue
+        }
+
+        if (-not $tokens.Contains($normalized)) {
+            [void]$tokens.Add($normalized)
+        }
+    }
+
+    return @($tokens)
+}
+
+function Get-NormalizedComparisonValue {
+    param(
+        [string]$Text,
+        [bool]$FileNameOnly = $false
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return ""
+    }
+
+    $value = $Text.Trim().Trim("`"", "'")
+    if ($FileNameOnly) {
+        try {
+            $value = [System.IO.Path]::GetFileName($value)
+        }
+        catch {
+        }
+    }
+
+    return (($value -replace '\s+', ' ').ToLowerInvariant())
+}
+
+function Get-PackageHelperAnalysisData {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$RequestData,
+
+        [bool]$UpdateHelperTab = $true
+    )
+
+    $pythonScraperModulePath = Join-Path $script:ToolRoot "src\Engines\PythonScraperEngine\PythonScraperEngine.psm1"
+    $switchEngineModulePath = Join-Path $script:ToolRoot "src\Engines\SwitchEngine\SwitchEngine.psm1"
+
+    try {
+        Import-Module $pythonScraperModulePath -Force -ErrorAction Stop
+        Import-Module $switchEngineModulePath -Force -ErrorAction Stop
+
+        $helperData = Get-PackageHelpSections -InstallerType $RequestData.InstallerType `
+                                              -Vendor $RequestData.Vendor `
+                                              -AppName $RequestData.AppName `
+                                              -Edition $RequestData.Edition `
+                                              -Version $RequestData.Version `
+                                              -InstallMediaPath $RequestData.InstallMediaPath `
+                                              -CurrentInstallSwitch $RequestData.CurrentInstallSwitch `
+                                              -CurrentUninstallSwitch $RequestData.CurrentUninstallSwitch `
+                                              -CurrentUninstallExecutable $RequestData.CurrentUninstallExecutable `
+                                              -InstallContext $RequestData.InstallContext `
+                                              -ContextRecommendation $RequestData.ContextRecommendation
+
+        if ($helperData -and $UpdateHelperTab) {
+            Set-PackageHelperTabContent -HelperData $helperData
+        }
+
+        return $helperData
+    }
+    catch {
+        Write-ProcessOutputLine -Message ("Analyze Package helper/web suggestion lookup failed: {0}" -f $_.Exception.Message) -Level "ERROR"
+        return $null
+    }
+}
+
+function Test-PackageAnalyzerPackageHelperCompliance {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$HelperData,
+
+        [Parameter(Mandatory = $true)]
+        [object[]]$Sections
+    )
+
+    $warnings = New-Object System.Collections.Generic.List[string]
+    $info = New-Object System.Collections.Generic.List[string]
+
+    $ctx = $HelperData.Context
+    if ($ctx) {
+        [void]$info.Add(("Web-backed suggestion lookup: Status={0}, Duration={1}s, Detail={2}" -f $ctx.PlaywrightLookupStatus, $ctx.PlaywrightLookupDurationSeconds, $ctx.PlaywrightLookupMessage))
+        if ($ctx.PlaywrightLookupStatus -eq 'Failed') {
+            [void]$warnings.Add('Web-backed suggestion lookup failed. Verify install/uninstall media and switches manually before packaging.')
+        }
+    }
+
+    $sectionsMap = $HelperData.Sections
+    if (-not $sectionsMap) {
+        [void]$warnings.Add('Package Helper returned no sections for comparison. Analyze Package could not validate install/uninstall values against helper suggestions.')
+        return @{
+            Warnings = @($warnings)
+            Info = @($info)
+        }
+    }
+
+    $installCandidates = @()
+    if ($sectionsMap.Contains('InstallCommand')) {
+        $installCandidates = @($sectionsMap.InstallCommand.Suggestions | ForEach-Object { Get-PackageHelperSuggestionValue -Snippet ([string]$_) -VariableName 'appInstallCommandLine' } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    }
+    $uninstallCandidates = @()
+    if ($sectionsMap.Contains('UninstallCommand')) {
+        $uninstallCandidates = @($sectionsMap.UninstallCommand.Suggestions | ForEach-Object { Get-PackageHelperSuggestionValue -Snippet ([string]$_) -VariableName 'appUninstallCommandLine' } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    }
+    $uninstallExeCandidates = @()
+    if ($sectionsMap.Contains('UninstallExecutable')) {
+        $uninstallExeCandidates = @($sectionsMap.UninstallExecutable.Suggestions | ForEach-Object {
+                $raw = [string]$_
+                $parsed = Get-PackageHelperSuggestionValue -Snippet $raw -VariableName 'appUninstallExeName'
+                if ([string]::IsNullOrWhiteSpace($parsed)) { $parsed = $raw }
+                $parsed
+            } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    }
+
+    $currentInstall = if ($txtInstallSwitch) { [string]$txtInstallSwitch.Text.Trim() } else { '' }
+    $currentUninstall = if ($txtUninstallSwitch) { [string]$txtUninstallSwitch.Text.Trim() } else { '' }
+    $currentUninstallExe = if ($txtUninstallExecutable) { [string]$txtUninstallExecutable.Text.Trim() } else { '' }
+
+    if (-not [string]::IsNullOrWhiteSpace($currentInstall) -and $installCandidates.Count -gt 0) {
+        $match = @($installCandidates | Where-Object { (Get-NormalizedComparisonValue -Text $_) -eq (Get-NormalizedComparisonValue -Text $currentInstall) })
+        if ($match.Count -eq 0) {
+            [void]$warnings.Add('Install switch does not match current helper/web-backed suggestions. Re-validate install command-line syntax before packaging.')
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($currentUninstall) -and $uninstallCandidates.Count -gt 0) {
+        $match = @($uninstallCandidates | Where-Object { (Get-NormalizedComparisonValue -Text $_) -eq (Get-NormalizedComparisonValue -Text $currentUninstall) })
+        if ($match.Count -eq 0) {
+            [void]$warnings.Add('Uninstall switch does not match current helper/web-backed suggestions. Re-validate uninstall command-line syntax before packaging.')
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($currentUninstallExe) -and $uninstallExeCandidates.Count -gt 0) {
+        $currentExeNorm = Get-NormalizedComparisonValue -Text $currentUninstallExe -FileNameOnly $true
+        $match = @($uninstallExeCandidates | Where-Object { (Get-NormalizedComparisonValue -Text $_ -FileNameOnly $true) -eq $currentExeNorm })
+        if ($match.Count -eq 0) {
+            [void]$warnings.Add('Uninstall executable does not match current helper/web-backed uninstall media suggestions. Verify uninstall executable path and name.')
+        }
+    }
+
+    $customSectionMap = @(
+        @{ AnalyzerKey = 'PreInstall'; HelperKey = 'PreInstallCommands'; Title = 'Pre-Install Commands' },
+        @{ AnalyzerKey = 'CustomInstall'; HelperKey = 'CustomInstallCommands'; Title = 'Custom Install Commands' },
+        @{ AnalyzerKey = 'PostInstall'; HelperKey = 'PostInstallCommands'; Title = 'Post-Install Commands' },
+        @{ AnalyzerKey = 'PreUninstall'; HelperKey = 'PreUninstallCommands'; Title = 'Pre-Uninstall Commands' },
+        @{ AnalyzerKey = 'CustomUninstall'; HelperKey = 'CustomUninstallCommands'; Title = 'Custom Uninstall Commands' },
+        @{ AnalyzerKey = 'PostUninstall'; HelperKey = 'PostUninstallCommands'; Title = 'Post-Uninstall Commands' }
+    )
+
+    foreach ($entry in @($customSectionMap)) {
+        $section = @($Sections | Where-Object { $_.Key -eq $entry.AnalyzerKey } | Select-Object -First 1)
+        if ($section.Count -eq 0) {
+            continue
+        }
+
+        $sectionText = [string]$section[0].Text
+        if ([string]::IsNullOrWhiteSpace($sectionText)) {
+            continue
+        }
+
+        if (-not $sectionsMap.Contains($entry.HelperKey)) {
+            [void]$warnings.Add("$($entry.Title): helper comparison data is missing. Verify section code manually.")
+            continue
+        }
+
+        $suggestions = @($sectionsMap[$entry.HelperKey].Suggestions | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        if ($suggestions.Count -eq 0) {
+            [void]$warnings.Add("$($entry.Title): no helper/web-backed suggestions were returned for this filled section. Validate this section manually.")
+            continue
+        }
+
+        $currentTokens = @(Get-CommandTokensFromText -Text $sectionText)
+        $suggestedTokens = @(Get-CommandTokensFromText -Text (($suggestions -join "`r`n")))
+        if ($currentTokens.Count -eq 0 -or $suggestedTokens.Count -eq 0) {
+            continue
+        }
+
+        $overlap = @($currentTokens | Where-Object { $suggestedTokens -contains $_ })
+        if ($overlap.Count -eq 0) {
+            [void]$warnings.Add("$($entry.Title): entered commands do not overlap helper/web-backed command patterns. Confirm code appropriateness for this installer scenario.")
+        }
+        else {
+            [void]$info.Add("$($entry.Title): command pattern overlap found with helper/web-backed suggestions.")
+        }
+    }
+
+    return @{
+        Warnings = @($warnings | Select-Object -Unique)
+        Info = @($info | Select-Object -Unique)
+    }
 }
 
 function Add-UniqueHelperSnippet {
@@ -4184,13 +4416,41 @@ function Invoke-AnalyzePackage {
     }
 
     $canRunWebSuggestions = $TriggerWebSuggestions -and -not [string]::IsNullOrWhiteSpace($txtVendor.Text) -and -not [string]::IsNullOrWhiteSpace($txtName.Text)
+    $helperAnalysis = $null
     if ($canRunWebSuggestions) {
-        Write-ProcessOutputLine -Message 'Analyze Package | Stage=WebSuggestions | Outcome=Invoking Package Helper generation for web-backed suggestions.' -Level 'INFO'
-        Invoke-PackageHelperGeneration
-        [void]$info.Add('Package Helper generation triggered (includes Playwright/web-backed suggestions when media is present).')
+        Write-ProcessOutputLine -Message 'Analyze Package | Stage=WebSuggestions | Outcome=Running integrated Package Helper + web-backed compliance checks.' -Level 'INFO'
+
+        $requestData = @{
+            InstallerType = $script:DetectedInstallerType
+            Vendor = $txtVendor.Text.Trim()
+            AppName = $txtName.Text.Trim()
+            Edition = $txtEdition.Text.Trim()
+            Version = $txtVersion.Text.Trim()
+            InstallMediaPath = $script:InstallationMediaPath
+            CurrentInstallSwitch = $txtInstallSwitch.Text.Trim()
+            CurrentUninstallSwitch = $txtUninstallSwitch.Text.Trim()
+            CurrentUninstallExecutable = $txtUninstallExecutable.Text.Trim()
+            InstallContext = $script:SelectedInstallContext
+            ContextRecommendation = $script:ContextRecommendation
+        }
+
+        $helperData = Get-PackageHelperAnalysisData -RequestData $requestData -UpdateHelperTab $true
+        if ($helperData) {
+            $helperAnalysis = Test-PackageAnalyzerPackageHelperCompliance -HelperData $helperData -Sections $sections
+            foreach ($line in @($helperAnalysis.Warnings)) {
+                [void]$warnings.Add($line)
+            }
+            foreach ($line in @($helperAnalysis.Info)) {
+                [void]$info.Add($line)
+            }
+            [void]$info.Add('Integrated Package Helper analysis completed and linked to Analyze Package report output.')
+        }
+        else {
+            [void]$warnings.Add('Package Helper integrated analysis did not return data. Re-run Analyze Package after confirming install media and required package fields.')
+        }
     }
     elseif ($TriggerWebSuggestions) {
-        [void]$info.Add('Package Helper web suggestions were skipped until Vendor and Name are populated.')
+        [void]$info.Add('Integrated helper/web suggestion checks were skipped until Vendor and Name are populated.')
     }
 
     $reportLines = New-Object System.Collections.Generic.List[string]
@@ -5127,7 +5387,7 @@ $lblPackageHelperHeader.Font = New-Object System.Drawing.Font("Segoe UI", 11, [S
 $tabPackageHelper.Controls.Add($lblPackageHelperHeader)
 
 $script:lblPackageHelperContext = New-Object System.Windows.Forms.Label
-$script:lblPackageHelperContext.Text = "Package Helper runs automatically when install media is selected."
+$script:lblPackageHelperContext.Text = "Package Helper auto-refresh is disabled. Use Analyze Package for integrated helper + web-backed checks."
 $script:lblPackageHelperContext.Location = New-Object System.Drawing.Point(20, 26)
 $script:lblPackageHelperContext.Size = New-Object System.Drawing.Size(500, 18)
 $script:lblPackageHelperContext.ForeColor = [System.Drawing.Color]::Gray
