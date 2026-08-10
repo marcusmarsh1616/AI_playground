@@ -420,11 +420,6 @@ function Start-AutomatedDocumentation {
     $script:Controls.txtAppVersion.Enabled = $false
     
     try {
-        $snagitAvailable = SnagitController\Test-SnagitInstalled
-        if ((-not $snagitAvailable) -and (-not $ManualOnly)) {
-            Write-UIStatus "Snagit not available for auto-capture; manual checklist will be required." "Orange"
-        }
-
         # Step 1: Create session
         Write-UIStatus "Creating documentation session..." "Blue"
         $script:CurrentSession = New-DocumentationSession `

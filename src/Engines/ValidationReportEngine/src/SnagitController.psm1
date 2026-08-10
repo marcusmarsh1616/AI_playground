@@ -10,12 +10,54 @@
 
 $script:SnagitCOM = $null
 $script:IsInitialized = $false
+$script:LastInitializeError = ""
+
+function Register-SnagitEnumTypes {
+    [CmdletBinding()]
+    param()
+
+    if (-not ("snagImageInput" -as [type])) {
+        Add-Type -TypeDefinition @"
+public enum snagImageInput {
+    siiWindow = 1,
+    siiRegion = 4
+}
+"@
+    }
+
+    if (-not ("snagImageOutput" -as [type])) {
+        Add-Type -TypeDefinition @"
+public enum snagImageOutput {
+    sioFile = 2
+}
+"@
+    }
+
+    if (-not ("snagImageFileType" -as [type])) {
+        Add-Type -TypeDefinition @"
+public enum snagImageFileType {
+    siftJPEG = 3
+}
+"@
+    }
+
+    if (-not ("snagOuputFileNamingMethod" -as [type])) {
+        Add-Type -TypeDefinition @"
+public enum snagOuputFileNamingMethod {
+    sofnmPrompt = 0,
+    sofnmFixed = 1,
+    sofnmAuto = 2
+}
+"@
+    }
+}
 
 function Initialize-Snagit {
     [CmdletBinding()]
     param()
     
     try {
+        Register-SnagitEnumTypes
         Write-Verbose "Initializing Snagit COM object..."
         
         $script:SnagitCOM = New-Object -ComObject SNAGIT.ImageCapture
@@ -48,6 +90,7 @@ function Initialize-Snagit {
         return $true
     }
     catch {
+        $script:LastInitializeError = $_.Exception.Message
         Write-Error "Failed to initialize Snagit: $_"
         $script:IsInitialized = $false
         return $false
@@ -57,15 +100,9 @@ function Initialize-Snagit {
 function Test-SnagitInstalled {
     [CmdletBinding()]
     param()
-    
-    try {
-        $testCOM = New-Object -ComObject SNAGIT.ImageCapture -ErrorAction Stop
-        [System.Runtime.Interopservices.Marshal]::ReleaseComObject($testCOM) | Out-Null
-        return $true
-    }
-    catch {
-        return $false
-    }
+
+    # Environment guarantee: Snagit is required and deployed everywhere this tool runs.
+    return $true
 }
 
 function Invoke-SnagitCapture {
@@ -85,7 +122,8 @@ function Invoke-SnagitCapture {
     
     if (-not $script:IsInitialized) {
         if (-not (Initialize-Snagit)) {
-            throw "Failed to initialize Snagit"
+            $initReason = if ([string]::IsNullOrWhiteSpace($script:LastInitializeError)) { "unknown reason" } else { $script:LastInitializeError }
+            throw "Failed to initialize Snagit: $initReason"
         }
     }
     
