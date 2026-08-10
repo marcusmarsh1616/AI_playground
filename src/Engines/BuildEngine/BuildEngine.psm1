@@ -14,6 +14,47 @@
 
 #region Functions
 
+function Resolve-SAPIENCommandLinePath {
+    [CmdletBinding()]
+    param(
+        [string]$PreferredPath = "C:\Program Files\SAPIEN Technologies, Inc\PowerShell Studio 2026\SAPIENCommandLine.exe"
+    )
+
+    $candidates = New-Object System.Collections.Generic.List[string]
+    if (-not [string]::IsNullOrWhiteSpace($PreferredPath)) {
+        [void]$candidates.Add($PreferredPath)
+
+        try {
+            $preferredDir = Split-Path -Path $PreferredPath -Parent
+            if (-not [string]::IsNullOrWhiteSpace($preferredDir)) {
+                [void]$candidates.Add((Join-Path $preferredDir "SAPIENCommandLine.exe"))
+            }
+        }
+        catch {
+        }
+    }
+
+    [void]$candidates.Add("C:\Program Files\SAPIEN Technologies, Inc\PowerShell Studio 2026\SAPIENCommandLine.exe")
+    [void]$candidates.Add("C:\Program Files (x86)\SAPIEN Technologies, Inc\PowerShell Studio 2026\SAPIENCommandLine.exe")
+
+    foreach ($candidate in @($candidates | Select-Object -Unique)) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path $candidate)) {
+            return $candidate
+        }
+    }
+
+    try {
+        $cmd = Get-Command SAPIENCommandLine.exe -ErrorAction SilentlyContinue
+        if ($cmd -and (Test-Path $cmd.Source)) {
+            return $cmd.Source
+        }
+    }
+    catch {
+    }
+
+    return $PreferredPath
+}
+
 <#
 .SYNOPSIS
     Compiles a PowerShell Studio project into an executable package
@@ -48,9 +89,11 @@ function Invoke-ProjectBuild {
     }
     
     try {
+        $resolvedSapienPath = Resolve-SAPIENCommandLinePath -PreferredPath $SAPIENPath
+
                 # Validate SAPIENCommandLine.exe exists
-        if (-not (Test-Path $SAPIENPath)) {
-            $result.Message = "SAPIENCommandLine.exe not found at: $SAPIENPath"
+        if (-not (Test-Path $resolvedSapienPath)) {
+            $result.Message = "SAPIENCommandLine.exe not found at: $resolvedSapienPath"
             return $result
         }
         
@@ -74,6 +117,8 @@ function Invoke-ProjectBuild {
                 # Prepare SAPIEN build command
         $result.BuildLog = "Starting build with SAPIENCommandLine.exe
 "
+        $result.BuildLog += "Tool: $resolvedSapienPath
+    "
         $result.BuildLog += "Project: $ProjectPath
 "
         $result.BuildLog += "Output: $expectedOutputPath
@@ -84,7 +129,7 @@ function Invoke-ProjectBuild {
         # PostCompile.exe will spawn its own PowerShell 7 window for certificate signing
         $result.BuildLog += "Executing build with hidden SAPIEN window...`n"
         
-        $process = Start-Process -FilePath $SAPIENPath `
+        $process = Start-Process -FilePath $resolvedSapienPath `
                                                  -ArgumentList "/buildexe `"$ProjectPath`"" `
                                                  -WorkingDirectory $projectDir `
                                                  -Wait `
@@ -180,15 +225,18 @@ function Test-SAPIENBuildAvailable {
     $result = @{
         Available = $false
         Version = ""
-        Path = $SAPIENPath
+        Path = ""
     }
     
     try {
-        if (Test-Path $SAPIENPath) {
+        $resolvedSapienPath = Resolve-SAPIENCommandLinePath -PreferredPath $SAPIENPath
+        $result.Path = $resolvedSapienPath
+
+        if (Test-Path $resolvedSapienPath) {
             $result.Available = $true
             
             # Try to get version info
-            $fileInfo = Get-Item $SAPIENPath
+            $fileInfo = Get-Item $resolvedSapienPath
             $result.Version = $fileInfo.VersionInfo.FileVersion
         }
     }

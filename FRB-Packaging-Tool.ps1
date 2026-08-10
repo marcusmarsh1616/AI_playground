@@ -827,6 +827,7 @@ function Write-TestExecutionDiagnostics {
     $commandLine = "{0} {1}" -f $Result.InstallExePath, $Result.Arguments
     $commandLine = $commandLine.Trim()
 
+    Write-ProcessOutputLine -Message ("{0} | Stage=Diagnostics | Outcome=Capturing execution evidence and log traces." -f $Stage) -Level "INFO"
     Write-ProcessOutputLine -Message ("{0} execution summary | ProcessId={1} ExitCode={2} Command={3}" -f $Stage, $processLabel, $exitCodeLabel, $commandLine) -Level "INFO"
 
     if ($Result.ContainsKey('CleanupResults') -and $Result.CleanupResults) {
@@ -839,6 +840,10 @@ function Write-TestExecutionDiagnostics {
     }
 
     if ($Result.ContainsKey('Diagnostics') -and $Result.Diagnostics) {
+        if ($Result.Diagnostics.SearchedRoots -and $Result.Diagnostics.SearchedRoots.Count -gt 0) {
+            Write-ProcessOutputLine -Message ("{0} diagnostics searched roots: {1}" -f $Stage, ($Result.Diagnostics.SearchedRoots -join '; ')) -Level "INFO"
+        }
+
         if ($Result.Diagnostics.Files -and $Result.Diagnostics.Files.Count -gt 0) {
             foreach ($diagFile in @($Result.Diagnostics.Files)) {
                 Write-ProcessOutputLine -Message ("{0} evidence file: {1} (LastWrite={2}, Size={3} bytes)" -f $Stage, $diagFile.Path, $diagFile.LastWriteTime, $diagFile.Size) -Level "INFO"
@@ -853,6 +858,9 @@ function Write-TestExecutionDiagnostics {
                 Write-ProcessOutputLine -Message ("{0} log tail: {1}" -f $Stage, $tailLine) -Level "INFO"
             }
         }
+
+        $evidenceCount = if ($Result.Diagnostics.Files) { @($Result.Diagnostics.Files).Count } else { 0 }
+        Write-ProcessOutputLine -Message ("{0} | Stage=Diagnostics | Outcome=EvidenceFiles:{1}" -f $Stage, $evidenceCount) -Level "INFO"
     }
 
     if (-not [string]::IsNullOrWhiteSpace([string]$Result.ErrorMessage)) {
@@ -912,6 +920,127 @@ function Test-PackageDeploymentReadiness {
     }
 
     return $readiness
+}
+
+function Test-PackageTemplateLinkage {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PackagePath,
+
+        [string]$InstallContext = "System"
+    )
+
+    $result = @{
+        Success = $true
+        Errors = New-Object System.Collections.Generic.List[string]
+        Warnings = New-Object System.Collections.Generic.List[string]
+        Info = New-Object System.Collections.Generic.List[string]
+        ExpectedLogDirectory = ""
+    }
+
+    if ([string]::IsNullOrWhiteSpace($PackagePath) -or -not (Test-Path $PackagePath)) {
+        [void]$result.Errors.Add("Package path is invalid or not accessible: $PackagePath")
+        $result.Success = $false
+        return $result
+    }
+
+    $requiredRelativePaths = @(
+        "Startup.pss",
+        "FRB Installer.psproj",
+        "FRB Installer.psproj.psbuild",
+        "PostCompile.exe",
+        "ServiceUI.exe",
+        "_SourceFiles\\Globals.ps1",
+        "_SourceFiles\\Progress\\EUSInstallProgress.psf",
+        "_SourceFiles\\Progress\\EUSInstallProgress.psf.psbuild"
+    )
+
+    foreach ($relativePath in $requiredRelativePaths) {
+        $absolutePath = Join-Path $PackagePath $relativePath
+        if (-not (Test-Path $absolutePath)) {
+            [void]$result.Errors.Add("Missing required template component: $relativePath")
+        }
+    }
+
+    $projectPath = Join-Path $PackagePath "FRB Installer.psproj"
+    if (Test-Path $projectPath) {
+        try {
+            $projectContent = Get-Content -Path $projectPath -Raw -Encoding UTF8
+            if ($projectContent -notmatch '(?i)<File\s+Build="0">Startup\.pss</File>') {
+                [void]$result.Errors.Add('FRB Installer.psproj does not reference Startup.pss as expected.')
+            }
+            if ($projectContent -notmatch '(?i)_SourceFiles\\Globals\.ps1') {
+                [void]$result.Errors.Add('FRB Installer.psproj does not reference _SourceFiles\\Globals.ps1.')
+            }
+        }
+        catch {
+            [void]$result.Errors.Add("Failed to inspect FRB Installer.psproj: $($_.Exception.Message)")
+        }
+    }
+
+    $psbuildPath = Join-Path $PackagePath "FRB Installer.psproj.psbuild"
+    if (Test-Path $psbuildPath) {
+        try {
+            $psbuildContent = Get-Content -Path $psbuildPath -Raw -Encoding Unicode
+            if ($psbuildContent -notmatch '(?im)^\s*PostBuild1\s*=\s*\.\\PostCompile\.exe\s*$') {
+                [void]$result.Errors.Add('FRB Installer.psproj.psbuild is missing PostBuild1=.\\PostCompile.exe.')
+            }
+
+            if ($psbuildContent -match '(?im)^\s*DisableLogging\s*=\s*(\d+)\s*$') {
+                if ([int]$matches[1] -ne 0) {
+                    [void]$result.Warnings.Add('FRB Installer.psproj.psbuild has DisableLogging enabled; runtime logging may be suppressed.')
+                }
+            }
+            else {
+                [void]$result.Warnings.Add('DisableLogging setting was not found in FRB Installer.psproj.psbuild.')
+            }
+
+            if ($psbuildContent -match '(?im)^\s*ProhibitLogging\s*=\s*(\d+)\s*$') {
+                if ([int]$matches[1] -ne 0) {
+                    [void]$result.Warnings.Add('FRB Installer.psproj.psbuild has ProhibitLogging enabled; runtime logging may be suppressed.')
+                }
+            }
+            else {
+                [void]$result.Warnings.Add('ProhibitLogging setting was not found in FRB Installer.psproj.psbuild.')
+            }
+        }
+        catch {
+            [void]$result.Errors.Add("Failed to inspect FRB Installer.psproj.psbuild: $($_.Exception.Message)")
+        }
+    }
+
+    $startupPath = Join-Path $PackagePath "Startup.pss"
+    if (Test-Path $startupPath) {
+        try {
+            $startupContent = Get-Content -Path $startupPath -Raw -Encoding UTF8
+            if ($startupContent -notmatch '(?im)^\s*\[string\]\$installContext\s*=\s*[\x22\x27](System|User)[\x22\x27]') {
+                [void]$result.Warnings.Add('Startup.pss installContext declaration could not be confirmed.')
+            }
+            if ($startupContent -notmatch '(?i)\$configToolkitLogDir') {
+                [void]$result.Warnings.Add('Startup.pss does not reference configToolkitLogDir in expected command/logging sections.')
+            }
+        }
+        catch {
+            [void]$result.Errors.Add("Failed to inspect Startup.pss: $($_.Exception.Message)")
+        }
+    }
+
+    if ($InstallContext -eq 'User') {
+        $result.ExpectedLogDirectory = "$env:TEMP\\InstallLogs"
+    }
+    else {
+        $result.ExpectedLogDirectory = "${env:CommonProgramFiles(x86)}\\InstallLogs"
+    }
+
+    [void]$result.Info.Add("Template linkage check completed for package path: $PackagePath")
+    [void]$result.Info.Add("Install context selected: $InstallContext")
+    [void]$result.Info.Add("Expected primary runtime log directory: $($result.ExpectedLogDirectory)")
+
+    if ($result.Errors.Count -gt 0) {
+        $result.Success = $false
+    }
+
+    return $result
 }
 
 function Get-GlobalsReferencePath {
@@ -2100,15 +2229,15 @@ function Start-BuildTestDeployWorkflow {
     }
     
     $progressBar.Value = 20
-    Update-Status "Found: FRB Installer.psproj`nStarting PSBuild.exe..." "Blue"
+    Update-Status "Found: FRB Installer.psproj`nStarting build tool..." "Blue"
     $form.Refresh()
     
     $psbuildCheck = Test-SAPIENBuildAvailable
     if (-not $psbuildCheck.Available) {
-        Update-Status "ERROR: PSBuild.exe not found" "Red"
+        Update-Status "ERROR: SAPIEN build tool not found" "Red"
         [System.Windows.Forms.MessageBox]::Show(
-            "PSBuild.exe not found at:`n$($psbuildCheck.Path)`n`nPlease ensure PowerShell Studio 2026 is installed.",
-            "PSBuild Not Found",
+            "SAPIEN build tool was not found at:`n$($psbuildCheck.Path)`n`nPlease ensure PowerShell Studio 2026 is installed and SAPIENCommandLine.exe is available.",
+            "Build Tool Not Found",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Error
         )
@@ -2194,6 +2323,39 @@ function Start-BuildTestDeployWorkflow {
         
         Update-Status "System Context modifications complete. Building..." "Green"
         $form.Refresh()
+    }
+
+    $templateLinkage = Test-PackageTemplateLinkage -PackagePath $script:LastCreatedPackagePath -InstallContext $script:SelectedInstallContext
+    Write-ProcessOutputLine -Message "Build | Stage=TemplateLinkage | Outcome=Validation started against Master Template required components." -Level "INFO"
+    foreach ($line in @($templateLinkage.Info)) {
+        Write-ProcessOutputLine -Message $line -Level "INFO"
+    }
+    foreach ($line in @($templateLinkage.Warnings)) {
+        Write-ProcessOutputLine -Message $line -Level "WARN"
+    }
+
+    if (-not $templateLinkage.Success) {
+        foreach ($line in @($templateLinkage.Errors)) {
+            Write-ProcessOutputLine -Message $line -Level "ERROR"
+        }
+        Write-ProcessOutputLine -Message ("Build | Stage=TemplateLinkage | Outcome=Failed | Errors={0} Warnings={1}" -f @($templateLinkage.Errors).Count, @($templateLinkage.Warnings).Count) -Level "ERROR"
+
+        Update-Status "Template linkage validation failed before build." "Red"
+        [System.Windows.Forms.MessageBox]::Show(
+            "Template linkage validation failed before build.`n`n" + ($templateLinkage.Errors -join "`n") + "`n`nFix the missing/broken template links and run Start Packaging again.",
+            "Template Linkage Validation Failed",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        )
+
+        $btnCreate.Enabled = $true
+        $btnCreate.Visible = $true
+        $btnCancel.Enabled = $true
+        $btnCancel.Visible = $true
+        return
+    }
+    else {
+        Write-ProcessOutputLine -Message ("Build | Stage=TemplateLinkage | Outcome=Passed | Errors=0 Warnings={0}" -f @($templateLinkage.Warnings).Count) -Level "INFO"
     }
 
     Update-Status "Building Install.exe...`nThis may take a minute..." "Blue"

@@ -248,29 +248,72 @@ function Get-ExecutionEvidence {
         [datetime]$OperationStart,
 
         [Parameter(Mandatory = $true)]
-        [string]$OperationName
+        [string]$OperationName,
+
+        [string[]]$AdditionalSearchRoots = @()
     )
 
     $result = @{
+        SearchedRoots = @()
         Files = @()
         TailLines = @()
     }
 
-    if ([string]::IsNullOrWhiteSpace($SearchRoot) -or -not (Test-Path $SearchRoot)) {
+    $candidateRoots = New-Object System.Collections.Generic.List[string]
+    foreach ($root in @($SearchRoot) + @($AdditionalSearchRoots) + @("${env:CommonProgramFiles(x86)}\InstallLogs", "$env:TEMP\InstallLogs")) {
+        if ([string]::IsNullOrWhiteSpace($root)) {
+            continue
+        }
+
+        if ($candidateRoots -notcontains $root) {
+            [void]$candidateRoots.Add($root)
+        }
+    }
+
+    $validRoots = @($candidateRoots | Where-Object { Test-Path $_ })
+    $result.SearchedRoots = @($validRoots)
+
+    if ($validRoots.Count -eq 0) {
         return $result
     }
 
     try {
         $cutoff = $OperationStart.AddMinutes(-2)
-        $candidateFiles = Get-ChildItem -Path $SearchRoot -Recurse -File -Include *.log, *.txt -ErrorAction SilentlyContinue |
-            Where-Object {
-                $_.LastWriteTime -ge $cutoff -and
-                $_.Name -match '(?i)(install|uninstall|setup|error|fail|msi|process|log)'
-            } |
-            Sort-Object LastWriteTime -Descending |
-            Select-Object -First 6
+        $candidateFiles = New-Object System.Collections.Generic.List[object]
 
-        foreach ($file in @($candidateFiles)) {
+        foreach ($root in $validRoots) {
+            $rootFiles = Get-ChildItem -Path $root -Recurse -File -Include *.log, *.txt -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $_.LastWriteTime -ge $cutoff -and
+                    $_.Name -match '(?i)(install|uninstall|setup|error|fail|msi|process|log|psi_)'
+                } |
+                Sort-Object LastWriteTime -Descending |
+                Select-Object -First 10
+
+            foreach ($rootFile in @($rootFiles)) {
+                [void]$candidateFiles.Add($rootFile)
+            }
+        }
+
+        $selectedFiles = New-Object System.Collections.Generic.List[object]
+        $seenPaths = @{}
+        foreach ($candidate in @($candidateFiles | Sort-Object LastWriteTime -Descending)) {
+            if (-not $candidate -or [string]::IsNullOrWhiteSpace($candidate.FullName)) {
+                continue
+            }
+
+            if ($seenPaths.ContainsKey($candidate.FullName)) {
+                continue
+            }
+
+            $seenPaths[$candidate.FullName] = $true
+            [void]$selectedFiles.Add($candidate)
+            if ($selectedFiles.Count -ge 12) {
+                break
+            }
+        }
+
+        foreach ($file in @($selectedFiles)) {
             $result.Files += [PSCustomObject]@{
                 Path = $file.FullName
                 LastWriteTime = $file.LastWriteTime
