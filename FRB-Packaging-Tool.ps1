@@ -2508,21 +2508,53 @@ function Start-BuildTestDeployWorkflow {
             $form.Refresh()
             Write-ProcessOutputLine -Message "Technician confirmed installation functioned as designed." -Level "INFO"
 
-            $docResult = Start-IntegratedValidationDocumentation -PackagePath $script:LastCreatedPackagePath -AppVendor $script:SavedVendor -AppName $script:SavedName -AppEdition $script:SavedEdition -AppVersion $script:SavedVersion
-            if (-not [string]::IsNullOrWhiteSpace([string]$docResult.Mode)) {
-                Write-ProcessOutputLine -Message ("Validation mode selected by technician: {0}" -f $docResult.Mode) -Level "INFO"
-            }
-            if (-not $docResult.Success) {
+            :ValidationDocumentationLoop while ($true) {
+                $docResult = Start-IntegratedValidationDocumentation -PackagePath $script:LastCreatedPackagePath -AppVendor $script:SavedVendor -AppName $script:SavedName -AppEdition $script:SavedEdition -AppVersion $script:SavedVersion
+                if (-not [string]::IsNullOrWhiteSpace([string]$docResult.Mode)) {
+                    Write-ProcessOutputLine -Message ("Validation mode selected by technician: {0}" -f $docResult.Mode) -Level "INFO"
+                }
+
+                if ($docResult.Success) {
+                    if ($docResult.ReportCopied) {
+                        Update-Status "Validation documentation report copied to package Docs." "Green"
+                        $form.Refresh()
+                    }
+                    else {
+                        Update-Status $docResult.Message "Blue"
+                        $form.Refresh()
+                    }
+                    break :ValidationDocumentationLoop
+                }
+
                 Update-Status "Validation documentation warning: $($docResult.Message)" "Orange"
                 $form.Refresh()
-            }
-            elseif ($docResult.ReportCopied) {
-                Update-Status "Validation documentation report copied to package Docs." "Green"
+                Write-ProcessOutputLine -Message ("Validation workflow incomplete. Prompting technician for retry/skip/cancel. Detail: {0}" -f $docResult.Message) -Level "WARN"
+
+                $docPrompt = [System.Windows.Forms.MessageBox]::Show(
+                    "Validation documentation did not complete successfully.`n`nMessage: $($docResult.Message)`n`nYes = Retry validation documentation now`nNo = Skip and continue to uninstall testing`nCancel = Return to GUI without uninstall testing",
+                    "Validation Documentation",
+                    [System.Windows.Forms.MessageBoxButtons]::YesNoCancel,
+                    [System.Windows.Forms.MessageBoxIcon]::Warning
+                )
+
+                if ($docPrompt -eq [System.Windows.Forms.DialogResult]::Yes) {
+                    Write-ProcessOutputLine -Message "Technician selected retry for validation documentation." -Level "INFO"
+                    continue :ValidationDocumentationLoop
+                }
+
+                if ($docPrompt -eq [System.Windows.Forms.DialogResult]::No) {
+                    Write-ProcessOutputLine -Message "Technician skipped validation documentation and continued to uninstall testing." -Level "WARN"
+                    break :ValidationDocumentationLoop
+                }
+
+                Write-ProcessOutputLine -Message "Technician cancelled after validation documentation failure and returned to GUI." -Level "WARN"
+                Update-Status "Validation documentation cancelled. Returning to GUI." "Orange"
                 $form.Refresh()
-            }
-            else {
-                Update-Status $docResult.Message "Blue"
-                $form.Refresh()
+                $btnCreate.Enabled = $true
+                $btnCreate.Visible = $true
+                $btnCancel.Enabled = $true
+                $btnCancel.Visible = $true
+                return
             }
 
             break :InstallLoop

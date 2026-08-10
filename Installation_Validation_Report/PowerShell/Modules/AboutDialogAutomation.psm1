@@ -166,14 +166,85 @@ function Get-AboutLikeScore {
     if ($name -eq 'about') { return 100 }
     if ($name -match '^about\b') { return 95 }
     if ($name -match 'about') { return 90 }
-    if ($name -match '^help\b') { return 70 }
-    if ($name -match 'help') { return 65 }
     if ($name -match 'version') { return 60 }
     if ($name -match 'info') { return 55 }
     if ($name -match 'license') { return 50 }
+    if ($name -match 'credits|copyright') { return 50 }
     if ($name -match 'details|properties|register') { return 40 }
 
     return 0
+}
+
+function Test-AboutLikeName {
+    param([string]$Text)
+
+    $name = Get-NormalizedMenuName -Text $Text
+    if ([string]::IsNullOrWhiteSpace($name)) { return $false }
+
+    if ($name -match '\b(about|version|build|license|licence|credits|copyright)\b') { return $true }
+    if ($name -match 'product\s*info|app\s*info|information') { return $true }
+
+    return $false
+}
+
+function Get-TopMenuScore {
+    param(
+        [string]$Text,
+        [string]$ProcessName
+    )
+
+    $name = Get-NormalizedMenuName -Text $Text
+    if ([string]::IsNullOrWhiteSpace($name)) { return 0 }
+
+    if ($name -eq 'help' -or $name -eq '?') { return 100 }
+    if (-not [string]::IsNullOrWhiteSpace($ProcessName)) {
+        $procName = (Get-NormalizedMenuName -Text $ProcessName)
+        if (-not [string]::IsNullOrWhiteSpace($procName) -and $name -eq $procName) { return 90 }
+    }
+    if ($name -match '^file$|^app$|^application$') { return 80 }
+    if ($name -match '^settings$|^tools$|^window$') { return 60 }
+
+    return 20
+}
+
+function Find-AboutWindowForProcess {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [object]$Root,
+
+        [Parameter(Mandatory=$true)]
+        [object]$Window,
+
+        [Parameter(Mandatory=$true)]
+        [object]$PidCondition,
+
+        [Parameter(Mandatory=$true)]
+        [int]$MainWindowHandle,
+
+        [int]$TimeoutMilliseconds = 5000
+    )
+
+    $winCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window)
+    $paneCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Pane)
+    $deadline = (Get-Date).AddMilliseconds($TimeoutMilliseconds)
+
+    while ((Get-Date) -lt $deadline) {
+        $aboutWin = @($Root.FindAll([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition($PidCondition, $winCond)))) |
+            Where-Object { $_.Current.NativeWindowHandle -ne $MainWindowHandle -and $_.Current.NativeWindowHandle -ne 0 } | Select-Object -First 1
+        if ($aboutWin) { return $aboutWin }
+
+        $embeddedWindow = $Window.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $winCond)
+        if ($embeddedWindow) { return $embeddedWindow }
+
+        $embeddedPane = @($Window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $paneCond)) |
+            Where-Object { Test-AboutLikeName -Text $_.Current.Name } | Select-Object -First 1
+        if ($embeddedPane) { return $embeddedPane }
+
+        Start-Sleep -Milliseconds 250
+    }
+
+    return $null
 }
 
 function Find-AboutLikeAutomationElement {
@@ -287,18 +358,26 @@ function Invoke-AboutDialogAutomation {
     if ($menuBar) {
         $topItems = @($menuBar.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition))
         $result.MenuBarItems = @($topItems | ForEach-Object { $_.Current.Name })
-        # Strip & (Win32) and _ (WPF) accelerator markers before matching
-        $helpItem = $topItems | Where-Object { ($_.Current.Name -replace '[&_]','') -match '^help$|^\?$' } | Select-Object -First 1
+        $topCandidates = @($topItems | ForEach-Object {
+            [pscustomobject]@{
+                Element = $_
+                Name = $_.Current.Name
+                Score = Get-TopMenuScore -Text $_.Current.Name -ProcessName $process.ProcessName
+            }
+        } | Sort-Object Score -Descending)
 
-        if ($helpItem) {
+        foreach ($topCandidate in $topCandidates) {
+            if ($invoked) { break }
+
+            $menuRootItem = $topCandidate.Element
             $miCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::MenuItem)
 
             $expand = $null
-            if ($helpItem.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$expand)) {
+            if ($menuRootItem.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$expand)) {
                 $expand.Expand()
             } else {
                 $inv = $null
-                if ($helpItem.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$inv)) { $inv.Invoke() }
+                if ($menuRootItem.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$inv)) { $inv.Invoke() }
             }
             Start-Sleep -Milliseconds 700
             # Expand can toggle an already-open menu closed - re-expand if needed
@@ -308,7 +387,7 @@ function Invoke-AboutDialogAutomation {
             }
 
             # Tier 1: submenu items as descendants of the Help item (WPF, WinForms)
-            $subItems = @($helpItem.FindAll([System.Windows.Automation.TreeScope]::Descendants, $miCond)) | Where-Object { $_.Current.Name }
+            $subItems = @($menuRootItem.FindAll([System.Windows.Automation.TreeScope]::Descendants, $miCond)) | Where-Object { $_.Current.Name }
             if ($subItems.Count -eq 0) {
                 # Tier 2: popup menu hosted at desktop level under the same process
                 $popupCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Menu)
@@ -321,13 +400,13 @@ function Invoke-AboutDialogAutomation {
             }
             $result.HelpMenuItems = @($subItems | ForEach-Object { $_.Current.Name })
 
-            $aboutItem = $subItems | Where-Object { ($_.Current.Name -replace '[&_]','') -match 'about' } | Select-Object -First 1
+            $aboutItem = $subItems | Where-Object { Test-AboutLikeName -Text $_.Current.Name } | Select-Object -First 1
             if ($aboutItem) {
                 $inv = $null
                 if ($aboutItem.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$inv)) {
                     $inv.Invoke()
                     $result.AboutItemName = $aboutItem.Current.Name
-                    $result.Method = 'UIAMenu'
+                    $result.Method = "UIAMenu:$($topCandidate.Name)"
                     $invoked = $true
                 }
             }
@@ -344,27 +423,36 @@ function Invoke-AboutDialogAutomation {
         if ($hMenu -ne [IntPtr]::Zero) {
             $topCount = [Win32.NativeMenu]::GetMenuItemCount($hMenu)
             $topNames = @()
-            $helpSub = [IntPtr]::Zero
+            $topSubMenus = New-Object System.Collections.Generic.List[object]
             for ($i = 0; $i -lt $topCount; $i++) {
                 $sb = New-Object System.Text.StringBuilder 256
                 [void][Win32.NativeMenu]::GetMenuString($hMenu, $i, $sb, 256, [Win32.NativeMenu]::MF_BYPOSITION)
                 $name = $sb.ToString()
                 $topNames += $name
-                if (($name -replace '[&_]','') -match '^help$|^\?$') { $helpSub = [Win32.NativeMenu]::GetSubMenu($hMenu, $i) }
+                $sub = [Win32.NativeMenu]::GetSubMenu($hMenu, $i)
+                if ($sub -ne [IntPtr]::Zero) {
+                    $topSubMenus.Add([pscustomobject]@{
+                        Name = $name
+                        Score = Get-TopMenuScore -Text $name -ProcessName $process.ProcessName
+                        SubMenu = $sub
+                    })
+                }
             }
             $result.MenuBarItems = $topNames
 
-            if ($helpSub -ne [IntPtr]::Zero) {
-                $subCount = [Win32.NativeMenu]::GetMenuItemCount($helpSub)
+            foreach ($subMenuInfo in @($topSubMenus | Sort-Object Score -Descending)) {
+                if ($invoked) { break }
+
+                $subCount = [Win32.NativeMenu]::GetMenuItemCount($subMenuInfo.SubMenu)
                 $subNames = @()
                 $aboutId = -1
                 for ($i = 0; $i -lt $subCount; $i++) {
                     $sb = New-Object System.Text.StringBuilder 256
-                    [void][Win32.NativeMenu]::GetMenuString($helpSub, $i, $sb, 256, [Win32.NativeMenu]::MF_BYPOSITION)
+                    [void][Win32.NativeMenu]::GetMenuString($subMenuInfo.SubMenu, $i, $sb, 256, [Win32.NativeMenu]::MF_BYPOSITION)
                     $name = $sb.ToString()
                     $subNames += $name
-                    if ($aboutId -lt 0 -and ($name -replace '[&_]','') -match 'about') {
-                        $aboutId = [Win32.NativeMenu]::GetMenuItemID($helpSub, $i)
+                    if ($aboutId -lt 0 -and (Test-AboutLikeName -Text $name)) {
+                        $aboutId = [Win32.NativeMenu]::GetMenuItemID($subMenuInfo.SubMenu, $i)
                         $result.AboutItemName = $name
                     }
                 }
@@ -372,7 +460,7 @@ function Invoke-AboutDialogAutomation {
 
                 if ($aboutId -ge 0) {
                     [void][Win32.NativeMenu]::PostMessage($process.MainWindowHandle, [Win32.NativeMenu]::WM_COMMAND, [IntPtr]$aboutId, [IntPtr]::Zero)
-                    $result.Method = 'Win32Menu'
+                    $result.Method = "Win32Menu:$($subMenuInfo.Name)"
                     $invoked = $true
                 }
             }
@@ -403,13 +491,8 @@ function Invoke-AboutDialogAutomation {
         return $result
     }
 
-    Start-Sleep -Milliseconds 1200
-
-    # --- Detect the About dialog: new top-level window of same PID, or in-app dialog window (Electron) ---
-    $winCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window)
-    $aboutWin = @($root.FindAll([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.AndCondition($pidCond, $winCond)))) |
-        Where-Object { $_.Current.NativeWindowHandle -ne $process.MainWindowHandle.ToInt32() -and $_.Current.NativeWindowHandle -ne 0 } | Select-Object -First 1
-    if (-not $aboutWin) { $aboutWin = $window.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $winCond) }
+    # --- Detect the About dialog: new top-level window of same PID, embedded dialog, or in-app pane ---
+    $aboutWin = Find-AboutWindowForProcess -Root $root -Window $window -PidCondition $pidCond -MainWindowHandle $process.MainWindowHandle.ToInt32() -TimeoutMilliseconds 5000
 
     if (-not $aboutWin) {
         $result.Message = 'About command was invoked but no dialog appeared.'

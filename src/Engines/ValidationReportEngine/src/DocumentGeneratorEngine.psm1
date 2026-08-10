@@ -28,6 +28,7 @@ $script:FigurePlaceholders = @{
     2 = "Programs and Features Entry"
     3 = "Start Menu Shortcuts"
     4 = "Application Opened"
+    5 = "Help About Window"
 }
 
 #region Helper Functions
@@ -254,7 +255,7 @@ function Add-ValidationScreenshot {
         The HTML content of the document
         
     .PARAMETER FigureNumber
-        Figure number (1-4)
+        Figure number (1-5)
         
     .PARAMETER ImagePath
         Path to the screenshot image file
@@ -268,7 +269,7 @@ function Add-ValidationScreenshot {
         [string]$HtmlContent,
         
         [Parameter(Mandatory)]
-        [ValidateRange(1,4)]
+        [ValidateRange(1,5)]
         [int]$FigureNumber,
         
         [Parameter(Mandatory)]
@@ -427,6 +428,9 @@ function Set-VendorDocumentationDetails {
         [string]$HtmlContent,
 
         [Parameter()]
+        [string]$OSCompatibilityText = "The Vendor has nothing to report",
+
+        [Parameter()]
         [string]$PrerequisitesText = "The Vendor has nothing to report",
 
         [Parameter()]
@@ -438,17 +442,48 @@ function Set-VendorDocumentationDetails {
 
     Add-Type -AssemblyName System.Net
 
+    $os = if ([string]::IsNullOrWhiteSpace($OSCompatibilityText)) { "The Vendor has nothing to report" } else { $OSCompatibilityText }
     $pre = if ([string]::IsNullOrWhiteSpace($PrerequisitesText)) { "The Vendor has nothing to report" } else { $PrerequisitesText }
     $conf = if ([string]::IsNullOrWhiteSpace($ApplicationConflictsText)) { "The Vendor has nothing to report" } else { $ApplicationConflictsText }
     $upg = if ([string]::IsNullOrWhiteSpace($UpgradePathsText)) { "The Vendor has nothing to report" } else { $UpgradePathsText }
 
-    $pre = [System.Net.WebUtility]::HtmlEncode($pre).Replace([Environment]::NewLine, '<br>')
-    $conf = [System.Net.WebUtility]::HtmlEncode($conf).Replace([Environment]::NewLine, '<br>')
-    $upg = [System.Net.WebUtility]::HtmlEncode($upg).Replace([Environment]::NewLine, '<br>')
+    $toListItems = {
+        param([string]$text)
 
-    $HtmlContent = $HtmlContent.Replace('[Vendor Prerequisites]', $pre)
-    $HtmlContent = $HtmlContent.Replace('[Vendor Application Conflicts]', $conf)
-    $HtmlContent = $HtmlContent.Replace('[Vendor Upgrade Paths]', $upg)
+        $safeText = if ([string]::IsNullOrWhiteSpace($text)) { "The Vendor has nothing to report" } else { $text }
+        $lines = $safeText -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        if (-not $lines -or $lines.Count -eq 0) {
+            $lines = @("The Vendor has nothing to report")
+        }
+
+        return (($lines | ForEach-Object {
+            "<li>" + [System.Net.WebUtility]::HtmlEncode($_) + "</li>"
+        }) -join [Environment]::NewLine)
+    }
+
+    $osList = & $toListItems $os
+    $preList = & $toListItems $pre
+    $confList = & $toListItems $conf
+    $upgList = & $toListItems $upg
+
+    # Legacy token values used by the original template.
+    $preLegacy = [System.Net.WebUtility]::HtmlEncode($pre).Replace([Environment]::NewLine, '<br>')
+    $confLegacy = [System.Net.WebUtility]::HtmlEncode($conf).Replace([Environment]::NewLine, '<br>')
+    $upgLegacy = [System.Net.WebUtility]::HtmlEncode($upg).Replace([Environment]::NewLine, '<br>')
+
+    $helpAboutContent = "<li>Help/About verification evidence captured in Figure 5.</li>"
+
+    # New template tokens.
+    $HtmlContent = $HtmlContent.Replace('[OS_COMPATIBILITY_CONTENT]', $osList)
+    $HtmlContent = $HtmlContent.Replace('[CONFLICT_CONTENT]', $confList)
+    $HtmlContent = $HtmlContent.Replace('[PREREQUISITE_CONTENT]', $preList)
+    $HtmlContent = $HtmlContent.Replace('[UPGRADE_PATH_CONTENT]', $upgList)
+    $HtmlContent = $HtmlContent.Replace('[HELP_ABOUT_CONTENT]', $helpAboutContent)
+
+    # Legacy template tokens (backward compatibility).
+    $HtmlContent = $HtmlContent.Replace('[Vendor Prerequisites]', $preLegacy)
+    $HtmlContent = $HtmlContent.Replace('[Vendor Application Conflicts]', $confLegacy)
+    $HtmlContent = $HtmlContent.Replace('[Vendor Upgrade Paths]', $upgLegacy)
 
     return $HtmlContent
 }

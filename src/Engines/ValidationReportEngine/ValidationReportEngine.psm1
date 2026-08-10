@@ -38,7 +38,7 @@ function Show-ValidationCaptureModeDialog {
     }
 
     $prompt = New-Object System.Windows.Forms.Label
-    $prompt.Text = "Choose Automated, Manual, or skip report generation for now." + [Environment]::NewLine + $appText
+    $prompt.Text = "Choose Automated, Manual, or skip report generation for now." + [Environment]::NewLine + "Automated includes retry/skip/cancel and then enforces manual completion for missing Figure 2-5 captures before report generation." + [Environment]::NewLine + $appText
     $prompt.Location = New-Object System.Drawing.Point(20, 50)
     $prompt.Size = New-Object System.Drawing.Size(510, 55)
     $prompt.Font = New-Object System.Drawing.Font("Segoe UI", 10)
@@ -224,6 +224,11 @@ function Start-ValidationReportCapture {
             }
         }
 
+        if ($launcherResult -and $launcherResult.PSObject.Properties.Name -contains 'Success' -and -not $launcherResult.Success) {
+            $result.Message = if ($launcherResult.Message) { "Validation documentation tool failed: $($launcherResult.Message)" } else { "Validation documentation tool reported failure." }
+            return $result
+        }
+
         if ([string]::IsNullOrWhiteSpace($sourceReportPath)) {
             $outputFoldersToProbe = @(
                 $outputFolder,
@@ -260,11 +265,6 @@ function Start-ValidationReportCapture {
             }
 
             $sourceReportPath = $latestReport.FullName
-        }
-
-        if ($launcherResult -and $launcherResult.PSObject.Properties.Name -contains 'Success' -and -not $launcherResult.Success -and [string]::IsNullOrWhiteSpace($sourceReportPath)) {
-            $result.Message = if ($launcherResult.Message) { "Validation documentation tool failed: $($launcherResult.Message)" } else { "Validation documentation tool reported failure." }
-            return $result
         }
 
         Copy-Item -Path $sourceReportPath -Destination $targetReportPath -Force

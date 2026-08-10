@@ -163,7 +163,245 @@ function Show-CaptureNameOverrideDialog {
     }
 }
 
+function Get-MissingCaptureFigures {
+    param([Parameter(Mandatory = $true)]$Session)
+
+    $missing = New-Object System.Collections.Generic.List[int]
+    if (-not $Session.Captures.Figure2) { $missing.Add(2) }
+    if (-not $Session.Captures.Figure3) { $missing.Add(3) }
+    if (-not $Session.Captures.Figure4) { $missing.Add(4) }
+    if (-not $Session.Captures.Figure5) { $missing.Add(5) }
+    return @($missing)
+}
+
+function Get-ManualCaptureFilePath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Folder,
+
+        [Parameter(Mandatory = $true)]
+        [int]$FigureNumber
+    )
+
+    $candidates = @(
+        (Join-Path $Folder ("Figure{0}.jpg" -f $FigureNumber)),
+        (Join-Path $Folder ("Figure{0}.jpeg" -f $FigureNumber)),
+        (Join-Path $Folder ("Figure{0}.png" -f $FigureNumber))
+    )
+
+    foreach ($candidate in $candidates) {
+        if (Test-Path $candidate) { return $candidate }
+    }
+
+    return $null
+}
+
+function Show-CaptureFailureActionDialog {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$FigureNumber,
+
+        [Parameter(Mandatory = $true)]
+        [string]$FailureReason
+    )
+
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = "Capture Step Needs Action"
+    $form.Size = New-Object System.Drawing.Size(700, 300)
+    $form.StartPosition = "CenterScreen"
+    $form.FormBorderStyle = "FixedDialog"
+    $form.MaximizeBox = $false
+    $form.MinimizeBox = $false
+    $form.TopMost = $true
+    $form.KeyPreview = $true
+
+    $lblMessage = New-Object System.Windows.Forms.Label
+    $lblMessage.Location = New-Object System.Drawing.Point(20, 20)
+    $lblMessage.Size = New-Object System.Drawing.Size(650, 120)
+    $lblMessage.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+    $lblMessage.Text = "Figure $FigureNumber capture failed.`r`n`r`nReason: $FailureReason`r`n`r`nChoose Retry to try automated capture again, Skip (Alt+S or Esc) to continue to the next figure, or Cancel to stop the run."
+    $form.Controls.Add($lblMessage)
+
+    $decision = 'Cancel'
+
+    $btnRetry = New-Object System.Windows.Forms.Button
+    $btnRetry.Text = "&Retry"
+    $btnRetry.Location = New-Object System.Drawing.Point(330, 200)
+    $btnRetry.Size = New-Object System.Drawing.Size(100, 32)
+    $btnRetry.Add_Click({
+        $script:DecisionValue = 'Retry'
+        $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $form.Close()
+    })
+    $form.Controls.Add($btnRetry)
+
+    $btnSkip = New-Object System.Windows.Forms.Button
+    $btnSkip.Text = "&Skip"
+    $btnSkip.Location = New-Object System.Drawing.Point(440, 200)
+    $btnSkip.Size = New-Object System.Drawing.Size(100, 32)
+    $btnSkip.Add_Click({
+        $script:DecisionValue = 'Skip'
+        $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $form.Close()
+    })
+    $form.Controls.Add($btnSkip)
+
+    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel.Text = "Cancel"
+    $btnCancel.Location = New-Object System.Drawing.Point(550, 200)
+    $btnCancel.Size = New-Object System.Drawing.Size(100, 32)
+    $btnCancel.Add_Click({
+        $script:DecisionValue = 'Cancel'
+        $form.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+        $form.Close()
+    })
+    $form.Controls.Add($btnCancel)
+
+    $form.CancelButton = $btnSkip
+    $script:DecisionValue = 'Cancel'
+
+    $form.Add_KeyDown({
+        if ($_.KeyCode -eq [System.Windows.Forms.Keys]::Escape) {
+            $script:DecisionValue = 'Skip'
+            $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
+            $form.Close()
+        }
+    })
+
+    [void]$form.ShowDialog()
+    $decision = $script:DecisionValue
+    Remove-Variable -Scope Script -Name DecisionValue -ErrorAction SilentlyContinue
+    return $decision
+}
+
+function Show-ManualCaptureChecklistDialog {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        $Session
+    )
+
+    $folder = $Session.WorkingDirectory
+    $status = @{}
+    $status[2] = $null
+    $status[3] = $null
+    $status[4] = $null
+    $status[5] = $null
+
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = "Manual Screenshot Checklist"
+    $form.Size = New-Object System.Drawing.Size(760, 470)
+    $form.StartPosition = "CenterScreen"
+    $form.FormBorderStyle = "FixedDialog"
+    $form.MaximizeBox = $false
+    $form.MinimizeBox = $false
+    $form.TopMost = $true
+
+    $lblIntro = New-Object System.Windows.Forms.Label
+    $lblIntro.Location = New-Object System.Drawing.Point(20, 20)
+    $lblIntro.Size = New-Object System.Drawing.Size(700, 65)
+    $lblIntro.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+    $lblIntro.Text = "Manual capture mode is active. Save screenshots into the folder below using the exact names Figure2, Figure3, Figure4, and Figure5 (jpg, jpeg, or png).`r`nThe report will only generate after all required files are present."
+    $form.Controls.Add($lblIntro)
+
+    $txtFolder = New-Object System.Windows.Forms.TextBox
+    $txtFolder.Location = New-Object System.Drawing.Point(20, 92)
+    $txtFolder.Size = New-Object System.Drawing.Size(700, 24)
+    $txtFolder.ReadOnly = $true
+    $txtFolder.Text = $folder
+    $form.Controls.Add($txtFolder)
+
+    $lstChecklist = New-Object System.Windows.Forms.ListBox
+    $lstChecklist.Location = New-Object System.Drawing.Point(20, 130)
+    $lstChecklist.Size = New-Object System.Drawing.Size(700, 220)
+    $lstChecklist.Font = New-Object System.Drawing.Font("Consolas", 10)
+    $form.Controls.Add($lstChecklist)
+
+    $lblHint = New-Object System.Windows.Forms.Label
+    $lblHint.Location = New-Object System.Drawing.Point(20, 360)
+    $lblHint.Size = New-Object System.Drawing.Size(700, 24)
+    $lblHint.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Italic)
+    $lblHint.Text = "Use Refresh after each screenshot. Click Continue when all are marked Ready."
+    $form.Controls.Add($lblHint)
+
+    $btnOpenFolder = New-Object System.Windows.Forms.Button
+    $btnOpenFolder.Text = "Open Folder"
+    $btnOpenFolder.Location = New-Object System.Drawing.Point(20, 395)
+    $btnOpenFolder.Size = New-Object System.Drawing.Size(120, 32)
+    $btnOpenFolder.Add_Click({
+        Start-Process explorer.exe $folder
+    })
+    $form.Controls.Add($btnOpenFolder)
+
+    $btnRefresh = New-Object System.Windows.Forms.Button
+    $btnRefresh.Text = "Refresh"
+    $btnRefresh.Location = New-Object System.Drawing.Point(150, 395)
+    $btnRefresh.Size = New-Object System.Drawing.Size(120, 32)
+    $form.Controls.Add($btnRefresh)
+
+    $btnContinue = New-Object System.Windows.Forms.Button
+    $btnContinue.Text = "Continue"
+    $btnContinue.Location = New-Object System.Drawing.Point(470, 395)
+    $btnContinue.Size = New-Object System.Drawing.Size(120, 32)
+    $btnContinue.Enabled = $false
+    $form.Controls.Add($btnContinue)
+
+    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel.Text = "Cancel"
+    $btnCancel.Location = New-Object System.Drawing.Point(600, 395)
+    $btnCancel.Size = New-Object System.Drawing.Size(120, 32)
+    $form.Controls.Add($btnCancel)
+
+    $refreshState = {
+        $lstChecklist.Items.Clear()
+        foreach ($figure in 2..5) {
+            $path = Get-ManualCaptureFilePath -Folder $folder -FigureNumber $figure
+            $status[$figure] = $path
+            if ($path) {
+                [void]$lstChecklist.Items.Add(("[Ready] Figure{0} -> {1}" -f $figure, $path))
+            } else {
+                [void]$lstChecklist.Items.Add(("[Missing] Figure{0} -> save as Figure{0}.jpg/.jpeg/.png" -f $figure))
+            }
+        }
+
+        $allReady = $true
+        foreach ($figure in 2..5) {
+            if (-not $status[$figure]) { $allReady = $false; break }
+        }
+        $btnContinue.Enabled = $allReady
+    }
+
+    $btnRefresh.Add_Click({ & $refreshState })
+    $btnContinue.Add_Click({
+        $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $form.Close()
+    })
+    $btnCancel.Add_Click({
+        $form.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+        $form.Close()
+    })
+
+    & $refreshState
+    [void]$form.ShowDialog()
+
+    if ($form.DialogResult -ne [System.Windows.Forms.DialogResult]::OK) {
+        return $false
+    }
+
+    foreach ($figure in 2..5) {
+        if ($status[$figure]) {
+            $script:CurrentSession = Update-DocumentationSessionCapture -Session $script:CurrentSession -FigureNumber $figure -FilePath $status[$figure]
+        }
+    }
+
+    return $true
+}
+
 function Start-AutomatedDocumentation {
+    param(
+        [switch]$ManualOnly
+    )
     # Validate inputs
     if ([string]::IsNullOrWhiteSpace($script:Controls.txtAppName.Text)) {
         [System.Windows.Forms.MessageBox]::Show("Please enter Application Name", "Required", 'OK', 'Warning')
@@ -175,14 +413,16 @@ function Start-AutomatedDocumentation {
         return
     }
     
-    # Disable button during processing
+    # Disable controls during processing
     $script:Controls.btnStart.Enabled = $false
+    if ($script:Controls.btnManual) { $script:Controls.btnManual.Enabled = $false }
     $script:Controls.txtAppName.Enabled = $false
     $script:Controls.txtAppVersion.Enabled = $false
     
     try {
-        if (-not (SnagitController\Test-SnagitInstalled)) {
-            throw "Snagit is required for validation capture, but it is not installed or the Snagit COM automation interface is unavailable."
+        $snagitAvailable = SnagitController\Test-SnagitInstalled
+        if ((-not $snagitAvailable) -and (-not $ManualOnly)) {
+            Write-UIStatus "Snagit not available for auto-capture; manual checklist will be required." "Orange"
         }
 
         # Step 1: Create session
@@ -206,71 +446,67 @@ function Start-AutomatedDocumentation {
         } else {
             $script:CurrentSession.AppName
         }
-        Write-UIStatus "Capture names set. Figure2='$captureInstalledAppsName' Figure3/4='$captureStartMenuName'" "Blue"
+        Write-UIStatus "Capture names set. Figure2='$captureInstalledAppsName' Figure3/4/5='$captureStartMenuName'" "Blue"
         Start-Sleep -Milliseconds 500
         
-        # Step 2: Capture Figure 2
-        Write-UIStatus "Capturing Figure 2 (Programs & Features)..." "Blue"
-        $script:Form.WindowState = 'Minimized'
-        Start-Sleep -Milliseconds 500
-        
-        $outputPath2 = Join-Path $script:CurrentSession.WorkingDirectory "Figure2.jpg"
-        $result2 = Invoke-AutomatedInstalledAppsCapture -AppName $captureInstalledAppsName -OutputPath $outputPath2
-        
-        if ($result2.Success) {
-            $script:CurrentSession = Update-DocumentationSessionCapture -Session $script:CurrentSession -FigureNumber 2 -FilePath $outputPath2
-            Write-UIStatus "Figure 2 captured successfully" "Green"
-        } else {
-            $figure2Reason = if ($result2.ErrorMessage) { [string]$result2.ErrorMessage } else { "unknown reason" }
-            throw "Figure 2 capture failed: $figure2Reason"
+        if (-not $ManualOnly) {
+            $captureSteps = @(
+                @{ Figure = 2; Label = "Programs & Features"; Runner = { param($outPath) Invoke-AutomatedInstalledAppsCapture -AppName $captureInstalledAppsName -OutputPath $outPath } },
+                @{ Figure = 3; Label = "Start Menu"; Runner = { param($outPath) Invoke-AutomatedStartMenuCapture -AppName $captureStartMenuName -OutputPath $outPath } },
+                @{ Figure = 4; Label = "Application Opened"; Runner = { param($outPath) Invoke-AutomatedApplicationOpenedCapture -AppName $captureStartMenuName -OutputPath $outPath } },
+                @{ Figure = 5; Label = "Help/About Window"; Runner = { param($outPath) Invoke-AutomatedAboutWindowCapture -AppName $captureStartMenuName -OutputPath $outPath } }
+            )
+
+            foreach ($step in $captureSteps) {
+                $captured = $false
+                while (-not $captured) {
+                    Write-UIStatus ("Capturing Figure {0} ({1})..." -f $step.Figure, $step.Label) "Blue"
+                    $script:Form.WindowState = 'Minimized'
+                    Start-Sleep -Milliseconds 500
+
+                    $outputPath = Join-Path $script:CurrentSession.WorkingDirectory ("Figure{0}.jpg" -f $step.Figure)
+                    $result = & $step.Runner $outputPath
+
+                    Start-Sleep -Milliseconds 500
+                    $script:Form.WindowState = 'Normal'
+                    $script:Form.BringToFront()
+                    Start-Sleep -Milliseconds 500
+
+                    if ($result.Success) {
+                        $script:CurrentSession = Update-DocumentationSessionCapture -Session $script:CurrentSession -FigureNumber $step.Figure -FilePath $outputPath
+                        Write-UIStatus ("Figure {0} captured successfully" -f $step.Figure) "Green"
+                        $captured = $true
+                        continue
+                    }
+
+                    $reason = if ($result.ErrorMessage) { [string]$result.ErrorMessage } else { "unknown reason" }
+                    $action = Show-CaptureFailureActionDialog -FigureNumber $step.Figure -FailureReason $reason
+                    if ($action -eq 'Retry') {
+                        continue
+                    }
+                    if ($action -eq 'Skip') {
+                        Write-UIStatus ("Figure {0} skipped. Manual capture will be required later." -f $step.Figure) "Orange"
+                        $captured = $true
+                        continue
+                    }
+                    throw "Capture workflow cancelled by technician at Figure $($step.Figure)."
+                }
+            }
         }
-        
-        Start-Sleep -Milliseconds 500
-        $script:Form.WindowState = 'Normal'
-        $script:Form.BringToFront()
-        Start-Sleep -Milliseconds 500
 
-        # Step 3: Capture Figure 3
-        Write-UIStatus "Capturing Figure 3 (Start Menu)..." "Blue"
-        $script:Form.WindowState = 'Minimized'
-        Start-Sleep -Milliseconds 500
-
-        $outputPath3 = Join-Path $script:CurrentSession.WorkingDirectory "Figure3.jpg"
-        $result3 = Invoke-AutomatedStartMenuCapture -AppName $captureStartMenuName -OutputPath $outputPath3
-
-        if ($result3.Success) {
-            $script:CurrentSession = Update-DocumentationSessionCapture -Session $script:CurrentSession -FigureNumber 3 -FilePath $outputPath3
-            Write-UIStatus "Figure 3 captured successfully; launching application for Figure 4..." "Green"
-        } else {
-            $figure3Reason = if ($result3.ErrorMessage) { [string]$result3.ErrorMessage } else { "unknown reason" }
-            throw "Figure 3 capture failed: $figure3Reason"
+        $missingBeforeManual = Get-MissingCaptureFigures -Session $script:CurrentSession
+        if ($missingBeforeManual.Count -gt 0) {
+            Write-UIStatus ("Manual capture required for Figure(s): {0}" -f ($missingBeforeManual -join ', ')) "Orange"
+            $manualReady = Show-ManualCaptureChecklistDialog -Session $script:CurrentSession
+            if (-not $manualReady) {
+                throw "Manual capture checklist was cancelled. Report was not generated."
+            }
         }
 
-        Start-Sleep -Milliseconds 500
-        $script:Form.WindowState = 'Normal'
-        $script:Form.BringToFront()
-        Start-Sleep -Milliseconds 500
-
-        # Step 4: Capture Figure 4 (Application Opened)
-        Write-UIStatus "Capturing Figure 4 (Application Opened)..." "Blue"
-        $script:Form.WindowState = 'Minimized'
-        Start-Sleep -Milliseconds 500
-
-        $outputPath4 = Join-Path $script:CurrentSession.WorkingDirectory "Figure4.jpg"
-        $result4 = Invoke-AutomatedApplicationOpenedCapture -AppName $captureStartMenuName -OutputPath $outputPath4
-
-        if ($result4.Success) {
-            $script:CurrentSession = Update-DocumentationSessionCapture -Session $script:CurrentSession -FigureNumber 4 -FilePath $outputPath4
-            Write-UIStatus "Figure 4 captured successfully" "Green"
-        } else {
-            $figure4Reason = if ($result4.ErrorMessage) { [string]$result4.ErrorMessage } else { "unknown reason" }
-            throw "Figure 4 capture failed: $figure4Reason"
+        $missingAfterManual = Get-MissingCaptureFigures -Session $script:CurrentSession
+        if ($missingAfterManual.Count -gt 0) {
+            throw ("Missing required screenshots: Figure {0}. Report generation is blocked until all required images exist." -f ($missingAfterManual -join ', Figure '))
         }
-        
-        Start-Sleep -Milliseconds 500
-        $script:Form.WindowState = 'Normal'
-        $script:Form.BringToFront()
-        Start-Sleep -Milliseconds 500
         
         # Step 5: Collect installation details (elevated)
         Write-UIStatus "Collecting installation details (will prompt for elevation)..." "Blue"
@@ -373,6 +609,9 @@ exit `$LASTEXITCODE
         if ($script:CurrentSession.Captures.Figure4) {
             $doc = Add-ValidationScreenshot -HtmlContent $doc -FigureNumber 4 -ImagePath $script:CurrentSession.Captures.Figure4
         }
+        if ($script:CurrentSession.Captures.Figure5) {
+            $doc = Add-ValidationScreenshot -HtmlContent $doc -FigureNumber 5 -ImagePath $script:CurrentSession.Captures.Figure5
+        }
         # Format data for HTML (replace newlines with <br> tags)
         $formattedDirs = $script:CurrentSession.InstallDetails.InstallDirectory.Replace([Environment]::NewLine, '<br>')
         $formattedKeys = $script:CurrentSession.InstallDetails.RegistryKeys.Replace([Environment]::NewLine, '<br>')
@@ -388,6 +627,7 @@ exit `$LASTEXITCODE
         $vendorSummary = Get-VendorDocumentationSummary -Vendor $script:CurrentAppVendor -AppName $script:CurrentSession.AppName -AppVersion $script:CurrentSession.AppVersion
         $doc = Set-VendorDocumentationDetails `
             -HtmlContent $doc `
+            -OSCompatibilityText $vendorSummary.OSCompatibility `
             -PrerequisitesText $vendorSummary.Prerequisites `
             -ApplicationConflictsText $vendorSummary.ApplicationConflicts `
             -UpgradePathsText $vendorSummary.UpgradePaths
@@ -417,6 +657,7 @@ exit `$LASTEXITCODE
         $script:Controls.txtAppName.Enabled = $true
         $script:Controls.txtAppVersion.Enabled = $true
         $script:Controls.btnStart.Enabled = $true
+        if ($script:Controls.btnManual) { $script:Controls.btnManual.Enabled = $true }
         Write-UIStatus "Ready for next documentation session" "Black"
 
         return @{
@@ -435,6 +676,7 @@ exit `$LASTEXITCODE
         $script:Controls.txtAppName.Enabled = $true
         $script:Controls.txtAppVersion.Enabled = $true
         $script:Controls.btnStart.Enabled = $true
+        if ($script:Controls.btnManual) { $script:Controls.btnManual.Enabled = $true }
 
         return @{
             Success = $false
@@ -619,9 +861,9 @@ function Show-DocumentationCaptureUI {
     
     # Start Button
     $script:Controls.btnStart = New-Object System.Windows.Forms.Button
-    $Controls.btnStart.Location = New-Object System.Drawing.Point(150, 220)
-    $Controls.btnStart.Size = New-Object System.Drawing.Size(300, 50)
-    $Controls.btnStart.Text = "Start Documentation"
+    $Controls.btnStart.Location = New-Object System.Drawing.Point(80, 220)
+    $Controls.btnStart.Size = New-Object System.Drawing.Size(240, 50)
+    $Controls.btnStart.Text = "Start Auto/Hybrid"
     $Controls.btnStart.Font = New-Object System.Drawing.Font("Segoe UI", 14, [System.Drawing.FontStyle]::Bold)
     $Controls.btnStart.BackColor = [System.Drawing.Color]::FromArgb(0, 176, 80)
     $Controls.btnStart.ForeColor = [System.Drawing.Color]::White
@@ -637,12 +879,33 @@ function Show-DocumentationCaptureUI {
         }
     })
     $Form.Controls.Add($Controls.btnStart)
+
+    # Manual Button
+    $script:Controls.btnManual = New-Object System.Windows.Forms.Button
+    $Controls.btnManual.Location = New-Object System.Drawing.Point(330, 220)
+    $Controls.btnManual.Size = New-Object System.Drawing.Size(190, 50)
+    $Controls.btnManual.Text = "Manual Capture"
+    $Controls.btnManual.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
+    $Controls.btnManual.BackColor = [System.Drawing.Color]::FromArgb(255, 192, 0)
+    $Controls.btnManual.ForeColor = [System.Drawing.Color]::Black
+    $Controls.btnManual.FlatStyle = "Flat"
+    $Controls.btnManual.Add_Click({
+        $runResult = Start-AutomatedDocumentation -ManualOnly
+        if ($runResult) {
+            $script:UiRunResult = $runResult
+            if ($runResult.Success) {
+                $script:Form.DialogResult = [System.Windows.Forms.DialogResult]::OK
+                $script:Form.Close()
+            }
+        }
+    })
+    $Form.Controls.Add($Controls.btnManual)
     
     # Status
     $script:Controls.StatusLabel = New-Object System.Windows.Forms.Label
     $Controls.StatusLabel.Location = New-Object System.Drawing.Point(20, 290)
     $Controls.StatusLabel.Size = New-Object System.Drawing.Size(560, 30)
-    $Controls.StatusLabel.Text = "Ready - Enter app details and click Start"
+    $Controls.StatusLabel.Text = "Ready - Use Auto/Hybrid or Manual Capture"
     $Controls.StatusLabel.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Italic)
     $Controls.StatusLabel.TextAlign = "MiddleCenter"
     $Form.Controls.Add($Controls.StatusLabel)
@@ -651,7 +914,7 @@ function Show-DocumentationCaptureUI {
     $lblFooter = New-Object System.Windows.Forms.Label
     $lblFooter.Location = New-Object System.Drawing.Point(20, 320)
     $lblFooter.Size = New-Object System.Drawing.Size(560, 30)
-    $lblFooter.Text = "Automated workflow: Figure 2 -> Figure 3 -> Figure 4 -> Installation Details -> Report"
+    $lblFooter.Text = "Workflow: Figure 2 -> Figure 3 -> Figure 4 -> Figure 5 -> Details -> Report (manual fallback supported)"
     $lblFooter.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Italic)
     $lblFooter.ForeColor = [System.Drawing.Color]::Gray
     $lblFooter.TextAlign = "MiddleCenter"

@@ -1,96 +1,42 @@
 ﻿[
     {
-        "DisplayName":  "Python 3.14.5 (64-bit)",
-        "Executable":  "C:\\Users\\P1MAM08\\AppData\\Local\\Package Cache\\{2fc382fa-68a9-44f7-8851-98d7664255e6}\\python-3.14.5-amd64.exe",
-        "Priority":  2,
-        "Category":  "Developer",
-        "LaunchOutcome":  "Started",
+        "DisplayName":  "7-Zip 24.09 (x64)",
+        "Executable":  "C:\\Program Files\\7-Zip\\7zFM.exe",
+        "LaunchOutcome":  "Skipped",
         "Success":  false,
         "Method":  null,
-        "Message":  "No matching process with a main window was found.",
-        "DifferenceClass":  "Other",
-        "NextAction":  "Record the raw result and inspect the UIA tree manually to determine whether the app uses a custom menu or dialog model.",
-        "DetectionRuleHint":  "Unknown pattern; add a manual inspection branch",
+        "Message":  "Launch skipped by parameter",
+        "DifferenceClass":  "Skipped",
+        "NextAction":  "Launch the app and re-run analysis on a real machine.",
+        "DetectionRuleHint":  "SkipLaunch",
         "VersionText":  [
 
                         ]
     },
     {
-        "DisplayName":  "Atkinson Hyperlegible Font",
-        "Executable":  "C:\\WINDOWS\\IMECache\\fa3c747e-8d6b-4593-b9cf-c1a78deed40b_1\\Install.exe /uninstall",
-        "Priority":  3,
-        "Category":  "General",
-        "LaunchOutcome":  "LaunchFailed:This command cannot be run due to the error: The system cannot find the file specified.",
+        "DisplayName":  "GitHub Desktop",
+        "Executable":  "C:\\Users\\marcu\\AppData\\Local\\GitHubDesktop\\GitHubDesktop.exe",
+        "LaunchOutcome":  "Skipped",
         "Success":  false,
         "Method":  null,
-        "Message":  "Unable to start the application",
-        "DifferenceClass":  "Other",
-        "NextAction":  "Record the raw result and inspect the UIA tree manually to determine whether the app uses a custom menu or dialog model.",
-        "DetectionRuleHint":  "Unknown pattern; add a manual inspection branch",
+        "Message":  "Launch skipped by parameter",
+        "DifferenceClass":  "Skipped",
+        "NextAction":  "Launch the app and re-run analysis on a real machine.",
+        "DetectionRuleHint":  "SkipLaunch",
         "VersionText":  [
 
                         ]
     },
     {
-        "DisplayName":  "Cisco Secure Client - AnyConnect VPN ",
-        "Executable":  "C:\\Program Files (x86)\\Cisco\\Cisco Secure Client\\InstallHelper.exe",
-        "Priority":  3,
-        "Category":  "General",
-        "LaunchOutcome":  "LaunchFailed:This command cannot be run due to the error: The operation was canceled by the user.",
+        "DisplayName":  "Copilot CLI",
+        "Executable":  "C:\\Users\\marcu\\AppData\\Local\\Microsoft\\WinGet\\Packages\\GitHub.Copilot_Microsoft.Winget.Source_8wekyb3d8bbwe\\copilot.exe",
+        "LaunchOutcome":  "Skipped",
         "Success":  false,
         "Method":  null,
-        "Message":  "Unable to start the application",
-        "DifferenceClass":  "Other",
-        "NextAction":  "Record the raw result and inspect the UIA tree manually to determine whether the app uses a custom menu or dialog model.",
-        "DetectionRuleHint":  "Unknown pattern; add a manual inspection branch",
-        "VersionText":  [
-
-                        ]
-    },
-    {
-        "DisplayName":  "Claude Code",
-        "Executable":  "C:\\WINDOWS\\IMECache\\80adbb1a-3cc5-44b0-9d47-cc1103395b58_1\\Install.exe /uninstall",
-        "Priority":  3,
-        "Category":  "General",
-        "LaunchOutcome":  "LaunchFailed:This command cannot be run due to the error: The system cannot find the file specified.",
-        "Success":  false,
-        "Method":  null,
-        "Message":  "Unable to start the application",
-        "DifferenceClass":  "Other",
-        "NextAction":  "Record the raw result and inspect the UIA tree manually to determine whether the app uses a custom menu or dialog model.",
-        "DetectionRuleHint":  "Unknown pattern; add a manual inspection branch",
-        "VersionText":  [
-
-                        ]
-    },
-    {
-        "DisplayName":  "Claude Code CodeAssist Settings",
-        "Executable":  "C:\\WINDOWS\\IMECache\\2101cebc-1c86-42d0-bf2c-71d85344ab9f_1\\Install.exe /uninstall",
-        "Priority":  3,
-        "Category":  "General",
-        "LaunchOutcome":  "LaunchFailed:This command cannot be run due to the error: The system cannot find the file specified.",
-        "Success":  false,
-        "Method":  null,
-        "Message":  "Unable to start the application",
-        "DifferenceClass":  "Other",
-        "NextAction":  "Record the raw result and inspect the UIA tree manually to determine whether the app uses a custom menu or dialog model.",
-        "DetectionRuleHint":  "Unknown pattern; add a manual inspection branch",
-        "VersionText":  [
-
-                        ]
-    },
-    {
-        "DisplayName":  "EUS Certificate Signer",
-        "Executable":  "C:\\Users\\P1MAM08\\AppData\\Roaming\\EUS\\Certificate Signer\\national_it_transparent.ico",
-        "Priority":  3,
-        "Category":  "General",
-        "LaunchOutcome":  "LaunchFailed:This command cannot be run completely because the system cannot find all the information required.",
-        "Success":  false,
-        "Method":  null,
-        "Message":  "Unable to start the application",
-        "DifferenceClass":  "Other",
-        "NextAction":  "Record the raw result and inspect the UIA tree manually to determine whether the app uses a custom menu or dialog model.",
-        "DetectionRuleHint":  "Unknown pattern; add a manual inspection branch",
+        "Message":  "Launch skipped by parameter",
+        "DifferenceClass":  "Skipped",
+        "NextAction":  "Launch the app and re-run analysis on a real machine.",
+        "DetectionRuleHint":  "SkipLaunch",
         "VersionText":  [
 
                         ]

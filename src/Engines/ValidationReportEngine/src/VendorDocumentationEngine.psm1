@@ -145,6 +145,7 @@ function Get-VendorDocumentationSummary {
     )
 
     $result = [ordered]@{
+        OSCompatibility = $script:NoDataMessage
         Prerequisites = $script:NoDataMessage
         ApplicationConflicts = $script:NoDataMessage
         UpgradePaths = $script:NoDataMessage
@@ -186,9 +187,14 @@ function Get-VendorDocumentationSummary {
 
     $mergedText = ($allText -join ' ')
 
+    $osSnippets = Get-SnippetByKeywords -Text $mergedText -Keywords @('(?i)supported\s+operating\s+system', '(?i)operating\s+system', '(?i)windows\s+(10|11|server)', '(?i)supported\s+platform')
     $prereqSnippets = Get-SnippetByKeywords -Text $mergedText -Keywords @('(?i)prereq', '(?i)requirement', '(?i)dependency', '(?i)supported\s+operating\s+system')
     $conflictSnippets = Get-SnippetByKeywords -Text $mergedText -Keywords @('(?i)conflict', '(?i)incompatib', '(?i)cannot\s+be\s+installed', '(?i)known\s+issue')
     $upgradeSnippets = Get-SnippetByKeywords -Text $mergedText -Keywords @('(?i)upgrade', '(?i)migration', '(?i)in-place\s+upgrade', '(?i)coexist', '(?i)previous\s+version')
+
+    if ($osSnippets.Count -gt 0) {
+        $result.OSCompatibility = ($osSnippets -join [Environment]::NewLine)
+    }
 
     if ($prereqSnippets.Count -gt 0) {
         $result.Prerequisites = ($prereqSnippets -join [Environment]::NewLine)

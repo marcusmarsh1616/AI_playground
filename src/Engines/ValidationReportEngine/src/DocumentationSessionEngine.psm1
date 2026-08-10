@@ -124,6 +124,7 @@ function New-DocumentationSession {
             Figure2 = $null
             Figure3 = $null
             Figure4 = $null
+            Figure5 = $null
         }
         InstallDetails = @{
             InstallDirectory = ""
@@ -162,6 +163,7 @@ function Get-DocumentationSessionStatus {
     if ($Session.Captures.Figure2) { $captureCount++ }
     if ($Session.Captures.Figure3) { $captureCount++ }
     if ($Session.Captures.Figure4) { $captureCount++ }
+    if ($Session.Captures.Figure5) { $captureCount++ }
     
     $detailsDetected = -not [string]::IsNullOrWhiteSpace($Session.InstallDetails.InstallDirectory)
     
@@ -170,10 +172,10 @@ function Get-DocumentationSessionStatus {
         AppName = $Session.AppName
         Status = $Session.Status
         CapturesCompleted = $captureCount
-        TotalCaptures = 3
+        TotalCaptures = 4
         DetailsDetected = $detailsDetected
         WorkingDirectory = $Session.WorkingDirectory
-        IsReadyForGeneration = ($captureCount -gt 0)
+        IsReadyForGeneration = ($captureCount -eq 4)
     }
     
     return $status
@@ -188,7 +190,7 @@ function Update-DocumentationSessionCapture {
         Session object
         
     .PARAMETER FigureNumber
-        Figure number (2, 3, or 4)
+        Figure number (2, 3, 4, or 5)
         
     .PARAMETER FilePath
         Path to the captured screenshot
@@ -199,7 +201,7 @@ function Update-DocumentationSessionCapture {
         [PSCustomObject]$Session,
         
         [Parameter(Mandatory)]
-        [ValidateSet(2, 3, 4)]
+        [ValidateSet(2, 3, 4, 5)]
         [int]$FigureNumber,
         
         [Parameter(Mandatory)]
@@ -217,6 +219,7 @@ function Update-DocumentationSessionCapture {
         2 { $Session.Captures.Figure2 = $FilePath }
         3 { $Session.Captures.Figure3 = $FilePath }
         4 { $Session.Captures.Figure4 = $FilePath }
+        5 { $Session.Captures.Figure5 = $FilePath }
     }
     
     return $Session

@@ -28,6 +28,21 @@ $script:CaptureSettings = @{
     AutoSave = $true
 }
 
+function Get-HelpAboutAutomationModulePath {
+    $candidatePaths = @(
+        (Join-Path $PSScriptRoot "..\..\..\..\Installation_Validation_Report\PowerShell\Modules\AboutDialogAutomation.psm1"),
+        (Join-Path (Split-Path -Parent $PSScriptRoot) "Installation_Validation_Report\PowerShell\Modules\AboutDialogAutomation.psm1")
+    )
+
+    foreach ($candidatePath in $candidatePaths) {
+        if (Test-Path $candidatePath) {
+            return (Resolve-Path $candidatePath).Path
+        }
+    }
+
+    return $null
+}
+
 #endregion
 
 #region Public Functions
@@ -408,6 +423,62 @@ function Invoke-AutomatedApplicationOpenedCapture {
     }
 }
 
+function Invoke-AutomatedAboutWindowCapture {
+    <#
+    .SYNOPSIS
+        Captures Figure 5 (Help/About window)
+
+    .DESCRIPTION
+        Assumes the technician has opened the target application's Help/About surface
+        and triggers Snagit capture for the active window area.
+
+    .PARAMETER AppName
+        Application name used for capture description
+
+    .PARAMETER OutputPath
+        Where to save the screenshot
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$AppName,
+
+        [Parameter(Mandatory)]
+        [string]$OutputPath
+    )
+
+    Write-Verbose "Starting automated Help/About capture for: $AppName"
+
+    try {
+        $modulePath = Get-HelpAboutAutomationModulePath
+        if ([string]::IsNullOrWhiteSpace($modulePath)) {
+            throw "Help/About automation module not found."
+        }
+
+        Import-Module $modulePath -Force -ErrorAction Stop
+        $detectionResult = Invoke-AboutDialogAutomation -ApplicationName $AppName -LeaveOpen
+        if (-not $detectionResult.Success) {
+            $failureReason = if ($detectionResult.Message) { [string]$detectionResult.Message } else { "Help/About detection did not find a window." }
+            return [PSCustomObject]@{
+                Success = $false
+                ErrorMessage = $failureReason
+                OutputPath = $null
+            }
+        }
+
+        Start-Sleep -Seconds 1
+        return Invoke-ScreenCapture -OutputPath $OutputPath -FigureNumber 5 -Description "Help/About: $AppName"
+    }
+    catch {
+        Write-Error "Automation error: $($_.Exception.Message)"
+        return [PSCustomObject]@{
+            Success = $false
+            ErrorMessage = $_.Exception.Message
+            OutputPath = $null
+        }
+    }
+}
+
 function Close-InstalledAppsWindow {
     [CmdletBinding()]
     param()
@@ -462,6 +533,7 @@ Export-ModuleMember -Function @(
     'Invoke-AutomatedInstalledAppsCapture',
     'Invoke-AutomatedStartMenuCapture',
     'Invoke-AutomatedApplicationOpenedCapture',
+    'Invoke-AutomatedAboutWindowCapture',
     'Close-InstalledAppsWindow',
     'Test-SnagitAvailable'
 )
