@@ -476,6 +476,21 @@ function Start-AutomatedDocumentation {
         }
         Write-UIStatus "Capture names set. Figure2='$captureInstalledAppsName' Figure3/4/5='$captureStartMenuName'" "Blue"
         Start-Sleep -Milliseconds 500
+
+        # Section 1 vendor documentation is intentionally collected before capture steps.
+        $vendorSummary = $null
+        Write-UIStatus "Collecting Section 1 vendor documentation..." "Blue"
+        try {
+            $vendorSummary = Get-VendorDocumentationSummary -Vendor $script:CurrentAppVendor -AppName $script:CurrentSession.AppName -AppVersion $script:CurrentSession.AppVersion
+            $sourceCount = 0
+            if ($vendorSummary -and $vendorSummary.SourcesUsed) {
+                $sourceCount = @($vendorSummary.SourcesUsed).Count
+            }
+            Write-UIStatus "Section 1 vendor documentation collected (sources: $sourceCount)." "Blue"
+        }
+        catch {
+            Write-UIStatus "Section 1 vendor documentation collection failed; default fallback text will be used." "Orange"
+        }
         
         if (-not $ManualOnly) {
             $captureSteps = @(
@@ -513,6 +528,33 @@ function Start-AutomatedDocumentation {
                         continue
                     }
                     if ($action -eq 'Skip') {
+                        if ($step.Figure -eq 5) {
+                            Write-UIStatus "Figure 5 automation skipped. Capture Help/About manually with Snagit and save as Figure5.jpg in the images folder." "Orange"
+                            try {
+                                Start-Process explorer.exe $script:CurrentSession.WorkingDirectory | Out-Null
+                            }
+                            catch {
+                            }
+
+                            $manualFigure5Path = Get-ManualCaptureFilePath -Folder $script:CurrentSession.WorkingDirectory -FigureNumber 5
+                            if (-not $manualFigure5Path) {
+                                $manualReady = Show-ManualCaptureChecklistDialog -Session $script:CurrentSession
+                                if (-not $manualReady) {
+                                    throw "Manual Figure 5 capture was cancelled by technician."
+                                }
+                                $manualFigure5Path = Get-ManualCaptureFilePath -Folder $script:CurrentSession.WorkingDirectory -FigureNumber 5
+                            }
+
+                            if ($manualFigure5Path) {
+                                $script:CurrentSession = Update-DocumentationSessionCapture -Session $script:CurrentSession -FigureNumber 5 -FilePath $manualFigure5Path
+                                Write-UIStatus "Figure 5 captured manually and accepted." "Green"
+                                $captured = $true
+                                continue
+                            }
+
+                            throw "Manual Figure 5 capture did not produce Figure5.jpg/.jpeg/.png in the images folder."
+                        }
+
                         Write-UIStatus ("Figure {0} skipped. Manual capture will be required later." -f $step.Figure) "Orange"
                         $captured = $true
                         continue
@@ -677,7 +719,9 @@ exit `$LASTEXITCODE
             -ServicesCreated $script:CurrentSession.InstallDetails.ServicesCreated `
             -UninstallKeys $formattedUninstall
 
-        $vendorSummary = Get-VendorDocumentationSummary -Vendor $script:CurrentAppVendor -AppName $script:CurrentSession.AppName -AppVersion $script:CurrentSession.AppVersion
+        if (-not $vendorSummary) {
+            $vendorSummary = Get-VendorDocumentationSummary -Vendor $script:CurrentAppVendor -AppName $script:CurrentSession.AppName -AppVersion $script:CurrentSession.AppVersion
+        }
         $doc = Set-VendorDocumentationDetails `
             -HtmlContent $doc `
             -OSCompatibilityText $vendorSummary.OSCompatibility `
