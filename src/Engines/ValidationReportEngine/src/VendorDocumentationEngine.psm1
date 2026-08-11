@@ -8,33 +8,212 @@
     Uses configured vendor source hints plus real-time search/crawl.
 #>
 
-$script:NoDataMessage = "The Vendor has nothing to report"
+$script:NoDataMessage = "Nothing to Report or Found."
+
+function Convert-ToNormalizedToken {
+    [CmdletBinding()]
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return "" }
+    return (($Value -replace '[^A-Za-z0-9]', '').ToLowerInvariant())
+}
+
+function Get-AppAliasTokens {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$AppName)
+
+    $tokens = New-Object System.Collections.Generic.List[string]
+    $normalizedFull = Convert-ToNormalizedToken -Value $AppName
+    if (-not [string]::IsNullOrWhiteSpace($normalizedFull)) {
+        [void]$tokens.Add($normalizedFull)
+        $trimmedTrailingDigits = ($normalizedFull -replace '\d+$', '')
+        if (-not [string]::IsNullOrWhiteSpace($trimmedTrailingDigits) -and $trimmedTrailingDigits.Length -ge 4) {
+            [void]$tokens.Add($trimmedTrailingDigits)
+        }
+    }
+
+    foreach ($part in ($AppName -split '[\s\-_/\.]+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+        $partToken = Convert-ToNormalizedToken -Value $part
+        if ($partToken.Length -ge 4) {
+            [void]$tokens.Add($partToken)
+            $partTrimmedDigits = ($partToken -replace '\d+$', '')
+            if ($partTrimmedDigits.Length -ge 4) {
+                [void]$tokens.Add($partTrimmedDigits)
+            }
+        }
+    }
+
+    return @($tokens | Select-Object -Unique)
+}
+
+function Get-SourceRelevanceScore {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$NormalizedText,
+
+        [Parameter(Mandatory = $true)]
+        [string[]]$AppTokens,
+
+        [string]$VendorToken = ""
+    )
+
+    $score = 0.0
+    $appHits = 0
+    foreach ($token in $AppTokens) {
+        if (-not [string]::IsNullOrWhiteSpace($token) -and $NormalizedText -like "*$token*") {
+            $appHits++
+        }
+    }
+
+    if ($appHits -ge 1) { $score += 0.45 }
+    if ($appHits -ge 2) { $score += 0.15 }
+
+    if (-not [string]::IsNullOrWhiteSpace($VendorToken) -and $NormalizedText -like "*$VendorToken*") {
+        $score += 0.20
+    }
+
+    if ($NormalizedText -match '(requirements|supported|compatib|prereq|dependency|upgrade|migration|install)') {
+        $score += 0.20
+    }
+
+    if ($score -gt 1.0) { $score = 1.0 }
+    return [Math]::Round($score, 2)
+}
+
+function Get-SectionFillCount {
+    [CmdletBinding()]
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return 0 }
+    if ($Value.Trim() -eq $script:NoDataMessage) { return 0 }
+    return (@($Value -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count)
+}
+
+function Get-ConfiguredInterpreterCandidates {
+    [CmdletBinding()]
+    param()
+
+    $paths = New-Object System.Collections.Generic.List[string]
+
+    $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..\..")).Path
+    $workspaceSettings = Join-Path $repoRoot ".vscode\settings.json"
+    $userSettings = Join-Path $env:APPDATA "Code\User\settings.json"
+    foreach ($settingsPath in @($workspaceSettings, $userSettings)) {
+        if (-not (Test-Path $settingsPath)) { continue }
+        try {
+            $settings = Get-Content -Path $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            foreach ($key in @('python.defaultInterpreterPath', 'python.pythonPath')) {
+                $prop = $settings.PSObject.Properties[$key]
+                if ($prop -and -not [string]::IsNullOrWhiteSpace([string]$prop.Value)) {
+                    $candidatePath = ([string]$prop.Value).Trim()
+                    if (-not [System.IO.Path]::IsPathRooted($candidatePath)) {
+                        $candidatePath = Join-Path (Split-Path -Parent $settingsPath) $candidatePath
+                    }
+                    [void]$paths.Add($candidatePath)
+                }
+            }
+        }
+        catch {
+            continue
+        }
+    }
+
+    foreach ($envKey in @('FRB_VALIDATION_PYTHON_PATH', 'VALIDATION_PYTHON_PATH', 'PYTHON_EXECUTABLE')) {
+        $envValue = [Environment]::GetEnvironmentVariable($envKey)
+        if (-not [string]::IsNullOrWhiteSpace($envValue)) {
+            [void]$paths.Add($envValue.Trim())
+        }
+    }
+
+    return @($paths | Select-Object -Unique)
+}
 
 function Resolve-PythonRuntimeForPlaywright {
     [CmdletBinding()]
     param()
 
-    $candidates = @(
+    $attempts = New-Object System.Collections.Generic.List[string]
+
+    $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..\..")).Path
+    $repoRootCandidates = @(
+        (Join-Path $repoRoot "Installation_Validation_Report\.venv\Scripts\python.exe"),
+        (Join-Path $repoRoot "Installation_Validation_Report\Python\.venv\Scripts\python.exe"),
+        (Join-Path $repoRoot "Installation_Validation_Report\venv\Scripts\python.exe"),
+        (Join-Path $repoRoot "Installation_Validation_Report\Python\venv\Scripts\python.exe")
+    ) | Select-Object -Unique
+
+    $pathCandidates = New-Object System.Collections.Generic.List[hashtable]
+    foreach ($p in $repoRootCandidates) {
+        [void]$pathCandidates.Add(@{ Name = "repo-local:$p"; Path = $p; PrefixArgs = @() })
+    }
+    foreach ($p in @(Get-ConfiguredInterpreterCandidates)) {
+        [void]$pathCandidates.Add(@{ Name = "configured:$p"; Path = $p; PrefixArgs = @() })
+    }
+
+    foreach ($candidate in $pathCandidates) {
+        $pathValue = [string]$candidate.Path
+        if ([string]::IsNullOrWhiteSpace($pathValue)) { continue }
+        if (-not [System.IO.Path]::IsPathRooted($pathValue)) {
+            $pathValue = Join-Path $repoRoot $pathValue
+        }
+
+        if (-not (Test-Path $pathValue)) {
+            [void]$attempts.Add("$($candidate.Name)=missing")
+            continue
+        }
+
+        try {
+            $ver = & $pathValue --version 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                [void]$attempts.Add("$($candidate.Name)=version-failed")
+                continue
+            }
+
+            & $pathValue -c "import playwright, playwright.sync_api" 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                [void]$attempts.Add("$($candidate.Name)=playwright-import-failed")
+                continue
+            }
+
+            return @{
+                Name = [string]$candidate.Name
+                CommandPath = $pathValue
+                PrefixArgs = @()
+                Version = ([string]$ver).Trim()
+                Attempts = @($attempts)
+            }
+        }
+        catch {
+            [void]$attempts.Add("$($candidate.Name)=exception:$($_.Exception.Message)")
+            continue
+        }
+    }
+
+    $commandCandidates = @(
         @{ Name = 'python'; Command = 'python'; PrefixArgs = @() },
         @{ Name = 'py-3'; Command = 'py'; PrefixArgs = @('-3') },
         @{ Name = 'python3'; Command = 'python3'; PrefixArgs = @() }
     )
 
-    foreach ($candidate in $candidates) {
+    foreach ($candidate in $commandCandidates) {
         $cmd = Get-Command $candidate.Command -ErrorAction SilentlyContinue
         if (-not $cmd) {
+            [void]$attempts.Add("$($candidate.Name)=command-not-found")
             continue
         }
 
         $commandPath = $cmd.Source
         try {
-            $versionOutput = & $commandPath @($candidate.PrefixArgs + @('--version')) 2>$null
+            $versionOutput = & $commandPath @($candidate.PrefixArgs + @('--version')) 2>&1
             if ($LASTEXITCODE -ne 0) {
+                [void]$attempts.Add("$($candidate.Name)=version-failed")
                 continue
             }
 
             & $commandPath @($candidate.PrefixArgs + @('-c', 'import playwright, playwright.sync_api')) 2>$null
             if ($LASTEXITCODE -ne 0) {
+                [void]$attempts.Add("$($candidate.Name)=playwright-import-failed")
                 continue
             }
 
@@ -43,14 +222,22 @@ function Resolve-PythonRuntimeForPlaywright {
                 CommandPath = $commandPath
                 PrefixArgs = @($candidate.PrefixArgs)
                 Version = ([string]$versionOutput).Trim()
+                Attempts = @($attempts)
             }
         }
         catch {
+            [void]$attempts.Add("$($candidate.Name)=exception:$($_.Exception.Message)")
             continue
         }
     }
 
-    return $null
+    return @{
+        Name = ""
+        CommandPath = ""
+        PrefixArgs = @()
+        Version = ""
+        Attempts = @($attempts)
+    }
 }
 
 function Resolve-RequirementsResearchScriptPath {
@@ -95,12 +282,6 @@ function Invoke-PlaywrightRequirementsResearch {
         Message = ""
     }
 
-    $pythonRuntime = Resolve-PythonRuntimeForPlaywright
-    if (-not $pythonRuntime) {
-        $result.Message = "Playwright requirements research unavailable: no usable Python runtime with Playwright was found (tried: python, py -3, python3). Install dependencies from Installation_Validation_Report\\Python\\requirements.txt and run: python -m playwright install msedge"
-        return $result
-    }
-
     $researchScriptPath = Resolve-RequirementsResearchScriptPath
     if ([string]::IsNullOrWhiteSpace($researchScriptPath)) {
         $result.Message = "Playwright requirements research unavailable: research_requirements.py not found."
@@ -113,6 +294,16 @@ function Invoke-PlaywrightRequirementsResearch {
 
     if (-not (Test-Path $configPath)) {
         $result.Message = "Playwright requirements research unavailable: configuration file not found at $configPath"
+        return $result
+    }
+
+    $pythonRuntime = Resolve-PythonRuntimeForPlaywright
+    if (-not $pythonRuntime -or [string]::IsNullOrWhiteSpace([string]$pythonRuntime.CommandPath)) {
+        $attemptText = ""
+        if ($pythonRuntime -and $pythonRuntime.Attempts) {
+            $attemptText = (@($pythonRuntime.Attempts) -join '; ')
+        }
+        $result.Message = "Playwright requirements research unavailable: no usable Python runtime with Playwright was found. Probes: $attemptText. Paths: script=$researchScriptPath; config=$configPath"
         return $result
     }
 
@@ -206,7 +397,11 @@ function Invoke-PlaywrightRequirementsResearch {
 
         $method = if ($payload.research_method) { [string]$payload.research_method } else { "playwright" }
         $cacheNote = if ($payload.cached -eq $true) { " (cache hit)" } else { "" }
-        $result.Message = "Playwright requirements research completed via $method$cacheNote."
+        $osFill = Get-SectionFillCount -Value $result.OSCompatibility
+        $preFill = Get-SectionFillCount -Value $result.Prerequisites
+        $confFill = Get-SectionFillCount -Value $result.ApplicationConflicts
+        $upgFill = Get-SectionFillCount -Value $result.UpgradePaths
+        $result.Message = "method=playwright_research_requirements; source_count=$(@($result.SourcesUsed).Count); fills=os:$osFill,pre:$preFill,conf:$confFill,upg:$upgFill; research_method=$method$cacheNote; script=$researchScriptPath; config=$configPath"
         $result.Success = $true
         return $result
     }
@@ -274,12 +469,38 @@ function Convert-HtmlToText {
     $text = $Html -replace '(?is)<script[^>]*>.*?</script>', ' '
     $text = $text -replace '(?is)<style[^>]*>.*?</style>', ' '
     $text = $text -replace '(?is)<[^>]+>', ' '
+    $text = [System.Net.WebUtility]::HtmlDecode($text)
     $text = $text -replace '&nbsp;', ' '
-    $text = $text -replace '&amp;', '&'
-    $text = $text -replace '&quot;', '"'
-    $text = $text -replace '&#39;', "'"
     $text = $text -replace '\s+', ' '
     return $text.Trim()
+}
+
+function Test-IsNoiseSnippet {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Value
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $true }
+    $v = $Value.Trim()
+
+    # Drop common chrome/footer/account text that appears in crawled pages.
+    $noisePatterns = @(
+        '(?i)^\s*(skip to|cookie|privacy policy|terms of service|all rights reserved)\b',
+        '(?i)\b(view all files|footer|github,? inc\.|sign in|sign up|open (an|this) issue|pull requests?)\b',
+        '(?i)^\s*#\s*\d+\s+in\s+[^\s]+',
+        '(?i)\b(status:\s*open|opened on\s+[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})\b',
+        '(?i)\btemplates\s+templates\b'
+    )
+
+    foreach ($pattern in $noisePatterns) {
+        if ($v -match $pattern) {
+            return $true
+        }
+    }
+
+    return $false
 }
 
 function Invoke-DuckDuckGoSearchLinks {
@@ -366,6 +587,7 @@ function Test-IsTrustedDocumentationUrl {
     try {
         $uri = [System.Uri]$Url
         $domain = $uri.Host.ToLowerInvariant()
+        $pathAndQuery = ($uri.AbsolutePath + $uri.Query).ToLowerInvariant()
 
         $blockedDomains = @(
             'deepwiki.com',
@@ -399,6 +621,15 @@ function Test-IsTrustedDocumentationUrl {
 
         foreach ($allowed in $allowedDomains) {
             if ($domain -eq $allowed -or $domain -like "*.$allowed") {
+                if ($domain -eq 'github.com') {
+                    if ($pathAndQuery -match '^/[^/]+/[^/]+/(issues|pulls|discussions)' -or $pathAndQuery -match '\?q=') {
+                        return $false
+                    }
+
+                    if ($pathAndQuery -notmatch '/(docs|releases|wiki|blob|tree|readme)') {
+                        return $false
+                    }
+                }
                 return $true
             }
         }
@@ -416,6 +647,36 @@ function Test-IsTrustedDocumentationUrl {
     catch {
         return $false
     }
+}
+
+function Test-IsNoiseSnippet {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Value
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $true }
+    $v = $Value.Trim()
+
+    # Drop common chrome/footer/account text that appears in crawled pages.
+    $noisePatterns = @(
+        '(?i)^\s*(skip to|cookie|privacy policy|terms of service|all rights reserved)\b',
+        '(?i)\b(view all files|footer|github,? inc\.|sign in|sign up|open (an|this) issue|pull requests?)\b',
+        '(?i)^\s*#\s*\d+\s+in\s+[^\s]+',
+        '(?i)\b(status:\s*open|opened on\s+[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})\b',
+        '(?i)\btemplates\s+templates\b',
+        '(?i)\broot\s+cause\s+hypothesis\b',
+        '(?i)^\s*should\s+i\s+choose\s+one\s+or\s+another\b'
+    )
+
+    foreach ($pattern in $noisePatterns) {
+        if ($v -match $pattern) {
+            return $true
+        }
+    }
+
+    return $false
 }
 
 function Get-SectionSnippets {
@@ -444,6 +705,8 @@ function Get-SectionSnippets {
         if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
         if ($candidate.Length -lt 30) { continue }
         if ($candidate.Length -gt 420) { continue }
+        if ((@($candidate -split '\s+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count) -lt 6) { continue }
+        if (Test-IsNoiseSnippet -Value $candidate) { continue }
 
         $hit = $false
         foreach ($keyword in $Keywords) {
@@ -455,12 +718,88 @@ function Get-SectionSnippets {
 
         if (-not $hit) { continue }
 
-        $line = "[$SourceLabel] $candidate"
+        $line = $candidate
         [void]$results.Add($line)
         if ($results.Count -ge $MaxItems) { break }
     }
 
     return @($results | Select-Object -Unique)
+}
+
+function Get-RelevantSecondaryLinks {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Html,
+
+        [Parameter(Mandatory = $true)]
+        [string]$BaseUrl,
+
+        [Parameter(Mandatory = $true)]
+        [string[]]$AppTokens,
+
+        [string]$VendorToken = "",
+
+        [int]$MaxLinks = 3
+    )
+
+    $ranked = New-Object System.Collections.Generic.List[object]
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]'
+
+    try {
+        $baseUri = [System.Uri]$BaseUrl
+        $baseHost = $baseUri.Host.ToLowerInvariant()
+    }
+    catch {
+        return @()
+    }
+
+    foreach ($match in [regex]::Matches($Html, '(?i)href\s*=\s*"([^"#]+)"|href\s*=\s*''([^''#]+)''')) {
+        $href = $match.Groups[1].Value
+        if ([string]::IsNullOrWhiteSpace($href)) {
+            $href = $match.Groups[2].Value
+        }
+        if ([string]::IsNullOrWhiteSpace($href)) { continue }
+        if ($href -match '^(?i)javascript:|mailto:') { continue }
+
+        $absolute = $null
+        try {
+            if ($href -match '^https?://') {
+                $absolute = [System.Uri]$href
+            }
+            else {
+                $absolute = [System.Uri]::new($baseUri, $href)
+            }
+        }
+        catch {
+            continue
+        }
+
+        if ($absolute.Scheme -notin @('http', 'https')) { continue }
+        $url = $absolute.AbsoluteUri
+        if (-not $seen.Add($url)) { continue }
+
+        $host = $absolute.Host.ToLowerInvariant()
+        $sameHost = ($host -eq $baseHost)
+        $trustedHost = Test-IsTrustedDocumentationUrl -Url $url -Vendor $VendorToken -AppName ($AppTokens -join ' ')
+        if (-not $sameHost -and -not $trustedHost) { continue }
+
+        $norm = Convert-ToNormalizedToken -Value $url
+        $score = 0
+        if ($norm -match '(docs|documentation|requirement|install|upgrade|release|faq|support|issue|wiki|readme)') { $score += 3 }
+        if (-not [string]::IsNullOrWhiteSpace($VendorToken) -and $norm -like "*$VendorToken*") { $score += 2 }
+        foreach ($token in $AppTokens) {
+            if (-not [string]::IsNullOrWhiteSpace($token) -and $norm -like "*$token*") {
+                $score += 2
+                break
+            }
+        }
+
+        if ($score -le 0) { continue }
+        [void]$ranked.Add([pscustomobject]@{ Url = $url; Score = $score })
+    }
+
+    return @($ranked | Sort-Object -Property Score -Descending | Select-Object -ExpandProperty Url -First $MaxLinks)
 }
 
 function Get-VendorDocumentationSummary {
@@ -488,17 +827,13 @@ function Get-VendorDocumentationSummary {
     $safeVendor = if ([string]::IsNullOrWhiteSpace($Vendor)) { "" } else { $Vendor.Trim() }
     $safeApp = if ([string]::IsNullOrWhiteSpace($AppName)) { "" } else { $AppName.Trim() }
     $safeVersion = if ([string]::IsNullOrWhiteSpace($AppVersion)) { "" } else { $AppVersion.Trim() }
+    $vendorToken = Convert-ToNormalizedToken -Value $safeVendor
+    $appTokens = @(Get-AppAliasTokens -AppName $safeApp)
 
     if ([string]::IsNullOrWhiteSpace($safeApp)) {
         $result.Message = $script:NoDataMessage
         return $result
     }
-
-    $playwrightResult = Invoke-PlaywrightRequirementsResearch -Vendor $safeVendor -AppName $safeApp -AppVersion $safeVersion
-    if ($playwrightResult.Success) {
-        return $playwrightResult
-    }
-    $playwrightFailureMessage = $playwrightResult.Message
 
     $seedSources = @(Get-VendorDocumentationSources -Vendor $safeVendor -AppName $safeApp -AppVersion $safeVersion)
 
@@ -509,7 +844,10 @@ function Get-VendorDocumentationSummary {
         "$productQuery install prerequisites dependency",
         "$productQuery known issues conflicts incompatibility",
         "$productQuery upgrade migration previous version",
-        "$productQuery vendor documentation"
+        "$productQuery vendor documentation",
+        "$productQuery release notes upgrade guide",
+        "$productQuery installation guide prerequisites",
+        "$productQuery docs requirements windows"
     )
 
     $linkPool = New-Object System.Collections.Generic.List[string]
@@ -518,10 +856,10 @@ function Get-VendorDocumentationSummary {
     }
 
     foreach ($query in $queries) {
-        foreach ($url in @(Invoke-DuckDuckGoSearchLinks -Query $query -MaxLinks 8)) {
+        foreach ($url in @(Invoke-DuckDuckGoSearchLinks -Query $query -MaxLinks 12)) {
             [void]$linkPool.Add($url)
         }
-        foreach ($url in @(Invoke-BingSearchLinks -Query $query -MaxLinks 6)) {
+        foreach ($url in @(Invoke-BingSearchLinks -Query $query -MaxLinks 10)) {
             [void]$linkPool.Add($url)
         }
     }
@@ -532,7 +870,7 @@ function Get-VendorDocumentationSummary {
         if (Test-IsTrustedDocumentationUrl -Url $link -Vendor $safeVendor -AppName $safeApp) {
             [void]$candidateLinks.Add($link)
         }
-        if ($candidateLinks.Count -ge 24) { break }
+        if ($candidateLinks.Count -ge 48) { break }
     }
 
     $allOsSnippets = New-Object System.Collections.Generic.List[string]
@@ -540,19 +878,49 @@ function Get-VendorDocumentationSummary {
     $allConflictSnippets = New-Object System.Collections.Generic.List[string]
     $allUpgradeSnippets = New-Object System.Collections.Generic.List[string]
     $usedSources = New-Object System.Collections.Generic.List[string]
+    $foundVendorAndAppSource = $false
+    $visitedUrls = New-Object 'System.Collections.Generic.HashSet[string]'
+    $crawlQueue = New-Object 'System.Collections.Generic.Queue[object]'
+    $maxCrawlPages = 60
+    $maxSecondaryPerPage = 4
+    $maxDepth = 2
+    $pagesFetched = 0
+    $secondaryQueued = 0
 
-    foreach ($link in @($candidateLinks)) {
+    foreach ($seedUrl in @($candidateLinks)) {
+        $crawlQueue.Enqueue([pscustomobject]@{ Url = $seedUrl; Depth = 0 })
+    }
+
+    while ($crawlQueue.Count -gt 0 -and $pagesFetched -lt $maxCrawlPages) {
+        $queueItem = $crawlQueue.Dequeue()
+        $link = [string]$queueItem.Url
+        $depth = [int]$queueItem.Depth
+        if ([string]::IsNullOrWhiteSpace($link)) { continue }
+        if (-not $visitedUrls.Add($link)) { continue }
+
         try {
             $response = Invoke-WebRequest -Uri $link -UseBasicParsing -TimeoutSec 20 -ErrorAction Stop
+            $pagesFetched++
             $raw = [string]$response.Content
             if ([string]::IsNullOrWhiteSpace($raw)) { continue }
 
             $text = Convert-HtmlToText -Html $raw
             if ([string]::IsNullOrWhiteSpace($text)) { continue }
 
-            $normalizedText = ($text -replace '[^A-Za-z0-9]', '').ToLowerInvariant()
-            $appToken = ($safeApp -replace '[^A-Za-z0-9]', '').ToLowerInvariant()
-            if (-not [string]::IsNullOrWhiteSpace($appToken) -and $normalizedText -notlike "*$appToken*") {
+            $normalizedText = Convert-ToNormalizedToken -Value $text
+            $appHits = @($appTokens | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and $normalizedText -like "*$_*" }).Count
+            $hasAnyApp = ($appHits -gt 0)
+            $hasVendor = (-not [string]::IsNullOrWhiteSpace($vendorToken) -and $normalizedText -like "*$vendorToken*")
+            $hasVendorAndApp = ($hasVendor -and $hasAnyApp)
+            if ($hasVendorAndApp) { $foundVendorAndAppSource = $true }
+
+            # Only app-relevant pages should populate section content.
+            if (-not $hasAnyApp) {
+                continue
+            }
+
+            $relevanceScore = Get-SourceRelevanceScore -NormalizedText $normalizedText -AppTokens $appTokens -VendorToken $vendorToken
+            if ($relevanceScore -lt 0.30) {
                 continue
             }
 
@@ -566,20 +934,36 @@ function Get-VendorDocumentationSummary {
 
             [void]$usedSources.Add($link)
 
-            foreach ($item in @(Get-SectionSnippets -Text $text -SourceLabel $sourceLabel -Keywords @('(?i)supported\s+operating\s+system', '(?i)operating\s+system', '(?i)windows\s+(10|11|server)', '(?i)supported\s+platform') -MaxItems 2)) {
-                [void]$allOsSnippets.Add($item)
+            $allowAllSections = ($hasAnyApp -or $relevanceScore -ge 0.45)
+            $allowConflictUpgrade = ($hasVendorAndApp -or $relevanceScore -ge 0.65)
+
+            if ($allowAllSections) {
+                foreach ($item in @(Get-SectionSnippets -Text $text -SourceLabel $sourceLabel -Keywords @('(?i)supported\s+operating\s+system', '(?i)operating\s+system', '(?i)windows\s+(10|11|server)', '(?i)supported\s+platform') -MaxItems 2)) {
+                    [void]$allOsSnippets.Add($item)
+                }
+
+                foreach ($item in @(Get-SectionSnippets -Text $text -SourceLabel $sourceLabel -Keywords @('(?i)prereq', '(?i)requirement', '(?i)dependency', '(?i)install\s+requires', '(?i)minimum\s+requirement') -MaxItems 2)) {
+                    [void]$allPrereqSnippets.Add($item)
+                }
             }
 
-            foreach ($item in @(Get-SectionSnippets -Text $text -SourceLabel $sourceLabel -Keywords @('(?i)prereq', '(?i)requirement', '(?i)dependency', '(?i)install\s+requires', '(?i)minimum\s+requirement') -MaxItems 2)) {
-                [void]$allPrereqSnippets.Add($item)
+            if ($allowConflictUpgrade) {
+                foreach ($item in @(Get-SectionSnippets -Text $text -SourceLabel $sourceLabel -Keywords @('(?i)conflict', '(?i)incompatib', '(?i)known\s+issue', '(?i)not\s+supported', '(?i)serious\s+conflict') -MaxItems 2)) {
+                    [void]$allConflictSnippets.Add($item)
+                }
+
+                foreach ($item in @(Get-SectionSnippets -Text $text -SourceLabel $sourceLabel -Keywords @('(?i)upgrade', '(?i)migration', '(?i)previous\s+version', '(?i)in-place', '(?i)coexist', '(?i)deprecated') -MaxItems 2)) {
+                    [void]$allUpgradeSnippets.Add($item)
+                }
             }
 
-            foreach ($item in @(Get-SectionSnippets -Text $text -SourceLabel $sourceLabel -Keywords @('(?i)conflict', '(?i)incompatib', '(?i)known\s+issue', '(?i)not\s+supported', '(?i)serious\s+conflict') -MaxItems 2)) {
-                [void]$allConflictSnippets.Add($item)
-            }
-
-            foreach ($item in @(Get-SectionSnippets -Text $text -SourceLabel $sourceLabel -Keywords @('(?i)upgrade', '(?i)migration', '(?i)previous\s+version', '(?i)in-place', '(?i)coexist', '(?i)deprecated') -MaxItems 2)) {
-                [void]$allUpgradeSnippets.Add($item)
+            if ($depth -lt $maxDepth) {
+                foreach ($nextUrl in @(Get-RelevantSecondaryLinks -Html $raw -BaseUrl $link -AppTokens $appTokens -VendorToken $vendorToken -MaxLinks $maxSecondaryPerPage)) {
+                    if ([string]::IsNullOrWhiteSpace([string]$nextUrl)) { continue }
+                    if ($visitedUrls.Contains([string]$nextUrl)) { continue }
+                    $crawlQueue.Enqueue([pscustomobject]@{ Url = [string]$nextUrl; Depth = ($depth + 1) })
+                    $secondaryQueued++
+                }
             }
         }
         catch {
@@ -610,21 +994,13 @@ function Get-VendorDocumentationSummary {
 
     $result.SourcesUsed = @($usedSources | Select-Object -Unique | Select-Object -First 20)
 
-    if ($result.SourcesUsed.Count -eq 0) {
-        if ([string]::IsNullOrWhiteSpace($playwrightFailureMessage)) {
-            $result.Message = $script:NoDataMessage
-        }
-        else {
-            $result.Message = "Playwright unavailable/failed; fallback web crawl returned no trusted sources. Detail: $playwrightFailureMessage"
-        }
+    $hasSectionData = ($finalOs.Count -gt 0 -or $finalPrereq.Count -gt 0 -or $finalConflict.Count -gt 0 -or $finalUpgrade.Count -gt 0)
+    if (-not $hasSectionData) {
+        $result.Message = $script:NoDataMessage
+        $result.SourcesUsed = @()
     }
     else {
-        if ([string]::IsNullOrWhiteSpace($playwrightFailureMessage)) {
-            $result.Message = "Live web scraping completed using $($result.SourcesUsed.Count) source(s)."
-        }
-        else {
-            $result.Message = "Live web scraping completed using fallback crawl ($($result.SourcesUsed.Count) source(s)); Playwright path detail: $playwrightFailureMessage"
-        }
+        $result.Message = ""
     }
 
     return $result

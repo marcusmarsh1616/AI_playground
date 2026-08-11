@@ -43,6 +43,23 @@ function Write-UIStatus {
     }
 }
 
+function Write-DocumentationProcessLog {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Message,
+
+        [string]$Level = 'INFO'
+    )
+
+    $processLogger = Get-Command Write-ProcessOutputLine -ErrorAction SilentlyContinue
+    if ($processLogger) {
+        & Write-ProcessOutputLine -Message $Message -Level $Level
+        return
+    }
+
+    Write-Verbose $Message
+}
+
 function Resolve-ElevatedInstallInfoScriptPath {
     [CmdletBinding()]
     param()
@@ -513,6 +530,7 @@ function Start-AutomatedDocumentation {
         # Section 1 vendor documentation is intentionally collected before capture steps.
         $vendorSummary = $null
         Write-UIStatus "Collecting Section 1 vendor documentation..." "Blue"
+        Write-DocumentationProcessLog "Validation report Section 1 deep crawl started." 'INFO'
         try {
             $vendorSummary = Get-VendorDocumentationSummary -Vendor $script:CurrentAppVendor -AppName $captureValidationLookupName -AppVersion $script:CurrentSession.AppVersion
             $sourceCount = 0
@@ -520,6 +538,7 @@ function Start-AutomatedDocumentation {
                 $sourceCount = @($vendorSummary.SourcesUsed).Count
             }
             Write-UIStatus "Section 1 vendor documentation collected (sources: $sourceCount)." "Blue"
+            Write-DocumentationProcessLog ("Validation report Section 1 deep crawl completed | Sources={0} | OS={1} | Prereq={2} | Conflicts={3} | Upgrade={4}" -f $sourceCount, ([string]$vendorSummary.OSCompatibility).Length, ([string]$vendorSummary.Prerequisites).Length, ([string]$vendorSummary.ApplicationConflicts).Length, ([string]$vendorSummary.UpgradePaths).Length) 'INFO'
             if ($vendorSummary -and -not [string]::IsNullOrWhiteSpace([string]$vendorSummary.Message)) {
                 Write-UIStatus "Section 1 details: $([string]$vendorSummary.Message)" "Blue"
             }
@@ -534,6 +553,7 @@ function Start-AutomatedDocumentation {
                 Message = "The Vendor has nothing to report"
             }
             Write-UIStatus "Section 1 vendor documentation collection failed; default fallback text will be used." "Orange"
+            Write-DocumentationProcessLog ("Validation report Section 1 deep crawl failed: {0}" -f $_.Exception.Message) 'ERROR'
         }
         
         if (-not $ManualOnly) {
@@ -675,10 +695,10 @@ exit `$LASTEXITCODE
                 try {
                     Write-UIStatus "Installation details lookup using app identity '$lookupName'..." "Blue"
                     if ($InstallContext -eq 'User') {
-                        $process = Start-Process powershell.exe -ArgumentList $arguments -Wait -PassThru -ErrorAction Stop
+                        $process = Invoke-LoggedStartProcess -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $wrapperScript) -Wait -PassThru -Description "Installation details lookup"
                     }
                     else {
-                        $process = Start-Process powershell.exe -Verb RunAs -ArgumentList $arguments -Wait -PassThru -ErrorAction Stop
+                        $process = Invoke-LoggedStartProcess -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $wrapperScript) -Wait -PassThru -Description "Installation details lookup (elevated)"
                     }
                 }
                 catch {

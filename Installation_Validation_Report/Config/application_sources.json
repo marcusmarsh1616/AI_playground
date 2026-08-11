@@ -51,6 +51,36 @@
       "search_strategy": "direct_url",
       "requirements_url": "https://www.microsoft.com/en-us/microsoft-365/microsoft-365-and-office-resources",
       "search_terms": ["Microsoft 365 system requirements", "Office system requirements"]
+    },
+
+    "Miniforge3": {
+      "vendor": "Conda Forge",
+      "search_strategy": "google_search",
+      "search_terms": [
+        "Miniforge3 system requirements",
+        "Miniforge3 installation prerequisites",
+        "Conda Forge Miniforge3 install"
+      ],
+      "vendor_domain": "conda-forge.org",
+      "selectors": {
+        "requirements_section": "main, article, section, div.markdown-body",
+        "content_area": "main, article, body"
+      }
+    },
+
+    "Miniforge": {
+      "vendor": "Conda Forge",
+      "search_strategy": "google_search",
+      "search_terms": [
+        "Miniforge system requirements",
+        "Miniforge installation prerequisites",
+        "Conda Forge Miniforge install"
+      ],
+      "vendor_domain": "conda-forge.org",
+      "selectors": {
+        "requirements_section": "main, article, section, div.markdown-body",
+        "content_area": "main, article, body"
+      }
     }
   },
   

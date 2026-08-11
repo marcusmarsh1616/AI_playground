@@ -142,6 +142,7 @@ $script:ProcessTab = $null
 $script:ProcessLogPath = ""
 $script:ProcessErrorLogPath = ""
 $script:ProcessLogBuffer = New-Object System.Collections.Generic.List[string]
+$script:NoDataMessage = "Nothing to Report or Found."
 $script:IsLoadingExistingPackageData = $false
 $script:IsPopulatingMetadata = $false
 $script:LastExistingPackageLoadPath = ""
@@ -672,7 +673,7 @@ if (Test-Path $configPath) {
                                         [System.Windows.Forms.MessageBoxIcon]::Information
                                     )
                                     
-                                    Start-Process -FilePath "powershell.exe" -ArgumentList "-ExecutionPolicy Bypass -File `"$newToolScriptPath`""
+                                    Invoke-LoggedStartProcess -FilePath "powershell.exe" -ArgumentList @("-ExecutionPolicy", "Bypass", "-File", $newToolScriptPath) -Description "Tool relaunch after setup"
                                     exit 0
                                     
                                 }
@@ -754,6 +755,357 @@ function Write-ProcessOutputLine {
     }
     else {
         [void]$script:ProcessLogBuffer.Add($line)
+    }
+}
+
+function Invoke-LoggedStartProcess {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+
+        [string[]]$ArgumentList = @(),
+
+        [string]$WorkingDirectory = "",
+
+        [switch]$Wait,
+
+        [switch]$PassThru,
+
+        [switch]$CaptureOutput = $false,
+
+        [string]$Description = "Process"
+    )
+
+    $argumentText = if ($ArgumentList -and $ArgumentList.Count -gt 0) { ($ArgumentList -join ' ') } else { '' }
+    Write-ProcessOutputLine -Message ("{0} | Start-Process launching | FilePath={1} | Arguments={2}" -f $Description, $FilePath, $argumentText) -Level "INFO"
+
+    $stdoutPath = $null
+    $stderrPath = $null
+
+    try {
+        $startParams = @{
+            FilePath = $FilePath
+            ErrorAction = 'Stop'
+        }
+
+        if ($ArgumentList -and $ArgumentList.Count -gt 0) {
+            $startParams.ArgumentList = @($ArgumentList)
+        }
+        if (-not [string]::IsNullOrWhiteSpace($WorkingDirectory)) {
+            $startParams.WorkingDirectory = $WorkingDirectory
+        }
+        if ($CaptureOutput) {
+            $stdoutPath = [System.IO.Path]::GetTempFileName().Replace('.tmp', '.stdout.log')
+            $stderrPath = [System.IO.Path]::GetTempFileName().Replace('.tmp', '.stderr.log')
+            $startParams.RedirectStandardOutput = $stdoutPath
+            $startParams.RedirectStandardError = $stderrPath
+            $startParams.Wait = $true
+        }
+        if ($Wait) { $startParams.Wait = $true }
+        if ($PassThru) { $startParams.PassThru = $true }
+
+        $process = Start-Process @startParams
+
+        if ($CaptureOutput) {
+            foreach ($capture in @(
+                @{ Path = $stdoutPath; Level = 'INFO'; Label = 'stdout' },
+                @{ Path = $stderrPath; Level = 'ERROR'; Label = 'stderr' }
+            )) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$capture.Path) -and (Test-Path $capture.Path)) {
+                    foreach ($line in @(Get-Content -Path $capture.Path -ErrorAction SilentlyContinue | Select-Object -Last 50)) {
+                        if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
+                            Write-ProcessOutputLine -Message ("{0} | {1} | {2}" -f $Description, $capture.Label, ([string]$line).Trim()) -Level $capture.Level
+                        }
+                    }
+                }
+            }
+        }
+
+        if ($process -and ($PassThru -or $Wait)) {
+            $pid = if ($process.PSObject.Properties['Id']) { $process.Id } else { 'N/A' }
+            $exitCode = if ($process.PSObject.Properties['ExitCode']) { $process.ExitCode } else { 'N/A' }
+            Write-ProcessOutputLine -Message ("{0} | Start-Process completed | PID={1} | ExitCode={2}" -f $Description, $pid, $exitCode) -Level "INFO"
+        }
+        else {
+            Write-ProcessOutputLine -Message ("{0} | Start-Process launched successfully." -f $Description) -Level "INFO"
+        }
+
+        return $process
+    }
+    catch {
+        Write-ProcessOutputLine -Message ("{0} | Start-Process failed: {1}" -f $Description, $_.Exception.Message) -Level "ERROR"
+        throw
+    }
+    finally {
+        if ($stdoutPath) { Remove-Item -Path $stdoutPath -Force -ErrorAction SilentlyContinue }
+        if ($stderrPath) { Remove-Item -Path $stderrPath -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+function Get-ManualNativePowerShellGuidance {
+    param(
+        [string]$CodeText
+    )
+
+    $guidance = New-Object System.Collections.Generic.List[string]
+
+    if ([string]::IsNullOrWhiteSpace($CodeText)) {
+        return @('Native PowerShell is acceptable, but keep explicit guards, logging, and failure handling around every risky operation.')
+    }
+
+    if ($CodeText -match '(?i)Start-Process') {
+        [void]$guidance.Add('Use Start-Process with -Wait -PassThru for synchronous actions, then log the PID and ExitCode into the live process log.')
+        [void]$guidance.Add('When the child process writes output, capture stdout and stderr to files and replay the tail into the log so technicians can see what happened.')
+    }
+
+    if ($CodeText -match '(?i)Stop-Process') {
+        [void]$guidance.Add('Guard Stop-Process with Get-Process or a prior existence check and log the process name or PID before termination.')
+    }
+
+    if ($CodeText -match '(?i)Remove-Item') {
+        [void]$guidance.Add('Wrap Remove-Item in Test-Path and try/catch, use -Force/-Recurse where appropriate, and log the removed target path.')
+    }
+
+    if ($CodeText -match '(?i)Test-Path|Get-ChildItem') {
+        [void]$guidance.Add('Keep the path checks explicit so missing files or folders produce a controlled log message instead of a silent failure.')
+    }
+
+    if ($CodeText -match '(?i)Write-Log|Write-Verbose') {
+        [void]$guidance.Add('Preserve Write-Log for technician-visible evidence; do not replace it with host-only output when troubleshooting matters.')
+    }
+
+    if ($CodeText -match '(?i)Execute-Process|Execute-MSI') {
+        [void]$guidance.Add('When wrapper cmdlets already exist, they provide standardized logging and exit handling, so prefer them unless the native path is intentionally needed.')
+    }
+
+    return @($guidance | Select-Object -Unique)
+}
+
+function Get-TroubleshootingLogPaths {
+    $paths = New-Object System.Collections.Generic.List[string]
+
+    foreach ($candidate in @($script:ProcessLogPath, $script:ProcessErrorLogPath, $script:ErrorLogPath, $script:TranscriptPath)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$candidate) -and (Test-Path $candidate)) {
+            [void]$paths.Add((Resolve-Path $candidate).Path)
+        }
+    }
+
+    foreach ($rootCandidate in @(
+        (Join-Path $PSScriptRoot 'logs'),
+        (Join-Path $script:ToolRoot 'logs')
+    )) {
+        if (-not (Test-Path $rootCandidate)) { continue }
+        foreach ($file in @(Get-ChildItem -Path $rootCandidate -File -Include *.log, *.txt, *.jsonl -ErrorAction SilentlyContinue)) {
+            [void]$paths.Add($file.FullName)
+        }
+    }
+
+    return @($paths | Select-Object -Unique)
+}
+
+function Get-TroubleshootingLogInsights {
+    $logPaths = @(Get-TroubleshootingLogPaths)
+    $findings = New-Object System.Collections.Generic.List[string]
+    $recommendations = New-Object System.Collections.Generic.List[string]
+    $summaryLines = New-Object System.Collections.Generic.List[string]
+
+    if (-not $logPaths -or $logPaths.Count -eq 0) {
+        return [ordered]@{
+            LogPaths = @()
+            Summary = "No log files were found yet."
+            Findings = @($script:NoDataMessage)
+            Recommendations = @("Run a packaging or validation action so the tool can capture live process and error logs.")
+        }
+    }
+
+    foreach ($path in $logPaths) {
+        try {
+            $tail = Get-Content -Path $path -Tail 250 -ErrorAction Stop
+        }
+        catch {
+            continue
+        }
+
+        if (-not $tail) { continue }
+    if ($CommandText -match '(?i)-Wait\b|-PassThru\b|-NoNewWindow\b|-UseNewEnvironment\b|-RedirectStandardOutput\b|-RedirectStandardError\b') {
+        [void]$summaryLines.Add(("{0} | {1} line(s) scanned" -f (Split-Path $path -Leaf), @($tail).Count))
+
+        foreach ($line in @($tail)) {
+            if ([string]::IsNullOrWhiteSpace([string]$line)) { continue }
+
+            if ($line -match '(?i)\b(error|failed|exception|cannot|unable|terminated|exit code|not recognized|did not produce output|did not launch)\b') {
+                [void]$findings.Add(("[{0}] {1}" -f (Split-Path $path -Leaf), $line.Trim()))
+            }
+
+            if ($line -match '(?i)Start-Process' -and $line -notmatch '(?i)(wait|passthru|erroraction stop|redirectstandarderror|redirectstandardoutput)') {
+                [void]$recommendations.Add('Wrap Start-Process in a logged helper with -ErrorAction Stop and capture PID/exit code.')
+            }
+
+            if ($line -match '(?i)Execute-Process' -and $line -match '(?i)not processing|failed|error') {
+    if ($code -match '(?i)Execute-Process|Execute-MSI') { [void]$actions.Add('Uses wrapper-aware process execution with standardized exit handling and logging.') }
+                [void]$recommendations.Add('Replace or bypass Execute-Process with Start-Process plus logging when the install launch is not being processed reliably.')
+            }
+
+            if ($line -match '(?i)playwright|web scrape|research_requirements|validation report' -and $line -match '(?i)failed|unavailable|did not produce output') {
+                [void]$recommendations.Add('Verify the Python runtime and Playwright dependencies, then rerun the validation report scrape.')
+            }
+        }
+    }
+
+    if ($findings.Count -eq 0) {
+        [void]$findings.Add($script:NoDataMessage)
+    }
+    if ($recommendations.Count -eq 0) {
+        [void]$recommendations.Add('No clear error pattern was found. Re-run the process and refresh the troubleshooting tab while the action is active.')
+    }
+
+    return [ordered]@{
+        LogPaths = @($logPaths)
+        Summary = ($summaryLines -join [Environment]::NewLine)
+        Findings = @($findings | Select-Object -Unique)
+        Recommendations = @($recommendations | Select-Object -Unique)
+    }
+}
+
+function Get-TroubleshootingLogInsights {
+    param(
+        [string]$CodeText = ""
+    )
+
+    $logPaths = @(Get-TroubleshootingLogPaths)
+    $findings = New-Object System.Collections.Generic.List[string]
+    $recommendations = New-Object System.Collections.Generic.List[string]
+    $summaryLines = New-Object System.Collections.Generic.List[string]
+    $codeRecommendations = New-Object System.Collections.Generic.List[string]
+
+    if (-not $logPaths -or $logPaths.Count -eq 0) {
+        $insights = [ordered]@{
+            LogPaths = @()
+            Summary = 'No log files were found yet.'
+            Findings = @($script:NoDataMessage)
+            Recommendations = @('Run a packaging or validation action so the tool can capture live process and error logs.')
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($CodeText)) {
+            foreach ($item in @(Get-ManualNativePowerShellGuidance -CodeText $CodeText)) {
+                if (-not [string]::IsNullOrWhiteSpace($item)) { [void]$codeRecommendations.Add($item) }
+            }
+            foreach ($item in @(Test-PackageAnalyzerNativeGuarding -CodeText $CodeText)) {
+                if (-not [string]::IsNullOrWhiteSpace($item)) { [void]$codeRecommendations.Add($item) }
+            }
+
+            $commandReview = Get-GlobalsAssistantCommandRecommendations -CodeText $CodeText
+            foreach ($rec in @($commandReview.Recommendations)) {
+                if ($rec -and -not [string]::IsNullOrWhiteSpace([string]$rec.Reason)) {
+                    [void]$codeRecommendations.Add(([string]$rec.Reason).Trim())
+                }
+            }
+
+            if ($codeRecommendations.Count -gt 0) {
+                $insights.Recommendations = @($insights.Recommendations + @($codeRecommendations | Select-Object -Unique))
+            }
+        }
+
+        return $insights
+    }
+
+    foreach ($path in $logPaths) {
+        try {
+            $tail = Get-Content -Path $path -Tail 250 -ErrorAction Stop
+        }
+        catch {
+            continue
+        }
+
+        if (-not $tail) { continue }
+
+        [void]$summaryLines.Add(("{0} | {1} line(s) scanned" -f (Split-Path $path -Leaf), @($tail).Count))
+
+        foreach ($line in @($tail)) {
+            if ([string]::IsNullOrWhiteSpace([string]$line)) { continue }
+
+            if ($line -match '(?i)\b(error|failed|exception|cannot|unable|terminated|exit code|not recognized|did not produce output|did not launch)\b') {
+                [void]$findings.Add(("[{0}] {1}" -f (Split-Path $path -Leaf), $line.Trim()))
+            }
+
+            if ($line -match '(?i)Start-Process' -and $line -notmatch '(?i)(wait|passthru|erroraction stop|redirectstandarderror|redirectstandardoutput)') {
+                [void]$recommendations.Add('Wrap Start-Process in a logged helper with -ErrorAction Stop and capture PID/exit code.')
+            }
+
+            if ($line -match '(?i)Execute-Process' -and $line -match '(?i)not processing|failed|error') {
+                [void]$recommendations.Add('Replace or bypass Execute-Process with Start-Process plus logging when the install launch is not being processed reliably.')
+            }
+
+            if ($line -match '(?i)playwright|web scrape|research_requirements|validation report' -and $line -match '(?i)failed|unavailable|did not produce output') {
+                [void]$recommendations.Add('Verify the Python runtime and Playwright dependencies, then rerun the validation report scrape.')
+            }
+        }
+    }
+
+    if ($findings.Count -eq 0) {
+        [void]$findings.Add($script:NoDataMessage)
+    }
+    if ($recommendations.Count -eq 0) {
+        [void]$recommendations.Add('No clear error pattern was found. Re-run the process and refresh the troubleshooting tab while the action is active.')
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($CodeText)) {
+        foreach ($item in @(Get-ManualNativePowerShellGuidance -CodeText $CodeText)) {
+            if (-not [string]::IsNullOrWhiteSpace($item)) { [void]$codeRecommendations.Add($item) }
+        }
+        foreach ($item in @(Test-PackageAnalyzerNativeGuarding -CodeText $CodeText)) {
+            if (-not [string]::IsNullOrWhiteSpace($item)) { [void]$codeRecommendations.Add($item) }
+        }
+
+        $commandReview = Get-GlobalsAssistantCommandRecommendations -CodeText $CodeText
+        foreach ($rec in @($commandReview.Recommendations)) {
+            if ($rec -and -not [string]::IsNullOrWhiteSpace([string]$rec.Reason)) {
+                [void]$codeRecommendations.Add(([string]$rec.Reason).Trim())
+            }
+        }
+    }
+
+    if ($codeRecommendations.Count -gt 0) {
+        [void]$recommendations.Add('Code-based suggestions:')
+        foreach ($item in @($codeRecommendations | Select-Object -Unique)) {
+            [void]$recommendations.Add("- $item")
+        }
+    }
+
+    return [ordered]@{
+        LogPaths = @($logPaths)
+        Summary = ($summaryLines -join [Environment]::NewLine)
+        Findings = @($findings | Select-Object -Unique)
+        Recommendations = @($recommendations | Select-Object -Unique)
+    }
+}
+
+function Update-TroubleshootingTabContent {
+    $currentCode = Get-PackageAnalyzerCombinedCode
+    $insights = Get-TroubleshootingLogInsights -CodeText $currentCode
+
+    if ($txtTroubleshootingLog) {
+        $logText = New-Object System.Collections.Generic.List[string]
+        [void]$logText.Add(("Log files scanned: {0}" -f (@($insights.LogPaths).Count)))
+        foreach ($path in @($insights.LogPaths)) {
+            [void]$logText.Add(("- {0}" -f $path))
+        }
+        [void]$logText.Add("")
+        [void]$logText.Add($insights.Summary)
+        $txtTroubleshootingLog.Text = ($logText -join [Environment]::NewLine)
+    }
+
+    if ($txtTroubleshootingFindings) {
+        $txtTroubleshootingFindings.Text = @($insights.Findings) -join [Environment]::NewLine
+    }
+
+    if ($txtTroubleshootingRecommendations) {
+        $txtTroubleshootingRecommendations.Text = @($insights.Recommendations) -join [Environment]::NewLine
+    }
+
+    if ($script:lblPackageHelperContext) {
+        $script:lblPackageHelperContext.Text = "Scanned $(@($insights.LogPaths).Count) log file(s) and current package code. Refresh while a process is running to watch live updates."
+        $script:lblPackageHelperContext.ForeColor = [System.Drawing.Color]::FromArgb(0, 110, 0)
     }
 }
 
@@ -2147,7 +2499,7 @@ function New-PackagingFolder {
             if ($script:OpenInPSStudio -and (Test-Path $script:PowerShellStudioExe)) {
                 Update-Status "Opening project in PowerShell Studio..." "Blue"
                 $form.Refresh()
-                Start-Process -FilePath $script:PowerShellStudioExe -ArgumentList "`"$startupFileToReview`""
+                Invoke-LoggedStartProcess -FilePath $script:PowerShellStudioExe -ArgumentList @($startupFileToReview) -Description "Open startup file in PowerShell Studio"
                 Start-Sleep -Milliseconds 500
                 Update-Status "Package created successfully!`n$newFolderPath" "Green"
             }
@@ -4277,6 +4629,11 @@ function Resolve-CustomCommandSectionStyle {
         }
     }
 
+    $nativeGuidance = @(Get-ManualNativePowerShellGuidance -CodeText $SectionText)
+    if ($nativeGuidance.Count -gt 0) {
+        $summary += [Environment]::NewLine + [Environment]::NewLine + 'Native PowerShell guidance:' + [Environment]::NewLine + ($nativeGuidance -join [Environment]::NewLine)
+    }
+
     $choice = Show-FrbNativeChoiceDialog -SectionTitle $SectionTitle -SummaryText $summary -SectionPreview $preview -RecommendedStyle $recommendedStyle
     $result.PromptShown = $true
 
@@ -5571,224 +5928,117 @@ $txtPostUninstall.Add_TextChanged({
 
 #endregion Tab 3
 
-#region Tab 4: Package Helper
+#region Tab 4: Troubleshooting
 $tabPackageHelper = New-Object System.Windows.Forms.TabPage
-$tabPackageHelper.Text = "Package Helper"
+$tabPackageHelper.Text = "Troubleshooting"
 $tabPackageHelper.BackColor = $Colors.Background
 $tabControl.Controls.Add($tabPackageHelper)
 
 $lblPackageHelperHeader = New-Object System.Windows.Forms.Label
-$lblPackageHelperHeader.Text = "Package Helper - Copy/Paste Ready Suggestions"
+$lblPackageHelperHeader.Text = "Troubleshooting - Live Log Review and Suggested Fixes"
 $lblPackageHelperHeader.Location = New-Object System.Drawing.Point(20, 4)
-$lblPackageHelperHeader.Size = New-Object System.Drawing.Size(500, 22)
+$lblPackageHelperHeader.Size = New-Object System.Drawing.Size(600, 22)
 $lblPackageHelperHeader.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
 $tabPackageHelper.Controls.Add($lblPackageHelperHeader)
 
 $script:lblPackageHelperContext = New-Object System.Windows.Forms.Label
-$script:lblPackageHelperContext.Text = "Package Helper auto-refresh is disabled. Use Analyze Package for integrated helper + web-backed checks."
+$script:lblPackageHelperContext.Text = "Refresh logs to scan the current process, error, and transcript files."
 $script:lblPackageHelperContext.Location = New-Object System.Drawing.Point(20, 26)
-$script:lblPackageHelperContext.Size = New-Object System.Drawing.Size(500, 18)
+$script:lblPackageHelperContext.Size = New-Object System.Drawing.Size(640, 18)
 $script:lblPackageHelperContext.ForeColor = [System.Drawing.Color]::Gray
 $tabPackageHelper.Controls.Add($script:lblPackageHelperContext)
 
-$btnApplyAllPackageHelper = New-Object System.Windows.Forms.Button
-$btnApplyAllPackageHelper.Text = "Apply All to Tool"
-$btnApplyAllPackageHelper.Location = New-Object System.Drawing.Point(670, 22)
-$btnApplyAllPackageHelper.Size = New-Object System.Drawing.Size(130, 28)
-$btnApplyAllPackageHelper.BackColor = $Colors.SuccessGreen
-$btnApplyAllPackageHelper.ForeColor = [System.Drawing.Color]::White
-$btnApplyAllPackageHelper.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-$btnApplyAllPackageHelper.FlatAppearance.BorderSize = 0
-$tabPackageHelper.Controls.Add($btnApplyAllPackageHelper)
+$btnRefreshTroubleshooting = New-Object System.Windows.Forms.Button
+$btnRefreshTroubleshooting.Text = "Refresh Logs"
+$btnRefreshTroubleshooting.Location = New-Object System.Drawing.Point(670, 22)
+$btnRefreshTroubleshooting.Size = New-Object System.Drawing.Size(130, 28)
+$btnRefreshTroubleshooting.BackColor = [System.Drawing.Color]::FromArgb(0, 105, 160)
+$btnRefreshTroubleshooting.ForeColor = [System.Drawing.Color]::White
+$btnRefreshTroubleshooting.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+$btnRefreshTroubleshooting.FlatAppearance.BorderSize = 0
+$tabPackageHelper.Controls.Add($btnRefreshTroubleshooting)
 
-$panelPackageHelper = New-Object System.Windows.Forms.Panel
-$panelPackageHelper.Location = New-Object System.Drawing.Point(20, 58)
-$panelPackageHelper.Size = New-Object System.Drawing.Size(820, 550)
-$panelPackageHelper.AutoScroll = $true
-$panelPackageHelper.BackColor = $Colors.Background
-$tabPackageHelper.Controls.Add($panelPackageHelper)
+$btnAnalyzeTroubleshooting = New-Object System.Windows.Forms.Button
+$btnAnalyzeTroubleshooting.Text = "Scan Logs + Code"
+$btnAnalyzeTroubleshooting.Location = New-Object System.Drawing.Point(670, 54)
+$btnAnalyzeTroubleshooting.Size = New-Object System.Drawing.Size(130, 28)
+$btnAnalyzeTroubleshooting.BackColor = $Colors.SuccessGreen
+$btnAnalyzeTroubleshooting.ForeColor = [System.Drawing.Color]::White
+$btnAnalyzeTroubleshooting.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+$btnAnalyzeTroubleshooting.FlatAppearance.BorderSize = 0
+$tabPackageHelper.Controls.Add($btnAnalyzeTroubleshooting)
 
-$sectionLayout = @(
-    @{ Key = "UninstallExecutable"; Title = "Uninstall Media" },
-    @{ Key = "InstallCommand"; Title = "Install Command-line Switch" },
-    @{ Key = "UninstallCommand"; Title = "Uninstall Command-Line Switch" },
-    @{ Key = "PreInstallCommands"; Title = "Pre-Install Commands" },
-    @{ Key = "CustomInstallCommands"; Title = "Custom Install Commands" },
-    @{ Key = "PostInstallCommands"; Title = "Post-Install Commands" },
-    @{ Key = "PreUninstallCommands"; Title = "Pre-Uninstall Commands" },
-    @{ Key = "CustomUninstallCommands"; Title = "Custom Uninstall Commands" },
-    @{ Key = "PostUninstallCommands"; Title = "Post-Uninstall Commands" }
-)
+$txtTroubleshootingLog = New-Object System.Windows.Forms.RichTextBox
+$txtTroubleshootingLog.Location = New-Object System.Drawing.Point(20, 58)
+$txtTroubleshootingLog.Size = New-Object System.Drawing.Size(640, 250)
+$txtTroubleshootingLog.ReadOnly = $true
+$txtTroubleshootingLog.Multiline = $true
+$txtTroubleshootingLog.ScrollBars = 'Both'
+$txtTroubleshootingLog.WordWrap = $false
+$txtTroubleshootingLog.Font = New-Object System.Drawing.Font("Consolas", 10)
+$txtTroubleshootingLog.BackColor = [System.Drawing.Color]::White
+$txtTroubleshootingLog.ForeColor = [System.Drawing.Color]::FromArgb(35, 35, 35)
+$tabPackageHelper.Controls.Add($txtTroubleshootingLog)
 
-$helperTop = 0
-foreach ($sectionInfo in $sectionLayout) {
-    $group = New-Object System.Windows.Forms.GroupBox
-    $group.Text = $sectionInfo.Title
-    $group.Location = New-Object System.Drawing.Point(0, $helperTop)
-    $group.Size = New-Object System.Drawing.Size(790, 190)
-    $group.BackColor = $Colors.GroupBackground
-    $panelPackageHelper.Controls.Add($group)
+$txtTroubleshootingFindings = New-Object System.Windows.Forms.TextBox
+$txtTroubleshootingFindings.Location = New-Object System.Drawing.Point(20, 320)
+$txtTroubleshootingFindings.Size = New-Object System.Drawing.Size(820, 110)
+$txtTroubleshootingFindings.Multiline = $true
+$txtTroubleshootingFindings.ScrollBars = 'Both'
+$txtTroubleshootingFindings.WordWrap = $false
+$txtTroubleshootingFindings.Font = $FontCode
+$txtTroubleshootingFindings.ReadOnly = $true
+$txtTroubleshootingFindings.Text = "Findings will appear here after a scan."
+$tabPackageHelper.Controls.Add($txtTroubleshootingFindings)
 
-    $lblSummary = New-Object System.Windows.Forms.Label
-    $lblSummary.Text = "Generate helper data to populate this section."
-    $lblSummary.Location = New-Object System.Drawing.Point(15, 25)
-    $lblSummary.Size = New-Object System.Drawing.Size(760, 20)
-    $lblSummary.ForeColor = [System.Drawing.Color]::FromArgb(80, 80, 80)
-    $group.Controls.Add($lblSummary)
+$txtTroubleshootingRecommendations = New-Object System.Windows.Forms.TextBox
+$txtTroubleshootingRecommendations.Location = New-Object System.Drawing.Point(20, 442)
+$txtTroubleshootingRecommendations.Size = New-Object System.Drawing.Size(820, 140)
+$txtTroubleshootingRecommendations.Multiline = $true
+$txtTroubleshootingRecommendations.ScrollBars = 'Both'
+$txtTroubleshootingRecommendations.WordWrap = $false
+$txtTroubleshootingRecommendations.Font = $FontCode
+$txtTroubleshootingRecommendations.ReadOnly = $true
+$txtTroubleshootingRecommendations.Text = "Suggested fixes will appear here after a scan."
+$tabPackageHelper.Controls.Add($txtTroubleshootingRecommendations)
 
-    $txtOutput = New-Object System.Windows.Forms.TextBox
-    $txtOutput.Location = New-Object System.Drawing.Point(15, 48)
-    $txtOutput.Size = New-Object System.Drawing.Size(760, 92)
-    $txtOutput.Multiline = $true
-    $txtOutput.ScrollBars = 'Both'
-    $txtOutput.WordWrap = $false
-    $txtOutput.Font = $FontCode
-    $txtOutput.ReadOnly = $true
-    $group.Controls.Add($txtOutput)
+function Update-TroubleshootingTabContent {
+    $insights = Get-TroubleshootingLogInsights
 
-    $lblIndex = New-Object System.Windows.Forms.Label
-    $lblIndex.Text = "Suggestion 0 of 0"
-    $lblIndex.Location = New-Object System.Drawing.Point(15, 148)
-    $lblIndex.Size = New-Object System.Drawing.Size(180, 20)
-    $group.Controls.Add($lblIndex)
-
-    $lblFeedback = New-Object System.Windows.Forms.Label
-    $lblFeedback.Text = "Did this help?"
-    $lblFeedback.Location = New-Object System.Drawing.Point(200, 148)
-    $lblFeedback.Size = New-Object System.Drawing.Size(140, 20)
-    $group.Controls.Add($lblFeedback)
-
-    $btnCopy = New-Object System.Windows.Forms.Button
-    $btnCopy.Text = "Copy Snippet"
-    $btnCopy.Location = New-Object System.Drawing.Point(405, 145)
-    $btnCopy.Size = New-Object System.Drawing.Size(85, 28)
-    $btnCopy.BackColor = $Colors.AccentTeal
-    $btnCopy.ForeColor = [System.Drawing.Color]::White
-    $btnCopy.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-    $btnCopy.FlatAppearance.BorderSize = 0
-    $btnCopy.Tag = $sectionInfo.Key
-    $group.Controls.Add($btnCopy)
-
-    $btnApply = New-Object System.Windows.Forms.Button
-    $btnApply.Text = "Apply to Tool"
-    $btnApply.Location = New-Object System.Drawing.Point(495, 145)
-    $btnApply.Size = New-Object System.Drawing.Size(95, 28)
-    $btnApply.BackColor = [System.Drawing.Color]::FromArgb(0, 105, 160)
-    $btnApply.ForeColor = [System.Drawing.Color]::White
-    $btnApply.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-    $btnApply.FlatAppearance.BorderSize = 0
-    $btnApply.Tag = $sectionInfo.Key
-    $group.Controls.Add($btnApply)
-
-    $btnHelpYes = New-Object System.Windows.Forms.Button
-    $btnHelpYes.Text = "Yes"
-    $btnHelpYes.Location = New-Object System.Drawing.Point(595, 145)
-    $btnHelpYes.Size = New-Object System.Drawing.Size(55, 28)
-    $btnHelpYes.BackColor = $Colors.SuccessGreen
-    $btnHelpYes.ForeColor = [System.Drawing.Color]::White
-    $btnHelpYes.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-    $btnHelpYes.FlatAppearance.BorderSize = 0
-    $btnHelpYes.Tag = $sectionInfo.Key
-    $group.Controls.Add($btnHelpYes)
-
-    $btnHelpNo = New-Object System.Windows.Forms.Button
-    $btnHelpNo.Text = "No"
-    $btnHelpNo.Location = New-Object System.Drawing.Point(660, 145)
-    $btnHelpNo.Size = New-Object System.Drawing.Size(115, 28)
-    $btnHelpNo.BackColor = [System.Drawing.Color]::FromArgb(205, 130, 30)
-    $btnHelpNo.ForeColor = [System.Drawing.Color]::White
-    $btnHelpNo.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-    $btnHelpNo.FlatAppearance.BorderSize = 0
-    $btnHelpNo.Tag = $sectionInfo.Key
-    $btnHelpNo.Text = "No, try another"
-    $group.Controls.Add($btnHelpNo)
-
-    $script:PackageHelperControls[$sectionInfo.Key] = @{
-        Group = $group
-        DefaultTitle = $sectionInfo.Title
-        SummaryLabel = $lblSummary
-        OutputTextBox = $txtOutput
-        ApplyButton = $btnApply
-        IndexLabel = $lblIndex
-        FeedbackLabel = $lblFeedback
-        Suggestions = @()
-        CurrentIndex = 0
+    if ($txtTroubleshootingLog) {
+        $logText = New-Object System.Collections.Generic.List[string]
+        [void]$logText.Add(("Log files scanned: {0}" -f (@($insights.LogPaths).Count)))
+        foreach ($path in @($insights.LogPaths)) {
+            [void]$logText.Add(("- {0}" -f $path))
+        }
+        [void]$logText.Add("")
+        [void]$logText.Add($insights.Summary)
+        $txtTroubleshootingLog.Text = ($logText -join [Environment]::NewLine)
     }
 
-    $btnCopy.Add_Click({
-        $sectionKey = $this.Tag
-        if (-not $script:PackageHelperControls.ContainsKey($sectionKey)) { return }
+    if ($txtTroubleshootingFindings) {
+        $txtTroubleshootingFindings.Text = @($insights.Findings) -join [Environment]::NewLine
+    }
 
-        $state = $script:PackageHelperControls[$sectionKey]
-        if ([string]::IsNullOrWhiteSpace($state.OutputTextBox.Text)) {
-            return
-        }
+    if ($txtTroubleshootingRecommendations) {
+        $txtTroubleshootingRecommendations.Text = @($insights.Recommendations) -join [Environment]::NewLine
+    }
 
-        try {
-            [System.Windows.Forms.Clipboard]::SetText($state.OutputTextBox.Text)
-            $state.FeedbackLabel.Text = "Copied to clipboard"
-            $script:PackageHelperControls[$sectionKey] = $state
-        }
-        catch {
-            $state.FeedbackLabel.Text = "Copy failed"
-            $script:PackageHelperControls[$sectionKey] = $state
-        }
-    })
-
-    $btnApply.Add_Click({
-        $sectionKey = $this.Tag
-        if (-not $script:PackageHelperControls.ContainsKey($sectionKey)) { return }
-
-        $state = $script:PackageHelperControls[$sectionKey]
-        $applied = Apply-PackageHelperSectionToGui -SectionKey $sectionKey
-        if ($applied) {
-            Write-PackageHelperFeedback -SectionKey $sectionKey -Response "Applied" -SuggestionText $state.OutputTextBox.Text -Note "Manual apply from section"
-        }
-    })
-
-    $btnHelpYes.Add_Click({
-        $sectionKey = $this.Tag
-        if (-not $script:PackageHelperControls.ContainsKey($sectionKey)) { return }
-
-        $state = $script:PackageHelperControls[$sectionKey]
-        $state.FeedbackLabel.Text = "Great - kept and applied"
-        $script:PackageHelperControls[$sectionKey] = $state
-
-        Apply-PackageHelperSectionToGui -SectionKey $sectionKey | Out-Null
-        Write-PackageHelperFeedback -SectionKey $sectionKey -Response "Yes" -SuggestionText $state.OutputTextBox.Text -Note "Technician accepted section"
-    })
-
-    $btnHelpNo.Add_Click({
-        $sectionKey = $this.Tag
-        if (-not $script:PackageHelperControls.ContainsKey($sectionKey)) { return }
-
-        $state = $script:PackageHelperControls[$sectionKey]
-        if (-not $state.Suggestions -or $state.Suggestions.Count -eq 0) {
-            $state.FeedbackLabel.Text = "No more suggestions available"
-            $script:PackageHelperControls[$sectionKey] = $state
-            Write-PackageHelperFeedback -SectionKey $sectionKey -Response "No" -SuggestionText $state.OutputTextBox.Text -Note "No suggestions available"
-            return
-        }
-
-        $nextIndex = $state.CurrentIndex + 1
-        if ($nextIndex -ge $state.Suggestions.Count) {
-            $nextIndex = 0
-        }
-
-        Set-PackageHelperSectionSuggestion -SectionKey $sectionKey -SuggestionIndex $nextIndex -FeedbackText "Loaded another suggestion"
-        Write-PackageHelperFeedback -SectionKey $sectionKey -Response "No" -SuggestionText $state.OutputTextBox.Text -Note "Requested alternate suggestion"
-    })
-
-    $helperTop += 200
+    if ($script:lblPackageHelperContext) {
+        $script:lblPackageHelperContext.Text = "Scanned $(@($insights.LogPaths).Count) log file(s). Refresh while a process is running to watch live updates."
+        $script:lblPackageHelperContext.ForeColor = [System.Drawing.Color]::FromArgb(0, 110, 0)
+    }
 }
 
-$packageHelperScrollHeight = [int]($helperTop + 10)
-$panelPackageHelper.AutoScrollMinSize = New-Object System.Drawing.Size(780, $packageHelperScrollHeight)
-
-$btnApplyAllPackageHelper.Add_Click({
-    $count = Apply-AllPackageHelperSuggestionsToGui
-    Write-PackageHelperFeedback -SectionKey "ALL" -Response "Applied" -SuggestionText "" -Note "Applied $count section(s) using Apply All"
+$btnRefreshTroubleshooting.Add_Click({
+    Update-TroubleshootingTabContent
 })
+
+$btnAnalyzeTroubleshooting.Add_Click({
+    Update-TroubleshootingTabContent
+})
+
+Update-TroubleshootingTabContent
 
 #endregion Tab 4
 

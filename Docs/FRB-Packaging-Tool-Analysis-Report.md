@@ -2,13 +2,23 @@
 
 ## Purpose
 
-This report documents the current FRB Packaging Tool architecture as implemented in the repository snapshot under E:\AI_playground\FRB-Packaging-Tool. It is written as a handoff document for another machine or technician who needs to understand what the tool does, how the GUI behaves, and how the engine layer is designed.
+This report is an updated handoff document for the current FRB Packaging Tool implementation in E:\AI_playground\FRB-Packaging-Tool. It is meant for another device or technician who needs to understand the current behavior of the tool, how the GUI is wired, and what changed since the previous report was written.
 
-The tool is a modular PowerShell WinForms application centered on package creation, package update, validation, installation testing, uninstallation testing, network deployment, and validation report capture.
+The tool is a modular PowerShell WinForms application centered on package creation, package update, validation, install and uninstall testing, network deployment, live process logging, troubleshooting, and validation report capture.
 
 ## Executive Summary
 
-FRB Packaging Tool is a technician-facing packaging workstation. The main script builds the GUI, loads the engine modules, and orchestrates package creation and follow-on validation workflows. The design favors a guided packaging experience rather than a thin editor. It auto-detects metadata, recommends install context, populates switches and helper content, manages package folder structure, and can continue into build, test, validation, and deployment steps.
+FRB Packaging Tool is a technician-facing packaging workstation. The main script builds the GUI, loads the engine modules, and orchestrates package creation and follow-on validation workflows. The design favors a guided packaging experience rather than a thin editor. It auto-detects metadata, recommends install context, populates switches and helper content, manages package folder structure, and can continue into build, test, validation, troubleshooting, and deployment steps.
+
+The biggest changes since the last report are:
+
+- Validation report Section 1 now uses deterministic scrape-only content with an exact no-data fallback.
+- Validation report generation now writes live progress and completion messages into the process log.
+- The validation report engine now resolves the Python runtime and the research script path before launching Playwright research.
+- The Python Playwright research helper now falls back across msedge and chromium browser launch paths.
+- The old Package Helper surface was replaced with a Troubleshooting tab.
+- The Troubleshooting tab now scans both logs and current package code to suggest fixes.
+- Native PowerShell guidance is now surfaced as troubleshooting advice, not only as general helper text.
 
 At a high level, the application is split into:
 
@@ -17,8 +27,9 @@ At a high level, the application is split into:
 - Feature engines under src\Engines
 - Validation report generation under ValidationReportEngine
 - Package helper and switch generation under SwitchEngine and PythonScraperEngine
+- Validation requirements research under Installation_Validation_Report\Python
 
-## Core User Experience
+## Current User Workflow
 
 The application is designed around a linear technician workflow:
 
@@ -32,7 +43,8 @@ The application is designed around a linear technician workflow:
 8. Run installation testing.
 9. Run uninstallation testing.
 10. Generate or copy validation documentation.
-11. Deploy the package to the network share when enabled.
+11. Review troubleshooting output and suggested fixes.
+12. Deploy the package to the network share when enabled.
 
 The tool uses the GUI itself as the source of truth. Existing package data can be reloaded from Startup.pss, and helper sections can be regenerated from engine output.
 
@@ -48,10 +60,15 @@ The root script, FRB-Packaging-Tool.ps1, is both the application bootstrapper an
 - Status and process logging
 - Package folder detection
 - Package helper generation and application
+- Troubleshooting analysis
 - Packaging workflow orchestration
 - Build, test, validation, and deployment transitions
 
 The script also maintains a large set of script-scoped state variables for GUI controls, selected paths, current context, helper job state, process logging, and current package workflow state.
+
+### Logging and Process Visibility
+
+The main script now includes a logged process wrapper, `Invoke-LoggedStartProcess`, so GUI-triggered child processes can be launched with consistent logging, stdout and stderr capture, and exit-code visibility. That wrapper is used in the current validation-report flow and is also available for other process launches.
 
 ## Configuration and Startup
 
@@ -91,7 +108,7 @@ This order reflects the dependency chain used by the GUI and workflow logic.
 
 ## GUI Structure
 
-The GUI uses a tabbed WinForms layout with a status bar at the bottom. The form is resizable and built around a modernized but still direct WinForms model.
+The GUI uses a tabbed WinForms layout with a status bar at the bottom. The form is resizable and built around a direct WinForms model.
 
 ### Main Controls
 
@@ -101,7 +118,7 @@ The main form contains:
 - Status panel with progress bar and action buttons
 - Context-aware status label updates
 - Process log output area
-- Package helper tab with generated recommendations
+- Troubleshooting tab with live log and code review
 - Validation report tab for documentation capture and report generation
 
 ### Tab 1: Main Settings
@@ -155,35 +172,150 @@ Sections include:
 
 The uninstall command areas also support auto-expansion and rehydration from existing Startup.pss files.
 
-### Tab 4: Package Helper
+### Tab 4: Troubleshooting
 
-This tab provides guided recommendations. Each helper section supports copy, apply, and feedback actions.
+This tab replaced the older helper-focused surface. It now serves as a live log review and suggested-fix panel.
 
-Current helper order:
+The troubleshooting workflow now does two things at once:
 
-1. Uninstall Media
-2. Install Command-line Switch
-3. Uninstall Command-Line Switch
-4. Pre-Install Commands
-5. Custom Install Commands
-6. Post-Install Commands
-7. Pre-Uninstall Commands
-8. Custom Uninstall Commands
-9. Post-Uninstall Commands
+- Reads the active process, error, transcript, and logs folder output.
+- Inspects the current package code for manual PowerShell patterns that deserve guard rails or wrapper-aligned recommendations.
 
-The Package Helper tab uses generated section content from SwitchEngine and may also incorporate results from the PythonScraperEngine.
+The scan button now says Scan Logs + Code, which matches the current behavior.
+
+The tab produces three outputs:
+
+- Raw log summary text
+- Findings extracted from recent log lines
+- Suggested fixes that combine log evidence with code-aware guidance
 
 ### Tab 5: Globals Assistant
 
-This tab is used to analyze and rewrite Global.ps1-related snippets. It is designed to help technicians translate direct registry or command usage into safer or more standardized helper patterns.
+This tab analyzes and rewrites Global.ps1-related snippets. It helps technicians translate direct registry or command usage into safer or more standardized helper patterns.
 
-### Tab 6: Process
+### Live Process Tab
 
-This tab presents live process logs. It is intended to show the current stage of packaging, build, validation, and deployment. It is also used to communicate warnings, status changes, and workflow results.
+The process tab presents live process logs. It is intended to show the current stage of packaging, build, validation, troubleshooting, and deployment. It is also used to communicate warnings, status changes, and workflow results.
 
-## Package Helper Design
+## Troubleshooting Design
 
-The Package Helper flow is one of the most important modern additions in the application.
+The troubleshooting feature is now more than a log reader. It combines runtime evidence with code-shape guidance.
+
+### Log Review
+
+The analyzer scans:
+
+- Current process log files
+- Error log files
+- Transcript output
+- Any log-like files in the local logs folders
+
+It extracts lines that contain common failure signals such as errors, exit code failures, exceptions, launch failures, and missing output conditions.
+
+### Code-Aware Suggestions
+
+The analyzer now inspects the current package code and surfaces advice based on the code patterns it finds. The guidance currently looks for:
+
+- Start-Process usage
+- Stop-Process usage
+- Remove-Item usage
+- Test-Path and Get-ChildItem checks
+- Write-Log or Write-Verbose patterns
+- Execute-Process and Execute-MSI wrapper usage
+
+This means the troubleshooting tab can recommend concrete fixes such as adding -Wait and -PassThru, capturing stdout and stderr, checking path existence before deletion, and preferring wrapper cmdlets when they already provide standardized logging.
+
+### Native PowerShell Guidance
+
+The tool now explicitly surfaces manual PowerShell guard-rail guidance instead of only recommending wrapper substitutions. That was added so technician notes can suggest safe native usage patterns across the package startup scripts, not just around Start-Process.
+
+## Validation Report Workflow
+
+Validation report generation is one of the biggest changed areas in the current snapshot.
+
+### What the Validation Report Now Does
+
+The validation report flow now uses a stricter and more deterministic data path for Section 1 content. The vendor documentation engine no longer fills the report with generic prose or source chatter. It focuses on actual scraped content and falls back to the exact message Nothing to Report or Found. when a section has no valid data.
+
+### Live Process Logging
+
+The validation report UI now writes progress into the live process log so the technician can see when the report starts, completes, or fails.
+
+This makes the report creation process visible in the same logging stream as the rest of the packaging workflow.
+
+### Validation Report Runtime Selection
+
+The vendor documentation engine now resolves the Python runtime before launching Playwright research. The runtime discovery process checks:
+
+- Configured interpreter paths
+- Local repo-specific virtual environments
+- python
+- py -3
+- python3
+
+If none of those can import Playwright, the report gives a clear availability failure message instead of failing silently or assuming python is present.
+
+### Browser Launch Fallback
+
+The Python research module now tries to launch Playwright with the msedge browser channel first and falls back to chromium if that fails. That makes validation report generation more robust across workstations where the browser channel may differ.
+
+## Validation Report Engine
+
+The ValidationReportEngine now coordinates the documentation UI, log reporting, and vendor documentation lookup more cleanly.
+
+### DocumentationUIEngine.psm1
+
+This module coordinates the validation report UI and workflow. Its current responsibilities include:
+
+- Emitting live process log messages for report start, completion, and failure
+- Launching the installation details helper through the logged process path
+- Driving Section 1 vendor documentation collection
+
+### VendorDocumentationEngine.psm1
+
+This module performs the vendor documentation deep crawl for Section 1 validation report content.
+
+The current behavior is:
+
+- Normalize application and vendor tokens
+- Score and filter relevant sources
+- Crawl real documentation pages
+- Convert HTML to text
+- Reject noise snippets and footer chatter
+- Return only actual scraped content
+- Use the exact fallback message Nothing to Report or Found. when no usable content is discovered
+
+The latest additions also include:
+
+- Python runtime resolution for Playwright execution
+- Better error reporting when the research script or configuration file is missing
+- More specific runtime and process failure messages
+
+### Installation_Validation_Report\Python\research_requirements.py
+
+This Python module performs the Playwright-backed requirements research used by validation report content.
+
+The current behavior is:
+
+- Check cache before doing work
+- Use configured source mappings when available
+- Fall back to generic search strategies when not configured
+- Launch Playwright with msedge if possible, then chromium if necessary
+- Fall back to deterministic offline content when the research result is empty or incomplete
+- Cache successful results for repeatability
+
+## Validation Report Content Rules
+
+The report content rules were tightened so the output stays useful:
+
+- Section 1 is based on actual scrape output, not source labels or descriptive filler.
+- Status prose and extra narration are filtered out when they are not part of the scraped documentation itself.
+- If a section has no meaningful data, the report uses the exact fallback message instead of inventing text.
+- The report is now more predictable for technicians who need to compare one run against another.
+
+## Package Helper and Switch Generation
+
+The helper pipeline still exists, but its role is narrower and more focused now.
 
 ### Responsibilities
 
@@ -199,7 +331,7 @@ The helper pipeline:
 
 ### Background Execution
 
-Package Helper generation is now asynchronous from the GUI perspective:
+Package helper generation remains asynchronous from the GUI perspective:
 
 - A background job is created for helper generation.
 - A modeless progress dialog is shown.
@@ -224,7 +356,7 @@ It also removes or blocks undesirable command suggestions such as choco and wing
 
 ### Switch-Only Behavior
 
-The Install Command-line Switch and Uninstall Command-Line Switch boxes are intended to hold switch values, not executable paths. The helper layer now strips or avoids executable-style output so those boxes remain focused on actual switches.
+The Install Command-line Switch and Uninstall Command-Line Switch boxes are intended to hold switch values, not executable paths. The helper layer strips or avoids executable-style output so those boxes remain focused on actual switches.
 
 ## Start Packaging Workflow
 
@@ -285,7 +417,7 @@ The installation testing loop:
 
 ### Uninstallation Testing
 
-After install validation, the workflow optionally proceeds into uninstall testing.
+After install validation, the tool optionally proceeds into uninstall testing.
 
 ### Validation Documentation
 
@@ -581,7 +713,8 @@ The tool currently has the following notable characteristics:
 - Auto-populates metadata and context where possible
 - Rehydrates custom command content from existing package data
 - Uses a live process tab for status and logging
-- Keeps Package Helper generation responsive with background job polling
+- Keeps helper generation responsive with background job polling
+- Uses a Troubleshooting tab to scan logs and current code for suggested fixes
 - Applies helper suggestions back into the GUI
 - Supports validation documentation capture as part of the workflow
 - Supports optional network deployment after package completion
@@ -597,7 +730,8 @@ The tool currently has the following notable characteristics:
 ## Practical Risks and Notes
 
 - The Start Packaging workflow remains a long synchronous chain and can block the UI during the full create/build/test/deploy run.
-- The Package Helper flow is backgrounded at the job level, but it still relies on PowerShell job and timer coordination.
+- The helper flow is backgrounded at the job level, but it still relies on PowerShell job and timer coordination.
+- The Troubleshooting tab depends on current log availability and the current package code surface, so it is only as useful as the data it can inspect.
 - The repository contains many backup and temporary engine files that should not be confused with active modules.
 - Some module headers and comments still carry legacy wording from earlier versions.
 
@@ -613,10 +747,10 @@ If another machine is going to continue work on this project, the most important
 - src\Engines\InstallTestEngine\InstallTestEngine.psm1
 - src\Engines\ValidationReportEngine\ValidationReportEngine.psm1
 
-The live process log and Package Helper output path are the main places to observe runtime behavior.
+The live process log and Troubleshooting tab are the main places to observe runtime behavior.
 
 ## Conclusion
 
-FRB Packaging Tool is not a simple packaging form. It is a guided packaging workstation with modular engine boundaries, live workflow feedback, helper generation, validation documentation, and deployment support. The strongest architectural pattern in the current codebase is the split between the GUI shell and the individual feature engines. The most important operational behavior is that the GUI serves as the source of truth, with package data flowing back into the tool from existing Startup.pss content and helper generation outputs.
+FRB Packaging Tool is not a simple packaging form. It is a guided packaging workstation with modular engine boundaries, live workflow feedback, helper generation, validation documentation, troubleshooting support, and deployment support. The strongest architectural pattern in the current codebase is the split between the GUI shell and the individual feature engines. The most important operational behavior is that the GUI serves as the source of truth, with package data flowing back into the tool from existing Startup.pss content, helper generation outputs, and live log/code review output.
 
 For a second machine, this report should provide enough detail to understand the system at the feature level, the GUI level, and the engine level without needing to reverse-engineer the code from scratch.
