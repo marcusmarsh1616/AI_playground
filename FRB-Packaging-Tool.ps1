@@ -553,6 +553,119 @@ finally {
 # Order: 1. First-run detection, 2. Template check/token dialog, 3. Show GUI
 # ========================================
 
+# Function to update status - MUST be defined before Invoke-LoggedStartProcess
+function Write-ProcessOutputLine {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Message,
+
+        [string]$Level = "INFO"
+    )
+
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $line = "[{0}] [{1}] {2}" -f $timestamp, $Level, $Message
+
+    if ($script:ProcessOutputBox -and -not $script:ProcessOutputBox.IsDisposed) {
+        $script:ProcessOutputBox.AppendText($line + [Environment]::NewLine)
+        $script:ProcessOutputBox.SelectionStart = $script:ProcessOutputBox.TextLength
+        $script:ProcessOutputBox.ScrollToCaret()
+    }
+
+    if ($script:ProcessLogPath -and (Test-Path (Split-Path $script:ProcessLogPath -Parent))) {
+        Add-Content -Path $script:ProcessLogPath -Value $line -Encoding UTF8
+        if ($Level -eq "ERROR" -and $script:ProcessErrorLogPath) {
+            Add-Content -Path $script:ProcessErrorLogPath -Value $line -Encoding UTF8
+        }
+    }
+    else {
+        [void]$script:ProcessLogBuffer.Add($line)
+    }
+}
+
+function Invoke-LoggedStartProcess {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+
+        [string[]]$ArgumentList = @(),
+
+        [string]$WorkingDirectory = "",
+
+        [switch]$Wait,
+
+        [switch]$PassThru,
+
+        [switch]$CaptureOutput = $false,
+
+        [string]$Description = "Process"
+    )
+
+    $argumentText = if ($ArgumentList -and $ArgumentList.Count -gt 0) { ($ArgumentList -join ' ') } else { '' }
+    Write-ProcessOutputLine -Message ("{0} | Start-Process launching | FilePath={1} | Arguments={2}" -f $Description, $FilePath, $argumentText) -Level "INFO"
+
+    $stdoutPath = $null
+    $stderrPath = $null
+
+    try {
+        $startParams = @{
+            FilePath = $FilePath
+            ErrorAction = 'Stop'
+        }
+
+        if ($ArgumentList -and $ArgumentList.Count -gt 0) {
+            $startParams.ArgumentList = @($ArgumentList)
+        }
+        if (-not [string]::IsNullOrWhiteSpace($WorkingDirectory)) {
+            $startParams.WorkingDirectory = $WorkingDirectory
+        }
+        if ($CaptureOutput) {
+            $stdoutPath = [System.IO.Path]::GetTempFileName().Replace('.tmp', '.stdout.log')
+            $stderrPath = [System.IO.Path]::GetTempFileName().Replace('.tmp', '.stderr.log')
+            $startParams.RedirectStandardOutput = $stdoutPath
+            $startParams.RedirectStandardError = $stderrPath
+            $startParams.Wait = $true
+        }
+        if ($Wait) { $startParams.Wait = $true }
+        if ($PassThru) { $startParams.PassThru = $true }
+
+        $process = Start-Process @startParams
+
+        if ($CaptureOutput) {
+            foreach ($capture in @(
+                @{ Path = $stdoutPath; Level = 'INFO'; Label = 'stdout' },
+                @{ Path = $stderrPath; Level = 'ERROR'; Label = 'stderr' }
+            )) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$capture.Path) -and (Test-Path $capture.Path)) {
+                    foreach ($line in @(Get-Content -Path $capture.Path -ErrorAction SilentlyContinue | Select-Object -Last 50)) {
+                        if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
+                            Write-ProcessOutputLine -Message ("{0} | {1} | {2}" -f $Description, $capture.Label, ([string]$line).Trim()) -Level $capture.Level
+                        }
+                    }
+                }
+            }
+        }
+
+        if ($process -and ($PassThru -or $Wait)) {
+            $pid = if ($process.PSObject.Properties['Id']) { $process.Id } else { 'N/A' }
+            $exitCode = if ($process.PSObject.Properties['ExitCode']) { $process.ExitCode } else { 'N/A' }
+            Write-ProcessOutputLine -Message ("{0} | Start-Process completed | PID={1} | ExitCode={2}" -f $Description, $pid, $exitCode) -Level "INFO"
+        }
+        else {
+            Write-ProcessOutputLine -Message ("{0} | Start-Process launched successfully." -f $Description) -Level "INFO"
+        }
+
+        return $process
+    }
+    catch {
+        Write-ProcessOutputLine -Message ("{0} | Start-Process failed: {1}" -f $Description, $_.Exception.Message) -Level "ERROR"
+        throw
+    }
+    finally {
+        if ($stdoutPath) { Remove-Item -Path $stdoutPath -Force -ErrorAction SilentlyContinue }
+        if ($stderrPath) { Remove-Item -Path $stderrPath -Force -ErrorAction SilentlyContinue }
+    }
+}
+
 #region Step 1: First-Run Packaging Folder Initialization
 # Check if first-time setup has been completed on this PC
 $configPath = Join-Path $script:ToolRoot "config\app.config.json"
@@ -729,118 +842,8 @@ if ([string]::IsNullOrWhiteSpace($script:MasterTemplatePath) -or -not (Test-Path
 
 #region Helper Functions
 
-# Function to update status
-function Write-ProcessOutputLine {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Message,
-
-        [string]$Level = "INFO"
-    )
-
-    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $line = "[{0}] [{1}] {2}" -f $timestamp, $Level, $Message
-
-    if ($script:ProcessOutputBox -and -not $script:ProcessOutputBox.IsDisposed) {
-        $script:ProcessOutputBox.AppendText($line + [Environment]::NewLine)
-        $script:ProcessOutputBox.SelectionStart = $script:ProcessOutputBox.TextLength
-        $script:ProcessOutputBox.ScrollToCaret()
-    }
-
-    if ($script:ProcessLogPath -and (Test-Path (Split-Path $script:ProcessLogPath -Parent))) {
-        Add-Content -Path $script:ProcessLogPath -Value $line -Encoding UTF8
-        if ($Level -eq "ERROR" -and $script:ProcessErrorLogPath) {
-            Add-Content -Path $script:ProcessErrorLogPath -Value $line -Encoding UTF8
-        }
-    }
-    else {
-        [void]$script:ProcessLogBuffer.Add($line)
-    }
-}
-
-function Invoke-LoggedStartProcess {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$FilePath,
-
-        [string[]]$ArgumentList = @(),
-
-        [string]$WorkingDirectory = "",
-
-        [switch]$Wait,
-
-        [switch]$PassThru,
-
-        [switch]$CaptureOutput = $false,
-
-        [string]$Description = "Process"
-    )
-
-    $argumentText = if ($ArgumentList -and $ArgumentList.Count -gt 0) { ($ArgumentList -join ' ') } else { '' }
-    Write-ProcessOutputLine -Message ("{0} | Start-Process launching | FilePath={1} | Arguments={2}" -f $Description, $FilePath, $argumentText) -Level "INFO"
-
-    $stdoutPath = $null
-    $stderrPath = $null
-
-    try {
-        $startParams = @{
-            FilePath = $FilePath
-            ErrorAction = 'Stop'
-        }
-
-        if ($ArgumentList -and $ArgumentList.Count -gt 0) {
-            $startParams.ArgumentList = @($ArgumentList)
-        }
-        if (-not [string]::IsNullOrWhiteSpace($WorkingDirectory)) {
-            $startParams.WorkingDirectory = $WorkingDirectory
-        }
-        if ($CaptureOutput) {
-            $stdoutPath = [System.IO.Path]::GetTempFileName().Replace('.tmp', '.stdout.log')
-            $stderrPath = [System.IO.Path]::GetTempFileName().Replace('.tmp', '.stderr.log')
-            $startParams.RedirectStandardOutput = $stdoutPath
-            $startParams.RedirectStandardError = $stderrPath
-            $startParams.Wait = $true
-        }
-        if ($Wait) { $startParams.Wait = $true }
-        if ($PassThru) { $startParams.PassThru = $true }
-
-        $process = Start-Process @startParams
-
-        if ($CaptureOutput) {
-            foreach ($capture in @(
-                @{ Path = $stdoutPath; Level = 'INFO'; Label = 'stdout' },
-                @{ Path = $stderrPath; Level = 'ERROR'; Label = 'stderr' }
-            )) {
-                if (-not [string]::IsNullOrWhiteSpace([string]$capture.Path) -and (Test-Path $capture.Path)) {
-                    foreach ($line in @(Get-Content -Path $capture.Path -ErrorAction SilentlyContinue | Select-Object -Last 50)) {
-                        if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
-                            Write-ProcessOutputLine -Message ("{0} | {1} | {2}" -f $Description, $capture.Label, ([string]$line).Trim()) -Level $capture.Level
-                        }
-                    }
-                }
-            }
-        }
-
-        if ($process -and ($PassThru -or $Wait)) {
-            $pid = if ($process.PSObject.Properties['Id']) { $process.Id } else { 'N/A' }
-            $exitCode = if ($process.PSObject.Properties['ExitCode']) { $process.ExitCode } else { 'N/A' }
-            Write-ProcessOutputLine -Message ("{0} | Start-Process completed | PID={1} | ExitCode={2}" -f $Description, $pid, $exitCode) -Level "INFO"
-        }
-        else {
-            Write-ProcessOutputLine -Message ("{0} | Start-Process launched successfully." -f $Description) -Level "INFO"
-        }
-
-        return $process
-    }
-    catch {
-        Write-ProcessOutputLine -Message ("{0} | Start-Process failed: {1}" -f $Description, $_.Exception.Message) -Level "ERROR"
-        throw
-    }
-    finally {
-        if ($stdoutPath) { Remove-Item -Path $stdoutPath -Force -ErrorAction SilentlyContinue }
-        if ($stderrPath) { Remove-Item -Path $stderrPath -Force -ErrorAction SilentlyContinue }
-    }
-}
+# Write-ProcessOutputLine is now defined earlier in the script (before Invoke-LoggedStartProcess)
+# to ensure it's available when needed
 
 function Get-ManualNativePowerShellGuidance {
     param(
@@ -965,6 +968,7 @@ function Get-TroubleshootingLogInsights {
         Findings = @($findings | Select-Object -Unique)
         Recommendations = @($recommendations | Select-Object -Unique)
     }
+}
 }
 
 function Get-TroubleshootingLogInsights {
