@@ -372,18 +372,24 @@ function New-HTMLUninstallReport {
     }
     
     try {
-        # Determine status
-        $statusColor = if ($LeftoverData.Found) { "#ffc107" } else { "#28a745" }
-        $statusIcon = if ($LeftoverData.Found) { "[WARN]" } else { "[PASS]" }
-        $statusText = if ($LeftoverData.Found) { "Leftovers Detected" } else { "Clean Uninstall" }
-        
+        # Determine status (machine-level leftovers are actionable; user-level leftovers may be preserved by policy).
+        $machineLeftoverCount = if ($LeftoverData.ContainsKey('MachineLeftoverCount')) { [int]$LeftoverData.MachineLeftoverCount } else { if ($LeftoverData.Found) { [int]$LeftoverData.Details.Count } else { 0 } }
+        $userLeftoverCount = if ($LeftoverData.ContainsKey('UserLeftoverCount')) { [int]$LeftoverData.UserLeftoverCount } else { 0 }
+
+        $statusColor = if ($machineLeftoverCount -gt 0) { "#ffc107" } else { "#28a745" }
+        $statusIcon = if ($machineLeftoverCount -gt 0) { "[WARN]" } else { "[PASS]" }
+        $statusText = if ($machineLeftoverCount -gt 0) { "Machine-Level Leftovers Detected" } else { "Clean Uninstall" }
+
         # Build leftovers HTML
         $leftoversHTML = ""
         if ($LeftoverData.Found -and $LeftoverData.Details.Count -gt 0) {
             $folders = $LeftoverData.Details | Where-Object { $_.Type -eq "Folder" }
             $registry = $LeftoverData.Details | Where-Object { $_.Type -eq "Registry" }
             $uninstallEntries = $LeftoverData.Details | Where-Object { $_.Type -eq "Uninstall Entry" }
-            
+            $desktopShortcuts = $LeftoverData.Details | Where-Object { $_.Type -eq "Desktop Shortcut" }
+            $startMenuItems = $LeftoverData.Details | Where-Object { $_.Type -like "Start Menu*" }
+            $userScopedItems = $LeftoverData.Details | Where-Object { $_.Scope -eq "User" }
+
             if ($folders) {
                 $leftoversHTML += "<div class='leftover-section'>`n<h3>Leftover Folders ($($folders.Count))</h3>`n<div class='leftover-list'>`n"
                 foreach ($folder in $folders) {

@@ -42,7 +42,7 @@ function Get-InstalledVersion{
 	.PARAMETER Regex
 		Use regex matching for application names.
 	.PARAMETER Context
-		System (HKLM) or System (HKCU) registry context.
+		System (HKLM) or User (HKCU) registry context.
 	.EXAMPLE
 		Get-InstalledVersion -DetectType 'File' -SearchArray @{'C:\Program Files\App\app.exe' = '1.0.0'}
 		Get-InstalledVersion -DetectType 'default' -SearchArray @{'Adobe Acrobat' = '2024.1.0'} -Context 'System'
@@ -63,7 +63,7 @@ function Get-InstalledVersion{
 	)
 	
 	$resultFinal = [System.Collections.ArrayList]::new()
-	$testResults = @()  # For Test mode output
+	$testResults = [System.Collections.ArrayList]::new()  # For Test mode output
 
 	#region [Scriptblocks]
 	[scriptblock]$DetectDefault = {
@@ -71,8 +71,8 @@ function Get-InstalledVersion{
 			$DisplayName,
 			$DisplayVersion		
 		)
-		$regPaths = @("Registry::HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall","Registry::HKLM\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall")
-		if ($Context -eq 'System') { $regPaths = @("Registry::HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall","Registry::HKCU\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall") }
+		$regPaths = @("Registry::HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall","Registry::HKCU\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall")
+		if ($Context -eq 'System') { $regPaths = @("Registry::HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall","Registry::HKLM\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall") }
 		
 		foreach ($path in $regPaths)
 		{
@@ -85,16 +85,16 @@ function Get-InstalledVersion{
 						[version]$installedVersion = $app.'DisplayVersion'
 						
 						if ($DetectType -eq 'Test') {
-							$script:testResults += [PSCustomObject]@{
+							$null = $testResults.Add([PSCustomObject]@{
 								DisplayName = $app.DisplayName
 								InstalledVersion = $installedVersion.ToString()
 								TargetVersion = $displayVersion.ToString()
 								MeetsRequirement = ($installedVersion -ge $displayVersion)
 								Comparison = if ($installedVersion -ge $displayVersion) { "PASS (>="} else { "FAIL (<)" }
 								RegistryPath = $app.PSPath
-							}
+							})
 						}
-						
+
 						# CRITICAL: Check if installed version is GREATER THAN OR EQUAL TO target
 						if($installedVersion -ge $displayVersion)
 						{
@@ -104,14 +104,14 @@ function Get-InstalledVersion{
 					catch {
 						# Version parsing failed - log in test mode
 						if ($DetectType -eq 'Test') {
-							$script:testResults += [PSCustomObject]@{
+							$null = $testResults.Add([PSCustomObject]@{
 								DisplayName = $app.DisplayName
 								InstalledVersion = "ERROR: $($app.DisplayVersion)"
 								TargetVersion = $displayVersion.ToString()
 								MeetsRequirement = $false
 								Comparison = "ERROR (version parse failed)"
 								RegistryPath = $app.PSPath
-							}
+							})
 						}
 					}
 				}
@@ -137,16 +137,16 @@ function Get-InstalledVersion{
 				[version]$installedFileVersion = $versionInfo.ProductVersion.Replace(',','.').Split(' ')[0]
 				
 				if ($DetectType -eq 'Test') {
-					$script:testResults += [PSCustomObject]@{
+					$null = $testResults.Add([PSCustomObject]@{
 						DisplayName = $versionInfo.ProductName
 						InstalledVersion = $installedFileVersion.ToString()
 						TargetVersion = $fileVersion.ToString()
 						MeetsRequirement = ($installedFileVersion -ge $fileVersion)
 						Comparison = if ($installedFileVersion -ge $fileVersion) { "PASS (>=)" } else { "FAIL (<)" }
 						FilePath = $filePath
-					}
+					})
 				}
-				
+
 				# CRITICAL: Check if installed version is GREATER THAN OR EQUAL TO target
 				if($installedFileVersion -ge $fileVersion )
 				{
@@ -155,27 +155,27 @@ function Get-InstalledVersion{
 			}
 			catch {
 				if ($DetectType -eq 'Test') {
-					$script:testResults += [PSCustomObject]@{
+					$null = $testResults.Add([PSCustomObject]@{
 						DisplayName = "Unknown"
 						InstalledVersion = "ERROR"
 						TargetVersion = $fileVersion.ToString()
 						MeetsRequirement = $false
 						Comparison = "ERROR (file read failed)"
 						FilePath = $filePath
-					}
+					})
 				}
 			}
 		}
 		else {
 			if ($DetectType -eq 'Test') {
-				$script:testResults += [PSCustomObject]@{
+				$null = $testResults.Add([PSCustomObject]@{
 					DisplayName = "N/A"
 					InstalledVersion = "NOT FOUND"
 					TargetVersion = $fileVersion.ToString()
 					MeetsRequirement = $false
 					Comparison = "ERROR (file does not exist)"
 					FilePath = $filePath
-				}
+				})
 			}
 		}
 	}
@@ -216,8 +216,12 @@ function Get-InstalledVersion{
 	}
 
 	# Return test results if in Test mode
+	# NOTE: the leading comma prevents PowerShell from unrolling a single-item
+	# ArrayList into its bare element on return, which would otherwise make
+	# $detected.Count fail (and every downstream -Test check with it) whenever
+	# exactly one matching application is found.
 	if ($DetectType -eq 'Test') {
-		return $testResults
+		return ,$testResults
 	}
 
 	if($resultFinal -notcontains $false){
@@ -231,8 +235,8 @@ if ($PSBoundParameters['Test']) {
 #endregion [DO NOT TOUCH]
 
 # Options
-$Systemegex = $true # For advanced searching, set this option to $true and use your own Regex values.
-$installContext = 'System' # Determines which registry location to search. (i.e. "System = HKLM:" vs. "System = HKCU:")
+$useRegex = $false # For advanced searching, set this option to $true and use your own Regex values.
+$installContext = 'System' # Determines which registry location to search. (i.e. "System = HKLM:" vs. "User = HKCU:")
 
 # Enter the application(s) or file(s) you are looking for.
 # NOTE: Version comparison is GREATER THAN OR EQUAL (>=)
@@ -241,7 +245,7 @@ $infoHash = @{
 }
 
 #region [Detection Selection]
-$detected = Get-InstalledVersion -DetectType $detectType -SearchArray $infoHash -Regex $Systemegex -Context $installContext
+$detected = Get-InstalledVersion -DetectType $detectType -SearchArray $infoHash -Regex $useRegex -Context $installContext
 
 # TEST MODE: Output detailed findings for validation
 if ($Test) {
@@ -253,8 +257,8 @@ if ($Test) {
 	
 	Write-Host "Search Pattern: {APPLICATION_DISPLAY_NAME}" -ForegroundColor White
 	Write-Host "Target Version: {TARGET_VERSION} (minimum required)" -ForegroundColor White
-	Write-Host "Context: System" -ForegroundColor White
-	Write-Host "Regex Enabled: $true" -ForegroundColor White
+	Write-Host "Context: $installContext" -ForegroundColor White
+	Write-Host "Regex Enabled: $useRegex" -ForegroundColor White
 	Write-Host "" -ForegroundColor Cyan
 	
 	if ($detected -and $detected.Count -gt 0) {
@@ -279,8 +283,8 @@ if ($Test) {
 			Write-Host "" -ForegroundColor Cyan
 		}
 		
-		$passCount = ($detected | Where-Object { $_.MeetsRequirement }).Count
-		$failCount = ($detected | Where-Object { -not $_.MeetsRequirement }).Count
+		$passCount = @($detected | Where-Object { $_.MeetsRequirement }).Count
+		$failCount = @($detected | Where-Object { -not $_.MeetsRequirement }).Count
 		
 		Write-Host "Summary:" -ForegroundColor Cyan
 		Write-Host "  Total Found:   $($detected.Count)" -ForegroundColor White
@@ -302,7 +306,7 @@ if ($Test) {
 		Write-Host "Troubleshooting:" -ForegroundColor Yellow
 		Write-Host "  1. Check if application is installed" -ForegroundColor White
 		Write-Host "  2. Verify DisplayName in registry matches pattern" -ForegroundColor White
-		Write-Host "  3. Check registry context (System vs System)" -ForegroundColor White
+		Write-Host "  3. Check registry context (System vs User)" -ForegroundColor White
 		Write-Host "  4. Try running without -Test to see Intune behavior" -ForegroundColor White
 	}
 	

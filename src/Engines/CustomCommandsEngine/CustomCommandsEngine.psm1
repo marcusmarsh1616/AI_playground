@@ -314,22 +314,29 @@ function Get-CustomCommandsFromStartupPss {
         AppUninstallExeName = ""
         AppInstallCommandLine = ""
         AppUninstallCommandLine = ""
+        AppStopRequiredProcesses = ""
+        AppPrompt = $false
+        AppReboot = $false
     }
-    
+
     try {
         if (-not (Test-Path $StartupPssPath)) {
             return $result
         }
-        
+
         $lines = Get-Content $StartupPssPath
-        
+
         # STEP 1: Extract metadata variables from VARIABLE DECLARATION section ONLY
         $inVarDeclaration = $false
         $foundUninstallExe = $false
         $foundInstallCmd = $false
         $foundUninstallCmd = $false
-        $assignmentRegex = '^\s*\[string\]\s*\$(?<varName>appUninstallExeName|appInstallCommandLine|appUninstallCommandLine)\s*='
-        
+        $foundStopProcesses = $false
+        $foundAppPrompt = $false
+        $foundAppReboot = $false
+        $assignmentRegex = '^\s*\[string\]\s*\$(?<varName>appUninstallExeName|appInstallCommandLine|appUninstallCommandLine|appStopRequiredProcesses)\s*='
+        $booleanAssignmentRegex = '^\s*\[boolean\]\s*\$(?<varName>appPrompt|appReboot)\s*=\s*\$(?<boolValue>true|false)'
+
         foreach ($line in $lines) {
             # Find section boundaries
             if ($line.Contains("VARIABLE DECLARATION")) {
@@ -339,10 +346,23 @@ function Get-CustomCommandsFromStartupPss {
             if ($line.Contains("END VARIABLE DECLARATION")) {
                 break  # Stop looking after this section
             }
-            
+
             # Only extract if we are inside VARIABLE DECLARATION section
             if ($inVarDeclaration) {
-                if ($line -match $assignmentRegex) {
+                if ($line -match $booleanAssignmentRegex) {
+                    $boolVarName = $matches['varName']
+                    $boolValue = $matches['boolValue'] -eq 'true'
+
+                    if ($boolVarName -eq 'appPrompt' -and -not $foundAppPrompt) {
+                        $result.AppPrompt = $boolValue
+                        $foundAppPrompt = $true
+                    }
+                    elseif ($boolVarName -eq 'appReboot' -and -not $foundAppReboot) {
+                        $result.AppReboot = $boolValue
+                        $foundAppReboot = $true
+                    }
+                }
+                elseif ($line -match $assignmentRegex) {
                     $varName = $matches['varName']
                     $value = ($line -split '=', 2)[1].Trim()
 
@@ -372,6 +392,10 @@ function Get-CustomCommandsFromStartupPss {
                     elseif ($varName -eq 'appUninstallCommandLine' -and -not $foundUninstallCmd) {
                         $result.AppUninstallCommandLine = $value
                         $foundUninstallCmd = $true
+                    }
+                    elseif ($varName -eq 'appStopRequiredProcesses' -and -not $foundStopProcesses) {
+                        $result.AppStopRequiredProcesses = $value
+                        $foundStopProcesses = $true
                     }
                 }
             }

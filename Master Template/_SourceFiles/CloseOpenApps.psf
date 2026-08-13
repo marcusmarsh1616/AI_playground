@@ -1717,7 +1717,8 @@ $OnLoadFormEvent = {
 	$OpenProcessesPrompt = $FRBOpenProcessesToCheck | Get-FRBOpenProcess -DoPrompt	
 	Load-ListBox -ListBox $listbox1 -DisplayMember "FriendlyDescription" -Items $OpenProcessesPrompt
 	#setting timer length
-	$script:EndTimeOpenProcess = (Get-Date).AddMinutes(5)
+	$script:DialogTimingConfig = Get-DialogTimingConfig
+	$script:EndTimeOpenProcess = (Get-Date).AddMinutes($script:DialogTimingConfig.CloseOpenAppsTimeoutMinutes)
 	$timer1.Enabled = $true
 	$timer1.Interval = 1000 # internval is in milliseconds, so 1000 means a second. 
 	$timer1.Start()

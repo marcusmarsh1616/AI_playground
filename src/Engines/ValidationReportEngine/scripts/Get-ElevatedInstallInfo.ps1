@@ -13,12 +13,19 @@
 param(
     [Parameter(Mandatory=$true)]
     [string]$AppName,
-    
+
+    [Parameter(Mandatory=$false)]
+    [string]$AppVersion = "",
+
     [Parameter(Mandatory=$true)]
     [string]$OutputFile
 )
 
 $ErrorActionPreference = 'Continue'
+
+# Escape once and reuse everywhere -match is used against a technician-entered
+# name; unescaped, characters like '.', '(', '+' make the regex misbehave.
+$NamePattern = [regex]::Escape($AppName)
 
 # Build output text
 $output = @()
@@ -32,10 +39,20 @@ $RegPaths = @(
     "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*"
 )
 
-$RegistryMatches = Get-ItemProperty -Path $RegPaths -ErrorAction SilentlyContinue | 
-    Where-Object { $_.DisplayName -match $AppName -or $_.PSChildName -match $AppName }
+$RegistryMatches = @(Get-ItemProperty -Path $RegPaths -ErrorAction SilentlyContinue |
+    Where-Object { $_.DisplayName -match $NamePattern -or $_.PSChildName -match $NamePattern })
 
-if ($RegistryMatches) {
+if ($RegistryMatches.Count -gt 0) {
+    if (-not [string]::IsNullOrWhiteSpace($AppVersion)) {
+        $versionMatches = @($RegistryMatches | Where-Object { $_.DisplayVersion -and $_.DisplayVersion.Trim() -eq $AppVersion.Trim() })
+        if ($versionMatches.Count -gt 0) {
+            $RegistryMatches = $versionMatches
+        } else {
+            $output += "[WARNING] No uninstall registry entry for '$AppName' has DisplayVersion matching claimed version '$AppVersion'. Found version(s): $((@($RegistryMatches | ForEach-Object { $_.DisplayVersion }) | Where-Object { $_ } | Select-Object -Unique) -join ', ')"
+            $output += ""
+        }
+    }
+
     $output += "[UNINSTALL REGISTRY KEYS]"
     foreach ($Reg in $RegistryMatches) {
         $output += "  Display Name: $($Reg.DisplayName)"
@@ -66,7 +83,7 @@ $configRoots = @(
 foreach ($root in $configRoots) {
     if (Test-Path $root) {
         $topLevel = Get-ChildItem $root -ErrorAction SilentlyContinue | 
-            Where-Object { $_.PSChildName -match $AppName }
+            Where-Object { $_.PSChildName -match $NamePattern }
         foreach ($key in $topLevel) {
             $ConfigKeys += $key.PSPath
         }
@@ -74,7 +91,7 @@ foreach ($root in $configRoots) {
         $vendors = Get-ChildItem $root -ErrorAction SilentlyContinue
         foreach ($vendor in $vendors) {
             $appKeys = Get-ChildItem $vendor.PSPath -ErrorAction SilentlyContinue | 
-                Where-Object { $_.PSChildName -match $AppName }
+                Where-Object { $_.PSChildName -match $NamePattern }
             foreach ($key in $appKeys) {
                 $ConfigKeys += $key.PSPath
             }
@@ -104,13 +121,13 @@ $StartMenuEntries = @()
 foreach ($path in $StartMenuPaths) {
     if (Test-Path $path) {
         $folders = Get-ChildItem $path -Directory -ErrorAction SilentlyContinue | 
-            Where-Object { $_.Name -match $AppName }
+            Where-Object { $_.Name -match $NamePattern }
         foreach ($folder in $folders) {
             $StartMenuEntries += $folder.FullName
         }
         
         $shortcuts = Get-ChildItem $path -Filter "*.lnk" -ErrorAction SilentlyContinue | 
-            Where-Object { $_.Name -match $AppName }
+            Where-Object { $_.Name -match $NamePattern }
         foreach ($shortcut in $shortcuts) {
             $StartMenuEntries += $shortcut.FullName
         }
@@ -129,7 +146,7 @@ $output += ""
 # --- 4. SERVICES ---
 $output += "[SERVICES]"
 $foundServices = Get-Service -ErrorAction SilentlyContinue | 
-    Where-Object { $_.DisplayName -match $AppName -or $_.Name -match $AppName }
+    Where-Object { $_.DisplayName -match $NamePattern -or $_.Name -match $NamePattern }
 
 if ($foundServices) {
     foreach ($svc in $foundServices) {
@@ -172,7 +189,7 @@ $SearchRoots = @(
 foreach ($Root in $SearchRoots) {
     if (Test-Path $Root) {
         $FoundDirs = Get-ChildItem -Path $Root -Directory -ErrorAction SilentlyContinue | 
-            Where-Object { $_.Name -match $AppName }
+            Where-Object { $_.Name -match $NamePattern }
         foreach ($FD in $FoundDirs) { 
             $TargetDirs += $FD.FullName 
         }

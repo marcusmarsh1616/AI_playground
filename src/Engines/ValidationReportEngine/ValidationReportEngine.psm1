@@ -117,7 +117,14 @@ function Start-ValidationReportCapture {
 
         [Parameter(Mandatory = $false)]
         [ValidateSet('System', 'User')]
-        [string]$InstallContext = 'System'
+        [string]$InstallContext = 'System',
+
+        # Optional callback invoked once a real capture mode (Automated/Manual)
+        # is chosen, before capture work starts. Lets the caller (main GUI
+        # script) bring its live process log into view without this module
+        # needing direct access to the main script's WinForms controls.
+        [Parameter(Mandatory = $false)]
+        [scriptblock]$OnModeSelected = $null
     )
 
     $result = @{
@@ -136,16 +143,19 @@ function Start-ValidationReportCapture {
         $mode = Show-ValidationCaptureModeDialog -AppName $AppName -AppVersion $AppVersion
         $result.Mode = $mode
         if ($mode -eq "None") {
-            [System.Windows.Forms.MessageBox]::Show(
-                "Validation report generation was skipped.`n`nIf you want to capture this report later, you will need to reinstall the software so the full capture sequence can be performed again.",
-                "Validation Report Deferred",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Information
-            )
+            Write-Verbose "Validation report generation was skipped. Reinstall the software to capture it later."
 
             $result.Success = $true
             $result.Message = "Validation report deferred by technician (Mode: None). Reinstall is required to capture later."
             return $result
+        }
+
+        if ($OnModeSelected) {
+            try {
+                & $OnModeSelected $mode
+            }
+            catch {
+            }
         }
 
         if (-not (Test-Path $uiEnginePath)) {

@@ -252,5 +252,95 @@ function Get-InstallContextRecommendation {
     return $result
 }
 
+function New-PackageDetectionScript {
+    <#
+    .SYNOPSIS
+        Generates a per-package Intune detection script from the Master
+        Template's PhoenixFrame-DetectionScript-Template.ps1.
+    .DESCRIPTION
+        Substitutes the 6 placeholders documented in
+        PhoenixFrame-DetectionScript-Guide.md ({CREATION_DATE}, {RITM},
+        {APP_NAME}, {APPLICATION_DISPLAY_NAME}, {TARGET_VERSION},
+        {VENDOR_NAME}) via literal string replace, matching the convention
+        already used for README/CHANGELOG generation. The System/User
+        registry context is driven by the GUI's own InstallContext value
+        (the same one already written into Startup.pss) rather than a
+        separate input, so there is one source of truth for context.
+        Output is written at the package root as
+        RITM{number}_{AppName}_Detect_R1.ps1, per the Guide's documented
+        naming convention.
+    .PARAMETER TemplatePath
+        Path to Master Template\PhoenixFrame-DetectionScript-Template.ps1
+    .PARAMETER PackagePath
+        Path to the per-package folder (detection script is written at its root)
+    .OUTPUTS
+        Hashtable with keys: Success (bool), OutputPath (string), Message (string)
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TemplatePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$PackagePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Vendor,
+
+        [Parameter(Mandatory = $true)]
+        [string]$AppName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Version,
+
+        [Parameter(Mandatory = $false)]
+        [string]$Ritm = "",
+
+        [Parameter(Mandatory = $false)]
+        [string]$InstallContext = "System"
+    )
+
+    Write-Verbose "DetectionEngine: Generating package detection script"
+
+    try {
+        if (-not (Test-Path $TemplatePath)) {
+            throw "Detection script template not found: $TemplatePath"
+        }
+
+        $safeAppName = [regex]::Replace($AppName, '[^A-Za-z0-9]', '')
+        $safeRitm = if ([string]::IsNullOrWhiteSpace($Ritm)) { "RITM00000000" } else { $Ritm.Trim() }
+
+        $content = Get-Content -Path $TemplatePath -Raw -Encoding UTF8
+        $content = $content.Replace('{CREATION_DATE}', (Get-Date -Format "yyyy-MM-dd HH:mm:ss"))
+        $content = $content.Replace('{RITM}', $safeRitm)
+        $content = $content.Replace('{APP_NAME}', $safeAppName)
+        $content = $content.Replace('{APPLICATION_DISPLAY_NAME}', $AppName)
+        $content = $content.Replace('{TARGET_VERSION}', $Version)
+        $content = $content.Replace('{VENDOR_NAME}', $Vendor)
+
+        $normalizedContext = if ($InstallContext -eq "User") { "User" } else { "System" }
+        $content = $content -replace "\`$installContext\s*=\s*'[^']*'", "`$installContext = '$normalizedContext'"
+
+        $outputFileName = "{0}_{1}_Detect_R1.ps1" -f $safeRitm, $safeAppName
+        $outputPath = Join-Path $PackagePath $outputFileName
+        $content | Set-Content -Path $outputPath -Encoding UTF8 -Force
+
+        Write-Verbose "DetectionEngine: Detection script written to $outputPath"
+        return @{
+            Success = $true
+            OutputPath = $outputPath
+            Message = "Detection script generated successfully"
+        }
+    }
+    catch {
+        Write-Error "DetectionEngine: Error generating detection script - $($_.Exception.Message)"
+        return @{
+            Success = $false
+            OutputPath = ""
+            Message = $_.Exception.Message
+        }
+    }
+}
+
 # Export public functions
-Export-ModuleMember -Function Get-InstallerType, Get-InstallContextRecommendation
+Export-ModuleMember -Function Get-InstallerType, Get-InstallContextRecommendation, New-PackageDetectionScript

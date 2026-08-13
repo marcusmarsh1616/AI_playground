@@ -134,6 +134,8 @@ $script:SavedUninstallSwitch = ""
 $script:SavedUninstallExecutable = ""
 $script:SelectedInstallContext = "System"
 $script:ContextRecommendation = @{}
+$script:LastTroubleshootingContext = "Install"
+$script:LastStartProcessFallbackTemplate = ""
 $script:PackageHelperControls = @{}
 $script:PackageHelperData = $null
 $script:CodeEditorToolTip = $null
@@ -159,8 +161,10 @@ $script:PackageHelperPendingRefresh = $false
 $script:PackageHelperActiveJob = $null
 $script:PackageHelperPollTimer = $null
 $script:LastPackageHelperAutoTriggerSignature = ""
-$script:PackageHelperAutoRefreshEnabled = $false
+$script:PackageHelperAutoRefreshEnabled = $true
 $script:PackageHelperAutoRefreshInfoLogged = $false
+$script:PackageHelperResultCacheSignature = ""
+$script:PackageHelperResultCacheData = $null
 $script:CustomCommandStyleChoices = @{}
 
 #region Configuration
@@ -217,6 +221,13 @@ else {
 $script:InstallationMediaPath = ""
 $script:DetectedInstallerType = ""
 $script:LastCreatedPackagePath = ""
+
+# Advanced Package Settings state (Milestone B)
+$script:DetectedMsiProductCode = ""
+$script:DetectedMsiTransformPath = ""
+$script:AdvancedStopProcesses = @()
+$script:AdvancedAppPrompt = $false
+$script:AdvancedAppReboot = $false
 
 #endregion Configuration
 
@@ -509,9 +520,10 @@ try {
         $splash.Refresh()
         Start-Sleep -Milliseconds 800
     }
-    
+
         Write-Verbose "All engines loaded successfully"
-    
+
+    Import-Module (Join-Path $script:ToolRoot "src\Core\LogWatcher.psm1") -Force -ErrorAction Stop
 }
 catch {
     # Close splash screen if error occurs
@@ -553,7 +565,8 @@ finally {
 # Order: 1. First-run detection, 2. Template check/token dialog, 3. Show GUI
 # ========================================
 
-# Function to update status - MUST be defined before Invoke-LoggedStartProcess
+
+# Function to update status
 function Write-ProcessOutputLine {
     param(
         [Parameter(Mandatory = $true)]
@@ -842,9 +855,6 @@ if ([string]::IsNullOrWhiteSpace($script:MasterTemplatePath) -or -not (Test-Path
 
 #region Helper Functions
 
-# Write-ProcessOutputLine is now defined earlier in the script (before Invoke-LoggedStartProcess)
-# to ensure it's available when needed
-
 function Get-ManualNativePowerShellGuidance {
     param(
         [string]$CodeText
@@ -885,6 +895,10 @@ function Get-ManualNativePowerShellGuidance {
 }
 
 function Get-TroubleshootingLogPaths {
+    param(
+        [Nullable[datetime]]$Since = $null
+    )
+
     $paths = New-Object System.Collections.Generic.List[string]
 
     foreach ($candidate in @($script:ProcessLogPath, $script:ProcessErrorLogPath, $script:ErrorLogPath, $script:TranscriptPath)) {
@@ -893,12 +907,21 @@ function Get-TroubleshootingLogPaths {
         }
     }
 
+    $installLogsRoot = if ($script:SelectedInstallContext -eq 'User') {
+        Join-Path $env:TEMP 'InstallLogs'
+    }
+    else {
+        "${env:CommonProgramFiles(x86)}\InstallLogs"
+    }
+
     foreach ($rootCandidate in @(
         (Join-Path $PSScriptRoot 'logs'),
-        (Join-Path $script:ToolRoot 'logs')
+        (Join-Path $script:ToolRoot 'logs'),
+        $installLogsRoot
     )) {
         if (-not (Test-Path $rootCandidate)) { continue }
         foreach ($file in @(Get-ChildItem -Path $rootCandidate -File -Include *.log, *.txt, *.jsonl -ErrorAction SilentlyContinue)) {
+            if ($Since -and $file.LastWriteTime -lt $Since) { continue }
             [void]$paths.Add($file.FullName)
         }
     }
@@ -906,74 +929,114 @@ function Get-TroubleshootingLogPaths {
     return @($paths | Select-Object -Unique)
 }
 
-function Get-TroubleshootingLogInsights {
-    $logPaths = @(Get-TroubleshootingLogPaths)
+function Get-StartProcessFallbackTemplate {
+    <#
+    .SYNOPSIS
+        Generates an insertable Start-Process block that mirrors Execute-Process's logging/flow
+        for use when Execute-Process is failing or not launching reliably.
+    .PARAMETER PathVariable
+        The variable name (without $) that holds the installer/uninstaller path, e.g. "uninstallerPath".
+    .PARAMETER ArgumentList
+        The switch/argument string to pass, e.g. "/uninstall /quiet /NoRestart".
+    .PARAMETER AppName
+        Display name used in the log messages.
+    #>
+    param(
+        [string]$PathVariable = "uninstallerPath",
+        [string]$ArgumentList = "/uninstall /quiet /NoRestart",
+        [string]$AppName = '$appName $appVersion'
+    )
+
+    $argTokens = ($ArgumentList -split '\s+' | Where-Object { $_ }) | ForEach-Object { "'$_'" }
+    $argListLiteral = $argTokens -join ', '
+
+    return @"
+try {
+    Write-Log -Message "Uninstalling $AppName..."
+    Start-Process -FilePath `$$PathVariable ``
+                  -ArgumentList $argListLiteral ``
+                  -Wait -ErrorAction Stop
+    Write-Log -Message "Uninstall completed."
+}
+catch {
+    Write-Log -Message "Failed to uninstall $AppName. Error: `$(`$_.Exception.Message)"
+}
+"@
+}
+
+function Test-LikelyEmbeddedMsi {
+    <#
+    .SYNOPSIS
+        Lightweight heuristic hint for whether an installer likely wraps an embedded MSI.
+        Not binary extraction - just pattern matching on installer type and configured switch,
+        intentionally kept out of full media inspection per design.
+    #>
+    param(
+        [string]$InstallerType = "",
+        [string]$ConfiguredSwitch = ""
+    )
+
+    if ($InstallerType -eq 'InstallShield') {
+        return $true
+    }
+
+    if ($ConfiguredSwitch -match '(?i)^\s*/s\s+/v"') {
+        return $true
+    }
+
+    return $false
+}
+
+function Get-TroubleshootingSwitchAndMediaFindings {
+    <#
+    .SYNOPSIS
+        Checks the configured install/uninstall switches against the known candidates for the
+        detected installer type, and flags a likely-embedded-MSI hint. Returns findings +
+        recommendations lists (not just prose) tagged with Category so the tab can attribute them.
+    #>
+    param(
+        [string]$InstallSwitch = "",
+        [string]$UninstallSwitch = ""
+    )
+
     $findings = New-Object System.Collections.Generic.List[string]
     $recommendations = New-Object System.Collections.Generic.List[string]
-    $summaryLines = New-Object System.Collections.Generic.List[string]
 
-    if (-not $logPaths -or $logPaths.Count -eq 0) {
-        return [ordered]@{
-            LogPaths = @()
-            Summary = "No log files were found yet."
-            Findings = @($script:NoDataMessage)
-            Recommendations = @("Run a packaging or validation action so the tool can capture live process and error logs.")
+    $installerType = if ([string]::IsNullOrWhiteSpace($script:DetectedInstallerType)) { "Generic" } else { $script:DetectedInstallerType }
+
+    if (-not [string]::IsNullOrWhiteSpace($InstallSwitch)) {
+        $knownInstallSwitches = @(Get-InstallSwitches -InstallerType $installerType)
+        if ($knownInstallSwitches -notcontains $InstallSwitch.Trim()) {
+            [void]$findings.Add(("[Switches] Configured install switch '{0}' does not match known patterns for installer type '{1}'." -f $InstallSwitch.Trim(), $installerType))
+            [void]$recommendations.Add(("Consider one of the known install switches for {0}: {1}" -f $installerType, ($knownInstallSwitches -join ' | ')))
         }
     }
 
-    foreach ($path in $logPaths) {
-        try {
-            $tail = Get-Content -Path $path -Tail 250 -ErrorAction Stop
-        }
-        catch {
-            continue
-        }
-
-        if (-not $tail) { continue }
-    if ($CommandText -match '(?i)-Wait\b|-PassThru\b|-NoNewWindow\b|-UseNewEnvironment\b|-RedirectStandardOutput\b|-RedirectStandardError\b') {
-        [void]$summaryLines.Add(("{0} | {1} line(s) scanned" -f (Split-Path $path -Leaf), @($tail).Count))
-
-        foreach ($line in @($tail)) {
-            if ([string]::IsNullOrWhiteSpace([string]$line)) { continue }
-
-            if ($line -match '(?i)\b(error|failed|exception|cannot|unable|terminated|exit code|not recognized|did not produce output|did not launch)\b') {
-                [void]$findings.Add(("[{0}] {1}" -f (Split-Path $path -Leaf), $line.Trim()))
-            }
-
-            if ($line -match '(?i)Start-Process' -and $line -notmatch '(?i)(wait|passthru|erroraction stop|redirectstandarderror|redirectstandardoutput)') {
-                [void]$recommendations.Add('Wrap Start-Process in a logged helper with -ErrorAction Stop and capture PID/exit code.')
-            }
-
-            if ($line -match '(?i)Execute-Process' -and $line -match '(?i)not processing|failed|error') {
-    if ($code -match '(?i)Execute-Process|Execute-MSI') { [void]$actions.Add('Uses wrapper-aware process execution with standardized exit handling and logging.') }
-                [void]$recommendations.Add('Replace or bypass Execute-Process with Start-Process plus logging when the install launch is not being processed reliably.')
-            }
-
-            if ($line -match '(?i)playwright|web scrape|research_requirements|validation report' -and $line -match '(?i)failed|unavailable|did not produce output') {
-                [void]$recommendations.Add('Verify the Python runtime and Playwright dependencies, then rerun the validation report scrape.')
-            }
+    if (-not [string]::IsNullOrWhiteSpace($UninstallSwitch)) {
+        $knownUninstallSwitches = @(Get-UninstallSwitches -InstallerType $installerType)
+        if ($knownUninstallSwitches -notcontains $UninstallSwitch.Trim()) {
+            [void]$findings.Add(("[Switches] Configured uninstall switch '{0}' does not match known patterns for installer type '{1}'." -f $UninstallSwitch.Trim(), $installerType))
+            [void]$recommendations.Add(("Consider one of the known uninstall switches for {0}: {1}" -f $installerType, ($knownUninstallSwitches -join ' | ')))
         }
     }
 
-    if ($findings.Count -eq 0) {
-        [void]$findings.Add($script:NoDataMessage)
-    }
-    if ($recommendations.Count -eq 0) {
-        [void]$recommendations.Add('No clear error pattern was found. Re-run the process and refresh the troubleshooting tab while the action is active.')
+    $configuredSwitchForMsiCheck = if (-not [string]::IsNullOrWhiteSpace($UninstallSwitch)) { $UninstallSwitch } else { $InstallSwitch }
+    if (Test-LikelyEmbeddedMsi -InstallerType $installerType -ConfiguredSwitch $configuredSwitchForMsiCheck) {
+        [void]$findings.Add("[Media] Installer appears to wrap an embedded MSI based on its installer type/switch pattern.")
+        [void]$recommendations.Add("Installer appears to wrap an embedded MSI - consider Execute-MSI or MSI-specific switches (e.g. /qn, /norestart) instead of the generic EXE switches.")
     }
 
-    return [ordered]@{
-        LogPaths = @($logPaths)
-        Summary = ($summaryLines -join [Environment]::NewLine)
-        Findings = @($findings | Select-Object -Unique)
-        Recommendations = @($recommendations | Select-Object -Unique)
+    return @{
+        Findings = @($findings)
+        Recommendations = @($recommendations)
     }
-}
 }
 
 function Get-TroubleshootingLogInsights {
     param(
-        [string]$CodeText = ""
+        [string]$CodeText = "",
+        [string]$InstallSwitch = "",
+        [string]$UninstallSwitch = ""
     )
 
     $logPaths = @(Get-TroubleshootingLogPaths)
@@ -982,12 +1045,16 @@ function Get-TroubleshootingLogInsights {
     $summaryLines = New-Object System.Collections.Generic.List[string]
     $codeRecommendations = New-Object System.Collections.Generic.List[string]
 
+    $switchAndMediaResult = Get-TroubleshootingSwitchAndMediaFindings -InstallSwitch $InstallSwitch -UninstallSwitch $UninstallSwitch
+    foreach ($item in @($switchAndMediaResult.Findings)) { [void]$findings.Add($item) }
+    foreach ($item in @($switchAndMediaResult.Recommendations)) { [void]$recommendations.Add($item) }
+
     if (-not $logPaths -or $logPaths.Count -eq 0) {
         $insights = [ordered]@{
             LogPaths = @()
             Summary = 'No log files were found yet.'
-            Findings = @($script:NoDataMessage)
-            Recommendations = @('Run a packaging or validation action so the tool can capture live process and error logs.')
+            Findings = if ($findings.Count -gt 0) { @($findings) } else { @($script:NoDataMessage) }
+            Recommendations = if ($recommendations.Count -gt 0) { @($recommendations) } else { @('Run a packaging or validation action so the tool can capture live process and error logs.') }
         }
 
         if (-not [string]::IsNullOrWhiteSpace($CodeText)) {
@@ -1013,6 +1080,8 @@ function Get-TroubleshootingLogInsights {
         return $insights
     }
 
+    $executeProcessFailureDetected = $false
+
     foreach ($path in $logPaths) {
         try {
             $tail = Get-Content -Path $path -Tail 250 -ErrorAction Stop
@@ -1038,6 +1107,7 @@ function Get-TroubleshootingLogInsights {
 
             if ($line -match '(?i)Execute-Process' -and $line -match '(?i)not processing|failed|error') {
                 [void]$recommendations.Add('Replace or bypass Execute-Process with Start-Process plus logging when the install launch is not being processed reliably.')
+                $executeProcessFailureDetected = $true
             }
 
             if ($line -match '(?i)playwright|web scrape|research_requirements|validation report' -and $line -match '(?i)failed|unavailable|did not produce output') {
@@ -1076,6 +1146,19 @@ function Get-TroubleshootingLogInsights {
         }
     }
 
+    $script:LastStartProcessFallbackTemplate = ""
+    if ($executeProcessFailureDetected) {
+        $script:LastStartProcessFallbackTemplate = if (-not [string]::IsNullOrWhiteSpace($UninstallSwitch)) {
+            Get-StartProcessFallbackTemplate -ArgumentList $UninstallSwitch
+        }
+        else {
+            Get-StartProcessFallbackTemplate
+        }
+        [void]$recommendations.Add('Code-based suggestions:')
+        [void]$recommendations.Add('- Execute-Process appears to be failing. Use "Insert Start-Process Fallback" below to drop a ready-to-use replacement into the relevant Custom Command box:')
+        [void]$recommendations.Add($script:LastStartProcessFallbackTemplate)
+    }
+
     return [ordered]@{
         LogPaths = @($logPaths)
         Summary = ($summaryLines -join [Environment]::NewLine)
@@ -1086,7 +1169,9 @@ function Get-TroubleshootingLogInsights {
 
 function Update-TroubleshootingTabContent {
     $currentCode = Get-PackageAnalyzerCombinedCode
-    $insights = Get-TroubleshootingLogInsights -CodeText $currentCode
+    $currentInstallSwitch = if ($txtInstallSwitch) { $txtInstallSwitch.Text } else { $script:SavedInstallSwitch }
+    $currentUninstallSwitch = if ($txtUninstallSwitch) { $txtUninstallSwitch.Text } else { $script:SavedUninstallSwitch }
+    $insights = Get-TroubleshootingLogInsights -CodeText $currentCode -InstallSwitch $currentInstallSwitch -UninstallSwitch $currentUninstallSwitch
 
     if ($txtTroubleshootingLog) {
         $logText = New-Object System.Collections.Generic.List[string]
@@ -1107,9 +1192,9 @@ function Update-TroubleshootingTabContent {
         $txtTroubleshootingRecommendations.Text = @($insights.Recommendations) -join [Environment]::NewLine
     }
 
-    if ($script:lblPackageHelperContext) {
-        $script:lblPackageHelperContext.Text = "Scanned $(@($insights.LogPaths).Count) log file(s) and current package code. Refresh while a process is running to watch live updates."
-        $script:lblPackageHelperContext.ForeColor = [System.Drawing.Color]::FromArgb(0, 110, 0)
+    if ($script:lblTroubleshootingContext) {
+        $script:lblTroubleshootingContext.Text = "Scanned $(@($insights.LogPaths).Count) log file(s) and current package code. Refresh while a process is running to watch live updates."
+        $script:lblTroubleshootingContext.ForeColor = [System.Drawing.Color]::FromArgb(0, 110, 0)
     }
 }
 
@@ -1149,6 +1234,8 @@ function Initialize-PackageProcessLogs {
 }
 
 function Start-ProcessSession {
+    Stop-InstallLogWatcher
+
     if ($script:ProcessOutputBox -and -not $script:ProcessOutputBox.IsDisposed) {
         $script:ProcessOutputBox.Clear()
     }
@@ -1209,11 +1296,12 @@ function Write-TestExecutionDiagnostics {
             Write-ProcessOutputLine -Message ("{0} diagnostics: no recent install/uninstall log files detected." -f $Stage) -Level "WARN"
         }
 
-        if ($Result.Diagnostics.TailLines -and $Result.Diagnostics.TailLines.Count -gt 0) {
-            foreach ($tailLine in @($Result.Diagnostics.TailLines)) {
-                Write-ProcessOutputLine -Message ("{0} log tail: {1}" -f $Stage, $tailLine) -Level "INFO"
-            }
-        }
+        # Note: this deliberately does NOT re-emit $Result.Diagnostics.TailLines.
+        # Those are tails of the same installer log files Start-InstallLogWatcher
+        # already streamed live (line-by-line, as they were written) during the
+        # test that just ran; replaying them here duplicated every line in the
+        # Process log. The Files listing below (paths/timestamps) is genuinely
+        # new post-hoc information, not a duplicate, so it's kept.
 
         $evidenceCount = if ($Result.Diagnostics.Files) { @($Result.Diagnostics.Files).Count } else { 0 }
         Write-ProcessOutputLine -Message ("{0} | Stage=Diagnostics | Outcome=EvidenceFiles:{1}" -f $Stage, $evidenceCount) -Level "INFO"
@@ -1257,22 +1345,13 @@ function Test-PackageDeploymentReadiness {
         }
     }
 
-    $detectCandidates = @(
-        "{0}_Detect_R1.ps1" -f $AppName,
-        "{0}_Detect_R1.ps1" -f (($AppName -replace '\\s+', '_'))
-    ) | Select-Object -Unique
-
-    $detectFound = $false
-    foreach ($candidate in @($detectCandidates)) {
-        if (Test-Path (Join-Path $PackagePath $candidate)) {
-            $detectFound = $true
-            break
-        }
-    }
-
-    if (-not $detectFound) {
+    # Matches the RITM{number}_{SanitizedAppName}_Detect_R1.ps1 convention
+    # New-PackageDetectionScript generates (Milestone E), per the Guide's
+    # documented naming pattern.
+    $detectMatches = Get-ChildItem -Path $PackagePath -File -Filter "*_Detect_R1.ps1" -ErrorAction SilentlyContinue
+    if (-not $detectMatches -or $detectMatches.Count -eq 0) {
         $readiness.Ready = $false
-        $readiness.MissingItems += ("Detection script ({0})" -f ($detectCandidates -join " or "))
+        $readiness.MissingItems += "Detection script (RITM{number}_{AppName}_Detect_R1.ps1 at package root)"
     }
 
     return $readiness
@@ -1912,6 +1991,34 @@ function Remove-TemplateDocsFromPackage {
     }
 }
 
+function Set-NewPackageIdentityGuids {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PackagePath
+    )
+
+    $psbuildPath = Join-Path $PackagePath "FRB Installer.psproj.psbuild"
+    if (-not (Test-Path $psbuildPath)) {
+        Write-ProcessOutputLine -Message ("Skipped GUID regeneration - .psbuild not found: {0}" -f $psbuildPath) -Level "WARN"
+        return
+    }
+
+    try {
+        $productGuid = [guid]::NewGuid().ToString()
+        $upgradeGuid = [guid]::NewGuid().ToString()
+
+        $psbuildContent = Get-Content -Path $psbuildPath -Raw -Encoding Unicode
+        $psbuildContent = $psbuildContent -replace "ProductGUID\s*=\s*[0-9a-fA-F-]+", "ProductGUID=$productGuid"
+        $psbuildContent = $psbuildContent -replace "UpgradeGUID\s*=\s*[0-9a-fA-F-]+", "UpgradeGUID=$upgradeGuid"
+        Set-Content -Path $psbuildPath -Value $psbuildContent -Encoding Unicode -Force
+
+        Write-ProcessOutputLine -Message ("New package identity assigned - ProductGUID={0} UpgradeGUID={1}" -f $productGuid, $upgradeGuid) -Level "INFO"
+    }
+    catch {
+        Write-ProcessOutputLine -Message ("Failed to regenerate package identity GUIDs: {0}" -f $_.Exception.Message) -Level "ERROR"
+    }
+}
+
 function Convert-CommandTextToStartupVariables {
     param(
         [Parameter(Mandatory = $true)]
@@ -2104,6 +2211,24 @@ function Update-Status {
 }
 
 # Function to update the Startup.pss file
+function Get-CurrentPackagerName {
+    <#
+    .SYNOPSIS
+        Resolves the current Windows user's full name via ADSI, falling back
+        to the plain username. Shared by Update-StartupFile (appScriptAuthor)
+        and the metadata.json/README/CHANGELOG generators (Milestones C/D).
+    #>
+    try {
+        $objUser = [ADSI]("WinNT://$env:USERDOMAIN/$env:USERNAME,user")
+        if (-not [string]::IsNullOrWhiteSpace($objUser.FullName)) {
+            return $objUser.FullName[0]
+        }
+        return $env:USERNAME
+    } catch {
+        return $env:USERNAME
+    }
+}
+
 function Update-StartupFile {
     param(
         [string]$StartupPath,
@@ -2117,7 +2242,11 @@ function Update-StartupFile {
         [string]$UninstallSwitch = ""
     ,
         [string]$RequiredProcesses = "",
-        [string]$InstallContext = "System"
+        [string]$InstallContext = "System",
+        [string]$AppGuid = "",
+        [string]$AppMstName = "",
+        [bool]$AppPrompt = $false,
+        [bool]$AppReboot = $false
     )
     
     try {
@@ -2125,22 +2254,10 @@ function Update-StartupFile {
             throw "Startup.pss file not found: $StartupPath"
         }
         
-        # Read the Startup.pss file content  
+        # Read the Startup.pss file content
         $content = Get-Content -Path $StartupPath -Raw -Encoding UTF8
 
-        # Get current Windows username and date
-        # Try to resolve user's full name via ADSI (Active Directory)
-        try {
-            $objUser = [ADSI]("WinNT://$env:USERDOMAIN/$env:USERNAME,user")
-            $currentUser = if (-not [string]::IsNullOrWhiteSpace($objUser.FullName)) {
-                $objUser.FullName[0]
-            } else {
-                $env:USERNAME  # Fallback to username if FullName is empty
-            }
-        } catch {
-            # Fallback to username if ADSI fails (workgroup/standalone)
-            $currentUser = $env:USERNAME
-        }
+        $currentUser = Get-CurrentPackagerName
         $currentDate = Get-Date -Format "yyyy-MM-dd"
         
         # Update variables in the VARIABLE DECLARATION section
@@ -2160,6 +2277,10 @@ function Update-StartupFile {
         $scriptBuildVersionUpdated = $false
         $stopProcessesUpdated = $false
         $installContextUpdated = $false
+        $appGuidUpdated = $false
+        $appMstNameUpdated = $false
+        $appPromptUpdated = $false
+        $appRebootUpdated = $false
         $normalizedContext = if ($InstallContext -eq "User") { "User" } else { "System" }
         
         for ($i = 0; $i -lt $lines.Count; $i++) {
@@ -2257,15 +2378,37 @@ function Update-StartupFile {
                     $lines[$i] = "`t[version]`$appScriptBuildVersion = '$newVersion'"
                     $scriptBuildVersionUpdated = $true
                 }
-                                # ENHANCEMENT 3: appStopRequiredProcesses - leave as empty string
-                # User can manually populate this in Startup.pss if needed
+                # ENHANCEMENT 3: appStopRequiredProcesses - use GUI as source of truth
+                # (populated via the Advanced Package Settings dialog, Milestone B)
                 elseif (-not $stopProcessesUpdated -and $lines[$i] -match '^\s*\[string\]\$appStopRequiredProcesses\s*=\s*[\x27\x22].*?[\x27\x22]') {
-                    # Always leave empty - don't auto-populate
+                    $lines[$i] = "`t[string]`$appStopRequiredProcesses = '$RequiredProcesses'"
                     $stopProcessesUpdated = $true
                 }
                 elseif (-not $installContextUpdated -and $lines[$i] -match '^\s*\[string\]\$installContext\s*=\s*[\x27\x22].*?[\x27\x22]') {
                     $lines[$i] = "`t[string]`$installContext = '$normalizedContext' # shows what context this app should run in; System or User"
                     $installContextUpdated = $true
+                }
+                # Update appGUID - auto-detected from MSI ProductCode, or left blank for EXE-based apps
+                elseif (-not $appGuidUpdated -and $lines[$i] -match '^\s*\[string\]\$appGUID\s*=\s*[\x27\x22].*?[\x27\x22]') {
+                    $lines[$i] = "`t[string]`$appGUID = '$AppGuid'"
+                    $appGuidUpdated = $true
+                }
+                # Update appMstName - auto-detected from a matching .mst next to the selected MSI
+                elseif (-not $appMstNameUpdated -and $lines[$i] -match '^\s*\[string\]\$appMstName\s*=\s*[\x27\x22].*?[\x27\x22]') {
+                    $lines[$i] = "`t[string]`$appMstName = '$AppMstName'"
+                    $appMstNameUpdated = $true
+                }
+                # Update appPrompt - from the Advanced Package Settings dialog
+                elseif (-not $appPromptUpdated -and $lines[$i] -match '^\s*\[boolean\]\$appPrompt\s*=\s*\$(true|false)') {
+                    $appPromptValue = if ($AppPrompt) { '$true' } else { '$false' }
+                    $lines[$i] = "`t[boolean]`$appPrompt = $appPromptValue"
+                    $appPromptUpdated = $true
+                }
+                # Update appReboot - from the Advanced Package Settings dialog
+                elseif (-not $appRebootUpdated -and $lines[$i] -match '^\s*\[boolean\]\$appReboot\s*=\s*\$(true|false)') {
+                    $appRebootValue = if ($AppReboot) { '$true' } else { '$false' }
+                    $lines[$i] = "`t[boolean]`$appReboot = $appRebootValue"
+                    $appRebootUpdated = $true
                 }
             }
         }
@@ -2360,7 +2503,8 @@ function New-PackagingFolder {
         $progressBar.Value = 70
         Update-Status "Template files copied: $($copyResult.FilesCopied) files"
         Remove-TemplateDocsFromPackage -PackagePath $newFolderPath
-        
+        Set-NewPackageIdentityGuids -PackagePath $newFolderPath
+
         # Copy installation media if provided using FolderEngine
         if (-not [string]::IsNullOrWhiteSpace($script:InstallationMediaPath) -and (Test-Path $script:InstallationMediaPath)) {
             $progressBar.Value = 75
@@ -2408,10 +2552,13 @@ function New-PackagingFolder {
             $installSwitch = $txtInstallSwitch.Text
             $uninstallSwitch = $txtUninstallSwitch.Text
             $uninstallExeName = $txtUninstallExecutable.Text
-            
+            $currentUser = Get-CurrentPackagerName
 
-                        # Process detection removed - leave $appStopRequiredProcesses as empty string
-            # User can manually populate this in Startup.pss if needed
+            # AppGUID/AppMstName: auto-detected when MSI media was selected (Milestone B)
+            $requiredProcessesString = ConvertTo-AppStopRequiredProcessesString -Processes $script:AdvancedStopProcesses
+            $appMstNameForStartup = if (-not [string]::IsNullOrWhiteSpace($script:DetectedMsiTransformPath)) {
+                [System.IO.Path]::GetFileName($script:DetectedMsiTransformPath)
+            } else { "" }
 
             Update-StartupFile -StartupPath $startupPath `
                               -Vendor $Vendor `
@@ -2423,12 +2570,62 @@ function New-PackagingFolder {
                               -UninstallExeName $uninstallExeName `
                               -InstallSwitch $installSwitch `
                               -UninstallSwitch $uninstallSwitch `
-                              -RequiredProcesses "" `
-                              -InstallContext $script:SelectedInstallContext
+                              -RequiredProcesses $requiredProcessesString `
+                              -InstallContext $script:SelectedInstallContext `
+                              -AppGuid $script:DetectedMsiProductCode `
+                              -AppMstName $appMstNameForStartup `
+                              -AppPrompt $script:AdvancedAppPrompt `
+                              -AppReboot $script:AdvancedAppReboot
+
+            # Generate metadata.json / README.md / CHANGELOG.md - CREATE MODE only,
+            # so an existing package's docs aren't silently overwritten on every rebuild
+            # (Milestones C and D; same reasoning as Set-NewPackageIdentityGuids above).
+            if (-not $folderExists) {
+                $metadataResult = New-PackageMetadataFile -TemplatePath (Join-Path $script:MasterTemplatePath "Docs\metadata_template.json") `
+                                                           -PackagePath $newFolderPath `
+                                                           -Vendor $Vendor `
+                                                           -Name $Name `
+                                                           -Version $Version `
+                                                           -Ritm $script:txtRitm.Text.Trim() `
+                                                           -InstallCommandLine $installSwitch `
+                                                           -UninstallCommandLine $uninstallSwitch `
+                                                           -InstallContext $script:SelectedInstallContext `
+                                                           -PackagedBy $currentUser
+                if ($metadataResult.Success) {
+                    Write-ProcessOutputLine -Message ("Generated package metadata: {0}" -f $metadataResult.OutputPath) -Level "INFO"
+                } else {
+                    Write-ProcessOutputLine -Message ("Failed to generate metadata.json: {0}" -f $metadataResult.Message) -Level "WARN"
+                }
+
+                $docsResult = New-PackageDocFiles -TemplateFolderPath $script:MasterTemplatePath `
+                                                   -PackagePath $newFolderPath `
+                                                   -Name $Name `
+                                                   -Version $Version `
+                                                   -PackagedBy $currentUser
+                if ($docsResult.Success) {
+                    Write-ProcessOutputLine -Message ("Generated README.md/CHANGELOG.md: {0}" -f ($docsResult.GeneratedFiles -join ', ')) -Level "INFO"
+                } else {
+                    Write-ProcessOutputLine -Message ("Failed to generate README/CHANGELOG: {0}" -f $docsResult.Message) -Level "WARN"
+                }
+
+                # Generate the Intune detection script from the PhoenixFrame template (Milestone E)
+                $detectionScriptResult = New-PackageDetectionScript -TemplatePath (Join-Path $script:MasterTemplatePath "PhoenixFrame-DetectionScript-Template.ps1") `
+                                                                     -PackagePath $newFolderPath `
+                                                                     -Vendor $Vendor `
+                                                                     -AppName $Name `
+                                                                     -Version $Version `
+                                                                     -Ritm $script:txtRitm.Text.Trim() `
+                                                                     -InstallContext $script:SelectedInstallContext
+                if ($detectionScriptResult.Success) {
+                    Write-ProcessOutputLine -Message ("Generated detection script: {0}" -f $detectionScriptResult.OutputPath) -Level "INFO"
+                } else {
+                    Write-ProcessOutputLine -Message ("Failed to generate detection script: {0}" -f $detectionScriptResult.Message) -Level "WARN"
+                }
+            }
         } else {
             throw "Startup.pss file not found: $startupPath"
         }
-        
+
         # Insert custom commands if any provided (v3.2 CustomCommandsEngine integration)
         # Always process custom commands (v3.2 CustomCommandsEngine - FIXED 2026-07-23)
         # This ensures GUI is source of truth for BOTH adding AND removing commands
@@ -2645,10 +2842,10 @@ function Start-BuildTestDeployWorkflow {
         $psbuildPath = $projPath + ".psbuild"
         if (Test-Path $psbuildPath) {
             $psbuildContent = Get-Content $psbuildPath -Raw -Encoding Unicode
-            $psbuildContent = $psbuildContent -replace "ManifestType\s*=\s*\d+", "ManifestType=1"
+            $psbuildContent = $psbuildContent -replace "ManifestType\s*=\s*\d+", "ManifestType=3"
             $psbuildContent = $psbuildContent -replace "UseRunAs\s*=\s*\d+", "UseRunAs=0"
             Set-Content -Path $psbuildPath -Value $psbuildContent -Encoding Unicode -Force
-            Write-Verbose ".psbuild: ManifestType set to 1 (embed default manifest - no elevation)"
+            Write-Verbose ".psbuild: ManifestType set to 3 (embed default manifest - no elevation)"
         }
 
         Update-Status "User Context modifications complete. Building..." "Green"
@@ -2816,7 +3013,19 @@ function Start-BuildTestDeployWorkflow {
     Update-Status "Found Install.exe at: $installExePath" "Green"
     $form.Refresh()
     $progressBar.Value = 75
-    
+
+    if ($tabControl -and $script:ProcessTab) {
+        $tabControl.SelectedTab = $script:ProcessTab
+    }
+
+    Start-InstallLogWatcher -InstallContext $script:SelectedInstallContext -OnLine {
+        param($line, $fileName)
+        if ($txtProcessLog -and -not $txtProcessLog.IsDisposed) {
+            $txtProcessLog.BeginInvoke([Action]{ Write-ProcessOutputLine -Message ("[InstallLog:{0}] {1}" -f $fileName, $line) -Level "INFO" }) | Out-Null
+        }
+    } | Out-Null
+
+    try {
     # INSTALLATION TESTING LOOP
     :InstallLoop while ($true) {
         Update-Status "Launching Install.exe for installation testing..." "Blue"
@@ -2839,13 +3048,11 @@ function Start-BuildTestDeployWorkflow {
         
                 if (-not $installTestResult.Success) {
             Update-Status "Make any changes needed to make your package function in the fashion you would like" "Blue"
-            [System.Windows.Forms.MessageBox]::Show(
-                "Package design may need to change.`n`nError: $($installTestResult.ErrorMessage)`n`nTechnician has indicated that the installation did not function as designed. You will be returned to the GUI to make any needed changes and try again.",
-                "Installation Test Loop",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Information
-            )
-            
+            $script:LastTroubleshootingContext = "Install"
+            $tabControl.SelectedTab = $tabTroubleshooting
+            Update-TroubleshootingTabContent
+            Write-ProcessOutputLine -Message ("Installation did not function as designed. Error: {0}. Returning to GUI for changes; Troubleshooting tab refreshed with relevant logs and recommendations." -f $installTestResult.ErrorMessage) -Level "WARN"
+
             # Restore GUI state and allow user to modify
             $txtVendor.Text = $script:SavedVendor
             $txtName.Text = $script:SavedName
@@ -2918,7 +3125,10 @@ function Start-BuildTestDeployWorkflow {
             # User said NO - allow modification and retry
             Update-Status "Installation not confirmed. Returning to GUI for modifications..." "Orange"
             $form.Refresh()
-            
+            $script:LastTroubleshootingContext = "Install"
+            $tabControl.SelectedTab = $tabTroubleshooting
+            Update-TroubleshootingTabContent
+
                         # Restore GUI state (v3.1: Manual-only mode)
             $txtVendor.Text = $script:SavedVendor
             $txtName.Text = $script:SavedName
@@ -2926,9 +3136,9 @@ function Start-BuildTestDeployWorkflow {
             $txtInstallSwitch.Text = $script:SavedInstallSwitch
             $txtUninstallSwitch.Text = $script:SavedUninstallSwitch
             $txtUninstallExecutable.Text = $script:SavedUninstallExecutable
-            
+
             [System.Windows.Forms.MessageBox]::Show(
-                "Please modify the installation switches or media if needed, then click 'Build EXE' again to retry.",
+                "Please modify the installation switches or media if needed, then click 'Build EXE' again to retry.`n`nThe Troubleshooting tab has been refreshed with relevant logs and recommendations.",
                 "Modify and Retry",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Information
@@ -2966,7 +3176,11 @@ function Start-BuildTestDeployWorkflow {
     }
     
     $progressBar.Value = 90
-    
+
+    if ($tabControl -and $script:ProcessTab) {
+        $tabControl.SelectedTab = $script:ProcessTab
+    }
+
     # UNINSTALLATION TESTING LOOP
     :UninstallLoop while ($true) {
         Update-Status "Launching Install.exe /uninstall for uninstallation testing..." "Blue"
@@ -2978,25 +3192,23 @@ function Start-BuildTestDeployWorkflow {
         
                 if (-not $uninstallTestResult.Success) {
             Update-Status "Make any changes needed to make your package function in the fashion you would like" "Blue"
-            [System.Windows.Forms.MessageBox]::Show(
-                "Package design may need to change.`n`nError: $($uninstallTestResult.ErrorMessage)`n`nTechnician has indicated that the uninstallation did not function as designed. You will be returned to the GUI to make any needed changes and try again.",
-                "Uninstallation Test Loop",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Information
-            )
-            
+            $script:LastTroubleshootingContext = "Uninstall"
+            $tabControl.SelectedTab = $tabTroubleshooting
+            Update-TroubleshootingTabContent
+            Write-ProcessOutputLine -Message ("Uninstallation did not function as designed. Error: {0}. Returning to GUI for changes; Troubleshooting tab refreshed with relevant logs and recommendations." -f $uninstallTestResult.ErrorMessage) -Level "WARN"
+
             # Restore GUI state
             $txtVendor.Text = $script:SavedVendor
             $txtName.Text = $script:SavedName
             $txtVersion.Text = $script:SavedVersion
-            
+
             $btnCreate.Enabled = $true
     $btnCreate.Visible = $true
     $btnCancel.Enabled = $true
     $btnCancel.Visible = $true
             return
         }
-        
+
         # User confirmed uninstallation worked
         if ($uninstallTestResult.UserConfirmed) {
             Update-Status "Uninstallation confirmed successful by technician!" "Green"
@@ -3007,7 +3219,10 @@ function Start-BuildTestDeployWorkflow {
             # User said NO - allow modification and retry
             Update-Status "Uninstallation not confirmed. Returning to GUI for modifications..." "Orange"
             $form.Refresh()
-            
+            $script:LastTroubleshootingContext = "Uninstall"
+            $tabControl.SelectedTab = $tabTroubleshooting
+            Update-TroubleshootingTabContent
+
                         # Restore GUI state (v3.1: Manual-only mode)
             $txtVendor.Text = $script:SavedVendor
             $txtName.Text = $script:SavedName
@@ -3015,9 +3230,9 @@ function Start-BuildTestDeployWorkflow {
             $txtInstallSwitch.Text = $script:SavedInstallSwitch
             $txtUninstallSwitch.Text = $script:SavedUninstallSwitch
             $txtUninstallExecutable.Text = $script:SavedUninstallExecutable
-            
+
             [System.Windows.Forms.MessageBox]::Show(
-                "Please modify the uninstall switches or media if needed, then rebuild and retest.",
+                "Please modify the uninstall switches or media if needed, then rebuild and retest.`n`nThe Troubleshooting tab has been refreshed with relevant logs and recommendations.",
                 "Modify and Retry",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Information
@@ -3030,7 +3245,15 @@ function Start-BuildTestDeployWorkflow {
             return
         }
     }
-    
+    }
+    finally {
+        # Deliberately NOT stopping the log watcher here: install and uninstall
+        # testing share this one try/finally, and tearing it down after install
+        # would silence live installer-log tailing for the uninstall loop that
+        # follows. The watcher is stopped when a new one starts (it self-stops
+        # internally) or when the tool closes, whichever comes first.
+    }
+
                 # FINAL STEP: Deploy to Network Share
         Write-Verbose "Network deployment: Starting final step..."
         Update-Status "Checking network deployment settings..." "Blue"
@@ -3120,9 +3343,17 @@ function Start-BuildTestDeployWorkflow {
     $txtName.Clear()
     $txtVersion.Clear()
     $txtEdition.Clear()
+    $txtRitm.Clear()
     $txtMedia.Clear()
     $lblMediaType.Text = ""
-    
+
+    # Reset Advanced Package Settings state (Milestone B) so it doesn't leak into the next package
+    $script:DetectedMsiProductCode = ""
+    $script:DetectedMsiTransformPath = ""
+    $script:AdvancedStopProcesses = @()
+    $script:AdvancedAppPrompt = $false
+    $script:AdvancedAppReboot = $false
+
     # Hide all switch and uninstall executable controls
     $lblUninstallExecutable.Visible = $false
     $lblInstallSwitch.Visible = $false
@@ -3235,7 +3466,13 @@ function Start-IntegratedValidationDocumentation {
 
     try {
         Write-ProcessOutputLine -Message ("Validation workflow started for {0} {1}. Awaiting mode selection." -f $AppName, $AppVersion) -Level "INFO"
-        $result = Start-ValidationReportCapture -PackagePath $PackagePath -AppVendor $AppVendor -AppName $AppName -AppEdition $AppEdition -AppVersion $AppVersion -InstallContext $InstallContext
+        $onModeSelected = {
+            param($mode)
+            if ($tabControl -and $script:ProcessTab) {
+                $tabControl.SelectedTab = $script:ProcessTab
+            }
+        }.GetNewClosure()
+        $result = Start-ValidationReportCapture -PackagePath $PackagePath -AppVendor $AppVendor -AppName $AppName -AppEdition $AppEdition -AppVersion $AppVersion -InstallContext $InstallContext -OnModeSelected $onModeSelected
 
         $modeLabel = if (-not [string]::IsNullOrWhiteSpace([string]$result.Mode)) { [string]$result.Mode } else { "Unknown" }
         if ($result.Success) {
@@ -3406,6 +3643,10 @@ function Invoke-PackageHelperAutoRefresh {
         $script:lblPackageHelperContext.ForeColor = [System.Drawing.Color]::FromArgb(186, 103, 0)
     }
 
+    if ($tabControl -and $tabPackageHelper) {
+        $tabControl.SelectedTab = $tabPackageHelper
+    }
+
     Invoke-PackageHelperGeneration
 }
 
@@ -3462,6 +3703,34 @@ function Get-NormalizedComparisonValue {
     return (($value -replace '\s+', ' ').ToLowerInvariant())
 }
 
+function Get-PackageHelperResultCacheSignature {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$RequestData
+    )
+
+    return @(
+        [string]$RequestData.Vendor
+        [string]$RequestData.AppName
+        [string]$RequestData.Edition
+        [string]$RequestData.Version
+        [string]$RequestData.InstallMediaPath
+    ) -join '|'
+}
+
+function Set-PackageHelperResultCache {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$RequestData,
+
+        [Parameter(Mandatory = $true)]
+        $HelperData
+    )
+
+    $script:PackageHelperResultCacheSignature = Get-PackageHelperResultCacheSignature -RequestData $RequestData
+    $script:PackageHelperResultCacheData = $HelperData
+}
+
 function Get-PackageHelperAnalysisData {
     param(
         [Parameter(Mandatory = $true)]
@@ -3469,6 +3738,15 @@ function Get-PackageHelperAnalysisData {
 
         [bool]$UpdateHelperTab = $true
     )
+
+    $signature = Get-PackageHelperResultCacheSignature -RequestData $RequestData
+    if (-not [string]::IsNullOrWhiteSpace($signature) -and $signature -eq $script:PackageHelperResultCacheSignature -and $script:PackageHelperResultCacheData) {
+        Write-ProcessOutputLine -Message "Analyze Package | Stage=WebSuggestions | Outcome=Reusing Package Helper's most recent scrape result (same Vendor/Name/Edition/Version/InstallMediaPath); skipping a duplicate web scrape." -Level "INFO"
+        if ($UpdateHelperTab) {
+            Set-PackageHelperTabContent -HelperData $script:PackageHelperResultCacheData
+        }
+        return $script:PackageHelperResultCacheData
+    }
 
     $pythonScraperModulePath = Join-Path $script:ToolRoot "src\Engines\PythonScraperEngine\PythonScraperEngine.psm1"
     $switchEngineModulePath = Join-Path $script:ToolRoot "src\Engines\SwitchEngine\SwitchEngine.psm1"
@@ -3489,8 +3767,11 @@ function Get-PackageHelperAnalysisData {
                                               -InstallContext $RequestData.InstallContext `
                                               -ContextRecommendation $RequestData.ContextRecommendation
 
-        if ($helperData -and $UpdateHelperTab) {
-            Set-PackageHelperTabContent -HelperData $helperData
+        if ($helperData) {
+            Set-PackageHelperResultCache -RequestData $RequestData -HelperData $helperData
+            if ($UpdateHelperTab) {
+                Set-PackageHelperTabContent -HelperData $helperData
+            }
         }
 
         return $helperData
@@ -3890,6 +4171,124 @@ function Expand-CommandSectionsWithContent {
     Expand-CommandSectionIfPopulated -HeaderLabel $script:lblPostUninstallHeader -Editor $script:txtPostUninstall
 }
 
+$script:CodeEditorTokenColors = @{
+    Keyword          = [System.Drawing.Color]::Blue
+    Command          = [System.Drawing.Color]::FromArgb(0, 0, 139)
+    CommandParameter = [System.Drawing.Color]::FromArgb(90, 90, 90)
+    CommandArgument  = [System.Drawing.Color]::FromArgb(35, 35, 35)
+    Variable         = [System.Drawing.Color]::FromArgb(0, 139, 139)
+    String           = [System.Drawing.Color]::FromArgb(163, 21, 21)
+    Number           = [System.Drawing.Color]::FromArgb(0, 100, 0)
+    Type             = [System.Drawing.Color]::Teal
+    Comment          = [System.Drawing.Color]::FromArgb(0, 128, 0)
+    Operator         = [System.Drawing.Color]::FromArgb(80, 80, 80)
+    Member           = [System.Drawing.Color]::FromArgb(35, 35, 35)
+}
+$script:CodeEditorDefaultColor = [System.Drawing.Color]::FromArgb(35, 35, 35)
+
+function Update-CodeEditorSyntaxHighlighting {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Windows.Forms.RichTextBox]$Editor
+    )
+
+    $text = $Editor.Text
+    if ([string]::IsNullOrEmpty($text)) {
+        return
+    }
+
+    $parseErrors = $null
+    try {
+        $tokens = [System.Management.Automation.PSParser]::Tokenize($text, [ref]$parseErrors)
+    }
+    catch {
+        return
+    }
+    if (-not $tokens -or $tokens.Count -eq 0) {
+        return
+    }
+
+    $savedStart = $Editor.SelectionStart
+    $savedLength = $Editor.SelectionLength
+
+    $Editor.Select(0, $text.Length)
+    $Editor.SelectionColor = $script:CodeEditorDefaultColor
+
+    foreach ($token in $tokens) {
+        $tokenTypeName = [string]$token.Type
+        if (-not $script:CodeEditorTokenColors.ContainsKey($tokenTypeName)) {
+            continue
+        }
+        if (($token.Start + $token.Length) -gt $text.Length) {
+            continue
+        }
+        $Editor.Select($token.Start, $token.Length)
+        $Editor.SelectionColor = $script:CodeEditorTokenColors[$tokenTypeName]
+    }
+
+    $Editor.Select($savedStart, $savedLength)
+}
+
+function Invoke-CodeEditorBlockIndent {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Windows.Forms.RichTextBox]$Editor,
+
+        [switch]$Outdent
+    )
+
+    $text = $Editor.Text
+    $selStart = $Editor.SelectionStart
+    $selEnd = $selStart + $Editor.SelectionLength
+
+    $lineStartSearch = [Math]::Max(0, $selStart - 1)
+    $newlineBefore = $text.LastIndexOf("`n", $lineStartSearch)
+    $lineStart = if ($newlineBefore -lt 0) { 0 } else { $newlineBefore + 1 }
+
+    $lineEndSearchFrom = [Math]::Max($lineStart, $selEnd - 1)
+    if ($lineEndSearchFrom -ge $text.Length) {
+        $lineEnd = $text.Length
+    }
+    else {
+        $newlineAfter = $text.IndexOf("`n", $lineEndSearchFrom)
+        if ($newlineAfter -lt 0) {
+            $lineEnd = $text.Length
+        }
+        elseif ($newlineAfter -gt 0 -and $text[$newlineAfter - 1] -eq "`r") {
+            $lineEnd = $newlineAfter - 1
+        }
+        else {
+            $lineEnd = $newlineAfter
+        }
+    }
+
+    $block = $text.Substring($lineStart, $lineEnd - $lineStart)
+    $blockLines = @($block -split "`r`n|`n")
+
+    for ($i = 0; $i -lt $blockLines.Count; $i++) {
+        if ($Outdent) {
+            if ($blockLines[$i].StartsWith([string][char]9)) {
+                $blockLines[$i] = $blockLines[$i].Substring(1)
+            }
+            else {
+                $leadingSpaceMatch = [regex]::Match($blockLines[$i], '^ {1,4}')
+                if ($leadingSpaceMatch.Success) {
+                    $blockLines[$i] = $blockLines[$i].Substring($leadingSpaceMatch.Length)
+                }
+            }
+        }
+        else {
+            $blockLines[$i] = [string][char]9 + $blockLines[$i]
+        }
+    }
+
+    $newBlock = $blockLines -join "`r`n"
+
+    $Editor.Select($lineStart, $lineEnd - $lineStart)
+    $Editor.SelectedText = $newBlock
+    $Editor.Select($lineStart, $newBlock.Length)
+}
+
 function Register-CodeEditorBehavior {
     param(
         [Parameter(Mandatory = $true)]
@@ -3911,6 +4310,40 @@ function Register-CodeEditorBehavior {
     $Editor.HideSelection = $false
     $Editor.WordWrap = $false
     $Editor.Font = $FontCode
+
+    $highlightTimer = New-Object System.Windows.Forms.Timer
+    $highlightTimer.Interval = 350
+    $highlightTimer.Add_Tick({
+        $highlightTimer.Stop()
+        Update-CodeEditorSyntaxHighlighting -Editor $Editor
+    }.GetNewClosure())
+
+    $Editor.Add_TextChanged({
+        $highlightTimer.Stop()
+        $highlightTimer.Start()
+    }.GetNewClosure())
+
+    $Editor.Add_KeyDown({
+        param($sender, $e)
+
+        if ($e.KeyCode -eq [System.Windows.Forms.Keys]::Enter -and -not $e.Shift -and -not $e.Control -and -not $e.Alt) {
+            $text = $sender.Text
+            $caret = $sender.SelectionStart
+            $newlineBefore = $text.LastIndexOf("`n", [Math]::Max(0, $caret - 1))
+            $lineStart = if ($newlineBefore -lt 0) { 0 } else { $newlineBefore + 1 }
+            $currentLineText = $text.Substring($lineStart, $caret - $lineStart)
+            $leadingWhitespace = [regex]::Match($currentLineText, '^[ \t]*').Value
+            $trimmedLine = $currentLineText.TrimEnd()
+            $extraIndent = if ($trimmedLine.EndsWith('{')) { [string][char]9 } else { "" }
+
+            $e.SuppressKeyPress = $true
+            $sender.SelectedText = "`n" + $leadingWhitespace + $extraIndent
+        }
+        elseif ($e.KeyCode -eq [System.Windows.Forms.Keys]::Tab -and $sender.SelectionLength -gt 0) {
+            $e.SuppressKeyPress = $true
+            Invoke-CodeEditorBlockIndent -Editor $sender -Outdent:$e.Shift
+        }
+    }.GetNewClosure())
 
     $Editor.Add_MouseEnter({ Show-CodeEditorHelp -Editor $this })
     $Editor.Add_MouseHover({ Show-CodeEditorHelp -Editor $this })
@@ -4132,12 +4565,21 @@ function Show-PackageHelperBusyDialog {
 }
 
 function Update-PackageHelperBusyDialog {
+    param(
+        [string]$StatusMessage = ""
+    )
+
     if (-not $script:PackageHelperBusyForm -or $script:PackageHelperBusyForm.IsDisposed) {
         return
     }
 
-    if ($script:PackageHelperBusyMessageLabel -and -not [string]::IsNullOrWhiteSpace($script:PackageHelperBusyBaseMessage)) {
-        $script:PackageHelperBusyMessageLabel.Text = $script:PackageHelperBusyBaseMessage
+    if ($script:PackageHelperBusyMessageLabel) {
+        if (-not [string]::IsNullOrWhiteSpace($StatusMessage)) {
+            $script:PackageHelperBusyMessageLabel.Text = $StatusMessage
+        }
+        elseif (-not [string]::IsNullOrWhiteSpace($script:PackageHelperBusyBaseMessage)) {
+            $script:PackageHelperBusyMessageLabel.Text = $script:PackageHelperBusyBaseMessage
+        }
     }
 
     if ($script:PackageHelperBusyElapsedLabel -and $script:PackageHelperBusyStartedAt) {
@@ -4196,6 +4638,11 @@ function Start-PackageHelperBackgroundWork {
         Stop-PackageHelperBackgroundWork
     }
 
+    # Add_Tick below runs in its own scope and does not close over this
+    # function's parameters, so RequestData must be stashed script-scoped
+    # for the Tick handler to read it back when the job completes.
+    $script:PackageHelperActiveRequestData = $RequestData
+
     $script:PackageHelperActiveJob = Start-Job -ScriptBlock {
         param($SwitchEngineModulePath, $PythonScraperModulePath, $Request)
 
@@ -4218,7 +4665,22 @@ function Start-PackageHelperBackgroundWork {
     $script:PackageHelperPollTimer = New-Object System.Windows.Forms.Timer
     $script:PackageHelperPollTimer.Interval = 350
     $script:PackageHelperPollTimer.Add_Tick({
-        Update-PackageHelperBusyDialog
+        $latestStatus = ""
+        if ($script:PackageHelperActiveJob) {
+            foreach ($childJob in @($script:PackageHelperActiveJob.ChildJobs)) {
+                $pendingProgress = @($childJob.Progress)
+                if ($pendingProgress.Count -gt 0) {
+                    foreach ($progressRecord in $pendingProgress) {
+                        if ($progressRecord -and -not [string]::IsNullOrWhiteSpace([string]$progressRecord.StatusDescription)) {
+                            $latestStatus = [string]$progressRecord.StatusDescription
+                            Write-ProcessOutputLine -Message ("Package Helper: {0}" -f $latestStatus) -Level "INFO"
+                        }
+                    }
+                    $childJob.Progress.Clear()
+                }
+            }
+        }
+        Update-PackageHelperBusyDialog -StatusMessage $latestStatus
 
         if (-not $script:PackageHelperActiveJob) {
             return
@@ -4240,6 +4702,7 @@ function Start-PackageHelperBackgroundWork {
                 }
 
                 if ($helperData) {
+                    Set-PackageHelperResultCache -RequestData $script:PackageHelperActiveRequestData -HelperData $helperData
                     Set-PackageHelperTabContent -HelperData $helperData
                     $tabControl.SelectedTab = $tabPackageHelper
 
@@ -4274,6 +4737,8 @@ function Start-PackageHelperBackgroundWork {
             }
             catch {
             }
+
+            $script:PackageHelperActiveRequestData = $null
 
             if ($script:PackageHelperPollTimer) {
                 try {
@@ -4374,7 +4839,23 @@ function Invoke-PackageHelperGeneration {
         ContextRecommendation = $script:ContextRecommendation
     }
 
-    Start-PackageHelperBackgroundWork -RequestData $requestData -IsScrapeCandidate:$isScrapeCandidate
+    try {
+        if ($tabControl -and $script:ProcessTab) {
+            $tabControl.SelectedTab = $script:ProcessTab
+        }
+        Start-PackageHelperBackgroundWork -RequestData $requestData -IsScrapeCandidate:$isScrapeCandidate
+    }
+    catch {
+        Write-ProcessOutputLine -Message ("Package Helper failed to start: {0}" -f $_.Exception.Message) -Level "ERROR"
+        [System.Windows.Forms.MessageBox]::Show(
+            "Failed to start package helper suggestion generation.`n`n$($_.Exception.Message)",
+            "Package Helper Error",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        )
+        $script:PackageHelperIsRunning = $false
+        Close-PackageHelperBusyDialog
+    }
 }
 
 function Get-PackageAnalyzerCodeSections {
@@ -4823,6 +5304,8 @@ function Get-ExistingPackageStartupPath {
     return ""
 }
 
+$script:UninstallMappingMismatchPattern = '(?is)\$appUninstallExeNameRegex\s*=\s*\(\$jsonContent\.Apps\[0\]\)\.appUninstallCommandLine'
+
 function Test-PackageAnalyzerKnownPatternRisks {
     param(
         [Parameter(Mandatory = $true)]
@@ -4832,12 +5315,14 @@ function Test-PackageAnalyzerKnownPatternRisks {
     )
 
     $warnings = New-Object System.Collections.Generic.List[string]
-    $inspectionTargets = @($CodeText)
+    $foundInExistingStartup = $false
+    $inspectionTargets = @(@{ Text = $CodeText; IsExistingStartup = $false })
     if (-not [string]::IsNullOrWhiteSpace($StartupCodeText)) {
-        $inspectionTargets += $StartupCodeText
+        $inspectionTargets += @{ Text = $StartupCodeText; IsExistingStartup = $true }
     }
 
-    foreach ($target in @($inspectionTargets)) {
+    foreach ($targetEntry in @($inspectionTargets)) {
+        $target = $targetEntry.Text
         if ([string]::IsNullOrWhiteSpace($target)) {
             continue
         }
@@ -4847,13 +5332,72 @@ function Test-PackageAnalyzerKnownPatternRisks {
             [void]$warnings.Add('Potential detection context reversal: code maps Context=System to HKCU registry paths. Verify HKLM/HKCU mapping logic before release.')
         }
 
-        $uninstallMappingPattern = '(?is)\$appUninstallExeNameRegex\s*=\s*\(\$jsonContent\.Apps\[0\]\)\.appUninstallCommandLine'
-        if ($target -match $uninstallMappingPattern) {
+        if ($target -match $script:UninstallMappingMismatchPattern) {
             [void]$warnings.Add('Potential uninstall mapping mismatch: appUninstallCommandLine appears assigned to appUninstallExeNameRegex. Verify uninstall command and regex variable targets.')
+            if ($targetEntry.IsExistingStartup) {
+                $foundInExistingStartup = $true
+            }
         }
     }
 
-    return @($warnings | Select-Object -Unique)
+    return @{
+        Warnings = @($warnings | Select-Object -Unique)
+        UninstallMappingMismatchInExistingStartup = $foundInExistingStartup
+    }
+}
+
+function Repair-UninstallMappingMismatch {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$StartupPath
+    )
+
+    $result = @{
+        Success = $false
+        Message = ""
+    }
+
+    try {
+        $content = Get-Content -Path $StartupPath -Raw -Encoding UTF8
+    }
+    catch {
+        $result.Message = "Failed to read $StartupPath : $($_.Exception.Message)"
+        return $result
+    }
+
+    if ($content -notmatch $script:UninstallMappingMismatchPattern) {
+        $result.Message = "Known-bad pattern was not found in $StartupPath (it may have already been fixed)."
+        return $result
+    }
+
+    $backupPath = "$StartupPath.bak"
+    try {
+        Copy-Item -Path $StartupPath -Destination $backupPath -Force
+    }
+    catch {
+        $result.Message = "Failed to write backup to $backupPath before repair: $($_.Exception.Message)"
+        return $result
+    }
+
+    # Replace only the mis-assigned LHS variable name in place, so the
+    # surrounding if-block/indentation/style of this specific file (which may
+    # predate the current Master Template's formatting) is preserved. The
+    # corrected line reads appUninstallCommandLine into appUninstallCommandLine
+    # itself, matching Master Template\Startup.pss's independent assignment.
+    $fixedContent = $content -replace $script:UninstallMappingMismatchPattern, '$appUninstallCommandLine = ($jsonContent.Apps[0]).appUninstallCommandLine'
+
+    try {
+        $utf8 = New-Object System.Text.UTF8Encoding $false
+        [System.IO.File]::WriteAllText($StartupPath, $fixedContent, $utf8)
+    }
+    catch {
+        $result.Message = "Failed to write repaired file to $StartupPath : $($_.Exception.Message)"
+        return $result
+    }
+
+    $result.Success = $true
+    $result.Message = "Repaired uninstall mapping mismatch in $StartupPath (backup saved to $backupPath)."
+    return $result
 }
 
 function Show-PackageAnalysisDialog {
@@ -4958,7 +5502,7 @@ function Invoke-AnalyzePackage {
         [void]$warnings.Add($guardingSuggestion)
     }
 
-    foreach ($patternWarning in @($knownPatternWarnings)) {
+    foreach ($patternWarning in @($knownPatternWarnings.Warnings)) {
         [void]$errors.Add($patternWarning)
     }
 
@@ -4997,10 +5541,14 @@ function Invoke-AnalyzePackage {
         if ($helperData) {
             $helperAnalysis = Test-PackageAnalyzerPackageHelperCompliance -HelperData $helperData -Sections $sections
             foreach ($line in @($helperAnalysis.Warnings)) {
-                [void]$warnings.Add($line)
+                if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
+                    [void]$warnings.Add($line)
+                }
             }
             foreach ($line in @($helperAnalysis.Info)) {
-                [void]$info.Add($line)
+                if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
+                    [void]$info.Add($line)
+                }
             }
             [void]$info.Add('Integrated Package Helper analysis completed and linked to Analyze Package report output.')
         }
@@ -5023,30 +5571,34 @@ function Invoke-AnalyzePackage {
     [void]$reportLines.Add("Install Context: $script:SelectedInstallContext")
     [void]$reportLines.Add('')
 
+    $nonBlankErrors = @($errors | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+    $nonBlankWarnings = @($warnings | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Unique)
+    $nonBlankInfo = @($info | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Unique)
+
     [void]$reportLines.Add('Blocking Issues:')
-    if ($errors.Count -eq 0) {
+    if ($nonBlankErrors.Count -eq 0) {
         [void]$reportLines.Add('- None')
     }
     else {
-        foreach ($line in @($errors)) { [void]$reportLines.Add("- $line") }
+        foreach ($line in $nonBlankErrors) { [void]$reportLines.Add("- $line") }
     }
 
     [void]$reportLines.Add('')
     [void]$reportLines.Add('Warnings:')
-    if ($warnings.Count -eq 0) {
+    if ($nonBlankWarnings.Count -eq 0) {
         [void]$reportLines.Add('- None')
     }
     else {
-        foreach ($line in @($warnings | Select-Object -Unique)) { [void]$reportLines.Add("- $line") }
+        foreach ($line in $nonBlankWarnings) { [void]$reportLines.Add("- $line") }
     }
 
     [void]$reportLines.Add('')
     [void]$reportLines.Add('Information:')
-    if ($info.Count -eq 0) {
+    if ($nonBlankInfo.Count -eq 0) {
         [void]$reportLines.Add('- None')
     }
     else {
-        foreach ($line in @($info | Select-Object -Unique)) { [void]$reportLines.Add("- $line") }
+        foreach ($line in $nonBlankInfo) { [void]$reportLines.Add("- $line") }
     }
 
     if ($commandReview.Recommendations -and $commandReview.Recommendations.Count -gt 0) {
@@ -5077,19 +5629,95 @@ function Invoke-AnalyzePackage {
         $lblGlobalsAssistantCount.Text = "Analyze Package completed | Wrappers loaded: $($script:GlobalsCommandNames.Count)"
     }
 
-    Write-ProcessOutputLine -Message ("Analyze Package | Stage=Complete | Outcome=Errors:{0} Warnings:{1} Info:{2}" -f $errors.Count, ($warnings | Select-Object -Unique).Count, ($info | Select-Object -Unique).Count) -Level 'INFO'
+    Write-ProcessOutputLine -Message ("Analyze Package | Stage=Complete | Outcome=Errors:{0} Warnings:{1} Info:{2}" -f $nonBlankErrors.Count, $nonBlankWarnings.Count, $nonBlankInfo.Count) -Level 'INFO'
 
     if ($OpenReportWindow) {
         Show-PackageAnalysisDialog -ReportText $reportText
     }
 
+    if ($knownPatternWarnings.UninstallMappingMismatchInExistingStartup -and -not [string]::IsNullOrWhiteSpace($existingStartupPath)) {
+        $repairPrompt = [System.Windows.Forms.MessageBox]::Show(
+            "This package's existing Startup.pss has a known-bad line from before a fix was applied to the Master Template:`n`n`$appUninstallExeNameRegex = (`$jsonContent.Apps[0]).appUninstallCommandLine`n`nThis assigns the uninstall command-line value into the uninstall executable regex variable instead of its own variable. Apply the one-line fix now?`n`nA backup (.bak) will be saved before any change.",
+            "Repair Known Uninstall Mapping Mismatch",
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        )
+
+        if ($repairPrompt -eq [System.Windows.Forms.DialogResult]::Yes) {
+            $repairResult = Repair-UninstallMappingMismatch -StartupPath $existingStartupPath
+            if ($repairResult.Success) {
+                Write-ProcessOutputLine -Message ("Analyze Package | Stage=Repair | Outcome={0}" -f $repairResult.Message) -Level "INFO"
+            }
+            else {
+                Write-ProcessOutputLine -Message ("Analyze Package | Stage=Repair | Outcome=Repair failed: {0}" -f $repairResult.Message) -Level "ERROR"
+            }
+        }
+        else {
+            Write-ProcessOutputLine -Message "Analyze Package | Stage=Repair | Outcome=Technician declined the offered Startup.pss repair." -Level "WARN"
+        }
+    }
+
+    $sectionRewrites = New-Object System.Collections.Generic.List[object]
+    $sectionTextBoxByKey = @{
+        PreInstall = $txtPreInstall
+        CustomInstall = $txtCustomInstall
+        PostInstall = $txtPostInstall
+        PreUninstall = $txtPreUninstall
+        CustomUninstall = $txtCustomUninstall
+        PostUninstall = $txtPostUninstall
+    }
+
+    foreach ($section in @($sections)) {
+        if ([string]::IsNullOrWhiteSpace($section.Text)) {
+            continue
+        }
+        $sectionRewrite = Get-GlobalsAssistantRewriteResult -CodeText $section.Text
+        if ($sectionRewrite.AppliedChanges -and $sectionRewrite.AppliedChanges.Count -gt 0) {
+            [void]$sectionRewrites.Add(@{
+                    Key = $section.Key
+                    Name = $section.Name
+                    RewrittenCode = $sectionRewrite.RewrittenCode
+                    AppliedChanges = @($sectionRewrite.AppliedChanges)
+                })
+        }
+    }
+
+    if ($sectionRewrites.Count -gt 0) {
+        $totalChanges = ($sectionRewrites | ForEach-Object { $_.AppliedChanges.Count } | Measure-Object -Sum).Sum
+        $sectionNameList = ($sectionRewrites | ForEach-Object { $_.Name }) -join ', '
+        $rewritePrompt = [System.Windows.Forms.MessageBox]::Show(
+            "Native PowerShell was detected with $totalChanges automatic wrapper rewrite opportunity/opportunities in: $sectionNameList.`n`nApply the FRB-wrapper-equivalent rewrites (matching error handling/logging) directly to these command sections now?`n`nYou can review the exact changes in the Analyze Package report.",
+            "Apply Wrapper Rewrites",
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Question
+        )
+
+        if ($rewritePrompt -eq [System.Windows.Forms.DialogResult]::Yes) {
+            foreach ($sectionRewrite in @($sectionRewrites)) {
+                $targetTextBox = $sectionTextBoxByKey[$sectionRewrite.Key]
+                if (-not $targetTextBox) {
+                    continue
+                }
+                $targetTextBox.Text = $sectionRewrite.RewrittenCode
+                Write-ProcessOutputLine -Message ("Analyze Package | Stage=WrapperRewrite | Outcome=Applied {0} change(s) to {1}." -f $sectionRewrite.AppliedChanges.Count, $sectionRewrite.Name) -Level "INFO"
+                foreach ($changeDetail in @($sectionRewrite.AppliedChanges)) {
+                    Write-ProcessOutputLine -Message ("Analyze Package | Stage=WrapperRewrite | Detail={0}: {1}" -f $sectionRewrite.Name, $changeDetail) -Level "INFO"
+                }
+            }
+            Sync-CommandSectionExpansionState
+        }
+        else {
+            Write-ProcessOutputLine -Message "Analyze Package | Stage=WrapperRewrite | Outcome=Technician declined the offered wrapper rewrites." -Level "WARN"
+        }
+    }
+
     return @{
         ReportText = $reportText
-        Errors = @($errors)
-        Warnings = @($warnings | Select-Object -Unique)
-        Info = @($info | Select-Object -Unique)
-        ErrorCount = $errors.Count
-        WarningCount = (@($warnings | Select-Object -Unique)).Count
+        Errors = @($nonBlankErrors)
+        Warnings = @($nonBlankWarnings)
+        Info = @($nonBlankInfo)
+        ErrorCount = $nonBlankErrors.Count
+        WarningCount = $nonBlankWarnings.Count
     }
 }
 
@@ -5329,6 +5957,218 @@ function Show-InstallContextSelectionDialog {
     return $RecommendedContext
 }
 
+function ConvertTo-AppStopRequiredProcessesString {
+    <#
+    .SYNOPSIS
+        Serializes the Advanced Package Settings process list into the
+        semicolon-delimited format Globals.ps1's ConvertStringTo-FRBProcess
+        expects: "FriendlyName,exe.name,true/false;..."
+    #>
+    param(
+        [Parameter(Mandatory = $false)]
+        [array]$Processes = @()
+    )
+
+    $entries = foreach ($proc in $Processes) {
+        $friendly = [string]$proc.FriendlyName
+        $exeName = [string]$proc.ExeName
+        if ([string]::IsNullOrWhiteSpace($friendly) -or [string]::IsNullOrWhiteSpace($exeName)) {
+            continue
+        }
+        $doPrompt = if ($proc.DoPrompt) { "true" } else { "false" }
+        "{0},{1},{2}" -f $friendly.Trim(), $exeName.Trim(), $doPrompt
+    }
+
+    if (@($entries).Count -eq 0) {
+        return ""
+    }
+
+    return (($entries -join ";") + ";")
+}
+
+function ConvertFrom-AppStopRequiredProcessesString {
+    <#
+    .SYNOPSIS
+        Parses an existing Startup.pss AppStopRequiredProcesses string back
+        into row objects for the Advanced Package Settings grid, so an
+        existing package's settings round-trip correctly when re-opened.
+    #>
+    param(
+        [Parameter(Mandatory = $false)]
+        [string]$Value = ""
+    )
+
+    $rows = @()
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return $rows
+    }
+
+    foreach ($entry in ($Value -split ';')) {
+        if ([string]::IsNullOrWhiteSpace($entry)) { continue }
+        $parts = $entry -split ','
+        if ($parts.Count -lt 2) { continue }
+        $rows += [PSCustomObject]@{
+            FriendlyName = $parts[0].Trim()
+            ExeName = $parts[1].Trim()
+            DoPrompt = if ($parts.Count -ge 3) { [string]$parts[2].Trim() -eq 'true' } else { $false }
+        }
+    }
+
+    return $rows
+}
+
+function Show-AdvancedPackageSettingsDialog {
+    <#
+    .SYNOPSIS
+        Modal dialog for the low-frequency per-package settings that don't
+        warrant permanent space on Tab 1: processes to close before
+        install/uninstall (AppStopRequiredProcesses), and the AppPrompt/
+        AppReboot flags. Modeled on Show-InstallContextSelectionDialog.
+    #>
+    param(
+        [Parameter(Mandatory = $false)]
+        [array]$ExistingProcesses = @(),
+
+        [Parameter(Mandatory = $false)]
+        [bool]$ExistingAppPrompt = $false,
+
+        [Parameter(Mandatory = $false)]
+        [bool]$ExistingAppReboot = $false
+    )
+
+    $dialog = New-Object System.Windows.Forms.Form
+    $dialog.Text = "Advanced Package Settings"
+    $dialog.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterParent
+    $dialog.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+    $dialog.MaximizeBox = $false
+    $dialog.MinimizeBox = $false
+    $dialog.ShowInTaskbar = $false
+    $dialog.BackColor = [System.Drawing.Color]::White
+    $dialog.ClientSize = New-Object System.Drawing.Size(620, 470)
+    $dialog.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+
+    $title = New-Object System.Windows.Forms.Label
+    $title.Text = "Processes to Close, Prompting, and Reboot"
+    $title.Location = New-Object System.Drawing.Point(20, 16)
+    $title.Size = New-Object System.Drawing.Size(580, 26)
+    $title.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
+    $dialog.Controls.Add($title)
+
+    $gridHeader = New-Object System.Windows.Forms.Label
+    $gridHeader.Text = "Processes that must be closed before install/uninstall:"
+    $gridHeader.Location = New-Object System.Drawing.Point(20, 52)
+    $gridHeader.Size = New-Object System.Drawing.Size(580, 20)
+    $dialog.Controls.Add($gridHeader)
+
+    $grid = New-Object System.Windows.Forms.DataGridView
+    $grid.Location = New-Object System.Drawing.Point(20, 76)
+    $grid.Size = New-Object System.Drawing.Size(580, 220)
+    $grid.AllowUserToAddRows = $true
+    $grid.AllowUserToDeleteRows = $true
+    $grid.RowHeadersVisible = $false
+    $grid.AutoSizeColumnsMode = [System.Windows.Forms.DataGridViewAutoSizeColumnsMode]::None
+
+    $colFriendly = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+    $colFriendly.Name = "FriendlyName"
+    $colFriendly.HeaderText = "Friendly Name"
+    $colFriendly.Width = 220
+    [void]$grid.Columns.Add($colFriendly)
+
+    $colExe = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+    $colExe.Name = "ExeName"
+    $colExe.HeaderText = "Executable (e.g. notepad.exe)"
+    $colExe.Width = 240
+    [void]$grid.Columns.Add($colExe)
+
+    $colPrompt = New-Object System.Windows.Forms.DataGridViewCheckBoxColumn
+    $colPrompt.Name = "DoPrompt"
+    $colPrompt.HeaderText = "Prompt User"
+    $colPrompt.Width = 90
+    [void]$grid.Columns.Add($colPrompt)
+
+    foreach ($proc in @($ExistingProcesses)) {
+        [void]$grid.Rows.Add($proc.FriendlyName, $proc.ExeName, [bool]$proc.DoPrompt)
+    }
+
+    $dialog.Controls.Add($grid)
+
+    $chkAppPrompt = New-Object System.Windows.Forms.CheckBox
+    $chkAppPrompt.Text = "Prompt technician/user before install (AppPrompt)"
+    $chkAppPrompt.Location = New-Object System.Drawing.Point(20, 310)
+    $chkAppPrompt.Size = New-Object System.Drawing.Size(560, 24)
+    $chkAppPrompt.Checked = $ExistingAppPrompt
+    $dialog.Controls.Add($chkAppPrompt)
+
+    $chkAppReboot = New-Object System.Windows.Forms.CheckBox
+    $chkAppReboot.Text = "Force reboot messaging after install (AppReboot)"
+    $chkAppReboot.Location = New-Object System.Drawing.Point(20, 340)
+    $chkAppReboot.Size = New-Object System.Drawing.Size(560, 24)
+    $chkAppReboot.Checked = $ExistingAppReboot
+    $dialog.Controls.Add($chkAppReboot)
+
+    $note = New-Object System.Windows.Forms.Label
+    $note.Text = "Leave the process list empty if this package does not need to close anything before install/uninstall."
+    $note.Location = New-Object System.Drawing.Point(20, 374)
+    $note.Size = New-Object System.Drawing.Size(580, 36)
+    $note.ForeColor = [System.Drawing.Color]::FromArgb(90, 90, 90)
+    $note.Font = New-Object System.Drawing.Font("Segoe UI", 8, [System.Drawing.FontStyle]::Italic)
+    $dialog.Controls.Add($note)
+
+    $btnSave = New-Object System.Windows.Forms.Button
+    $btnSave.Text = "Save"
+    $btnSave.Location = New-Object System.Drawing.Point(420, 420)
+    $btnSave.Size = New-Object System.Drawing.Size(85, 30)
+    $btnSave.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
+    $btnSave.ForeColor = [System.Drawing.Color]::White
+    $btnSave.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnSave.FlatAppearance.BorderSize = 0
+    $dialog.Controls.Add($btnSave)
+
+    $btnDialogCancel = New-Object System.Windows.Forms.Button
+    $btnDialogCancel.Text = "Cancel"
+    $btnDialogCancel.Location = New-Object System.Drawing.Point(515, 420)
+    $btnDialogCancel.Size = New-Object System.Drawing.Size(85, 30)
+    $btnDialogCancel.BackColor = [System.Drawing.Color]::FromArgb(180, 180, 180)
+    $btnDialogCancel.ForeColor = [System.Drawing.Color]::Black
+    $btnDialogCancel.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnDialogCancel.FlatAppearance.BorderSize = 0
+    $dialog.Controls.Add($btnDialogCancel)
+
+    $dialog.Tag = $null
+    $btnSave.Add_Click({
+        $grid.EndEdit()
+        $rows = @()
+        foreach ($row in $grid.Rows) {
+            if ($row.IsNewRow) { continue }
+            $friendly = [string]$row.Cells["FriendlyName"].Value
+            $exeName = [string]$row.Cells["ExeName"].Value
+            if ([string]::IsNullOrWhiteSpace($friendly) -or [string]::IsNullOrWhiteSpace($exeName)) { continue }
+            $rows += [PSCustomObject]@{
+                FriendlyName = $friendly.Trim()
+                ExeName = $exeName.Trim()
+                DoPrompt = [bool]$row.Cells["DoPrompt"].Value
+            }
+        }
+
+        $dialog.Tag = [PSCustomObject]@{
+            Processes = $rows
+            AppPrompt = $chkAppPrompt.Checked
+            AppReboot = $chkAppReboot.Checked
+        }
+        $dialog.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $dialog.Close()
+    })
+    $btnDialogCancel.Add_Click({
+        $dialog.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+        $dialog.Close()
+    })
+
+    [void]$dialog.ShowDialog($form)
+    $dialog.Dispose()
+
+    return $dialog.Tag
+}
+
 function Invoke-InstallContextDetectionPrompt {
     param(
         [Parameter(Mandatory = $true)]
@@ -5427,7 +6267,7 @@ $tabControl.Controls.Add($tabMain)
 $grpMetadata = New-Object System.Windows.Forms.GroupBox
 $grpMetadata.Text = "Package Metadata"
 $grpMetadata.Location = New-Object System.Drawing.Point(20, 20)
-$grpMetadata.Size = New-Object System.Drawing.Size(800, 350)
+$grpMetadata.Size = New-Object System.Drawing.Size(800, 390)
 $grpMetadata.BackColor = $Colors.GroupBackground
 $tabMain.Controls.Add($grpMetadata)
 
@@ -5525,10 +6365,33 @@ $txtVersion.Location = New-Object System.Drawing.Point(180, 248)
 $txtVersion.Size = New-Object System.Drawing.Size(600, 25)
 $grpMetadata.Controls.Add($txtVersion)
 
+# RITM Number
+$lblRitm = New-Object System.Windows.Forms.Label
+$lblRitm.Text = "RITM Number: *"
+$lblRitm.Location = New-Object System.Drawing.Point(20, 288)
+$lblRitm.Size = New-Object System.Drawing.Size(150, 20)
+$grpMetadata.Controls.Add($lblRitm)
+
+$txtRitm = New-Object System.Windows.Forms.TextBox
+$txtRitm.Location = New-Object System.Drawing.Point(180, 286)
+$txtRitm.Size = New-Object System.Drawing.Size(250, 25)
+$grpMetadata.Controls.Add($txtRitm)
+$script:txtRitm = $txtRitm
+
+$btnAdvancedSettings = New-Object System.Windows.Forms.Button
+$btnAdvancedSettings.Text = "Advanced Package Settings..."
+$btnAdvancedSettings.Location = New-Object System.Drawing.Point(450, 284)
+$btnAdvancedSettings.Size = New-Object System.Drawing.Size(240, 28)
+$btnAdvancedSettings.BackColor = $Colors.AccentTeal
+$btnAdvancedSettings.ForeColor = [System.Drawing.Color]::White
+$btnAdvancedSettings.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+$btnAdvancedSettings.FlatAppearance.BorderSize = 0
+$grpMetadata.Controls.Add($btnAdvancedSettings)
+
 # User Context Checkbox
 $lblUserContextMode = New-Object System.Windows.Forms.Label
 $lblUserContextMode.Text = "User Context Installation (no elevation required)"
-$lblUserContextMode.Location = New-Object System.Drawing.Point(180, 288)
+$lblUserContextMode.Location = New-Object System.Drawing.Point(180, 328)
 $lblUserContextMode.Size = New-Object System.Drawing.Size(600, 20)
 $lblUserContextMode.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $lblUserContextMode.ForeColor = [System.Drawing.Color]::FromArgb(0, 102, 204)
@@ -5538,7 +6401,7 @@ $script:lblUserContextMode = $lblUserContextMode
 
 $lblSystemContextMode = New-Object System.Windows.Forms.Label
 $lblSystemContextMode.Text = "System Context Installation (Elevation is required)"
-$lblSystemContextMode.Location = New-Object System.Drawing.Point(180, 288)
+$lblSystemContextMode.Location = New-Object System.Drawing.Point(180, 328)
 $lblSystemContextMode.Size = New-Object System.Drawing.Size(600, 20)
 $lblSystemContextMode.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $lblSystemContextMode.ForeColor = [System.Drawing.Color]::FromArgb(0, 128, 0)
@@ -5549,7 +6412,7 @@ $script:lblSystemContextMode = $lblSystemContextMode
 # Folder Exists Flag
 $lblFolderExistsFlag = New-Object System.Windows.Forms.Label
 $lblFolderExistsFlag.Text = "Folder exists - will update"
-$lblFolderExistsFlag.Location = New-Object System.Drawing.Point(180, 315)
+$lblFolderExistsFlag.Location = New-Object System.Drawing.Point(180, 355)
 $lblFolderExistsFlag.Size = New-Object System.Drawing.Size(600, 25)
 $lblFolderExistsFlag.BackColor = $Colors.WarningYellow
 $lblFolderExistsFlag.ForeColor = $Colors.TextDark
@@ -5560,7 +6423,7 @@ $grpMetadata.Controls.Add($lblFolderExistsFlag)
 # Switches GroupBox
 $grpSwitches = New-Object System.Windows.Forms.GroupBox
 $grpSwitches.Text = "Installation Switches"
-$grpSwitches.Location = New-Object System.Drawing.Point(20, 410)
+$grpSwitches.Location = New-Object System.Drawing.Point(20, 450)
 $grpSwitches.Size = New-Object System.Drawing.Size(800, 130)
 $grpSwitches.BackColor = $Colors.GroupBackground
 $tabMain.Controls.Add($grpSwitches)
@@ -5596,7 +6459,7 @@ $grpSwitches.Controls.Add($txtUninstallSwitch)
 # Package Info GroupBox
 $grpPackageInfo = New-Object System.Windows.Forms.GroupBox
 $grpPackageInfo.Text = "Package Information"
-$grpPackageInfo.Location = New-Object System.Drawing.Point(20, 510)
+$grpPackageInfo.Location = New-Object System.Drawing.Point(20, 550)
 $grpPackageInfo.Size = New-Object System.Drawing.Size(800, 90)
 $grpPackageInfo.BackColor = $Colors.GroupBackground
 $tabMain.Controls.Add($grpPackageInfo)
@@ -5933,24 +6796,24 @@ $txtPostUninstall.Add_TextChanged({
 #endregion Tab 3
 
 #region Tab 4: Troubleshooting
-$tabPackageHelper = New-Object System.Windows.Forms.TabPage
-$tabPackageHelper.Text = "Troubleshooting"
-$tabPackageHelper.BackColor = $Colors.Background
-$tabControl.Controls.Add($tabPackageHelper)
+$tabTroubleshooting = New-Object System.Windows.Forms.TabPage
+$tabTroubleshooting.Text = "Troubleshooting"
+$tabTroubleshooting.BackColor = $Colors.Background
+$tabControl.Controls.Add($tabTroubleshooting)
 
 $lblPackageHelperHeader = New-Object System.Windows.Forms.Label
 $lblPackageHelperHeader.Text = "Troubleshooting - Live Log Review and Suggested Fixes"
 $lblPackageHelperHeader.Location = New-Object System.Drawing.Point(20, 4)
 $lblPackageHelperHeader.Size = New-Object System.Drawing.Size(600, 22)
 $lblPackageHelperHeader.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
-$tabPackageHelper.Controls.Add($lblPackageHelperHeader)
+$tabTroubleshooting.Controls.Add($lblPackageHelperHeader)
 
-$script:lblPackageHelperContext = New-Object System.Windows.Forms.Label
-$script:lblPackageHelperContext.Text = "Refresh logs to scan the current process, error, and transcript files."
-$script:lblPackageHelperContext.Location = New-Object System.Drawing.Point(20, 26)
-$script:lblPackageHelperContext.Size = New-Object System.Drawing.Size(640, 18)
-$script:lblPackageHelperContext.ForeColor = [System.Drawing.Color]::Gray
-$tabPackageHelper.Controls.Add($script:lblPackageHelperContext)
+$script:lblTroubleshootingContext = New-Object System.Windows.Forms.Label
+$script:lblTroubleshootingContext.Text = "Refresh logs to scan the current process, error, and transcript files."
+$script:lblTroubleshootingContext.Location = New-Object System.Drawing.Point(20, 26)
+$script:lblTroubleshootingContext.Size = New-Object System.Drawing.Size(640, 18)
+$script:lblTroubleshootingContext.ForeColor = [System.Drawing.Color]::Gray
+$tabTroubleshooting.Controls.Add($script:lblTroubleshootingContext)
 
 $btnRefreshTroubleshooting = New-Object System.Windows.Forms.Button
 $btnRefreshTroubleshooting.Text = "Refresh Logs"
@@ -5960,7 +6823,7 @@ $btnRefreshTroubleshooting.BackColor = [System.Drawing.Color]::FromArgb(0, 105, 
 $btnRefreshTroubleshooting.ForeColor = [System.Drawing.Color]::White
 $btnRefreshTroubleshooting.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $btnRefreshTroubleshooting.FlatAppearance.BorderSize = 0
-$tabPackageHelper.Controls.Add($btnRefreshTroubleshooting)
+$tabTroubleshooting.Controls.Add($btnRefreshTroubleshooting)
 
 $btnAnalyzeTroubleshooting = New-Object System.Windows.Forms.Button
 $btnAnalyzeTroubleshooting.Text = "Scan Logs + Code"
@@ -5970,7 +6833,17 @@ $btnAnalyzeTroubleshooting.BackColor = $Colors.SuccessGreen
 $btnAnalyzeTroubleshooting.ForeColor = [System.Drawing.Color]::White
 $btnAnalyzeTroubleshooting.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $btnAnalyzeTroubleshooting.FlatAppearance.BorderSize = 0
-$tabPackageHelper.Controls.Add($btnAnalyzeTroubleshooting)
+$tabTroubleshooting.Controls.Add($btnAnalyzeTroubleshooting)
+
+$btnInsertStartProcessFallback = New-Object System.Windows.Forms.Button
+$btnInsertStartProcessFallback.Text = "Insert Start-Process Fallback"
+$btnInsertStartProcessFallback.Location = New-Object System.Drawing.Point(670, 86)
+$btnInsertStartProcessFallback.Size = New-Object System.Drawing.Size(170, 28)
+$btnInsertStartProcessFallback.BackColor = [System.Drawing.Color]::FromArgb(186, 103, 0)
+$btnInsertStartProcessFallback.ForeColor = [System.Drawing.Color]::White
+$btnInsertStartProcessFallback.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+$btnInsertStartProcessFallback.FlatAppearance.BorderSize = 0
+$tabTroubleshooting.Controls.Add($btnInsertStartProcessFallback)
 
 $txtTroubleshootingLog = New-Object System.Windows.Forms.RichTextBox
 $txtTroubleshootingLog.Location = New-Object System.Drawing.Point(20, 58)
@@ -5982,7 +6855,7 @@ $txtTroubleshootingLog.WordWrap = $false
 $txtTroubleshootingLog.Font = New-Object System.Drawing.Font("Consolas", 10)
 $txtTroubleshootingLog.BackColor = [System.Drawing.Color]::White
 $txtTroubleshootingLog.ForeColor = [System.Drawing.Color]::FromArgb(35, 35, 35)
-$tabPackageHelper.Controls.Add($txtTroubleshootingLog)
+$tabTroubleshooting.Controls.Add($txtTroubleshootingLog)
 
 $txtTroubleshootingFindings = New-Object System.Windows.Forms.TextBox
 $txtTroubleshootingFindings.Location = New-Object System.Drawing.Point(20, 320)
@@ -5993,7 +6866,7 @@ $txtTroubleshootingFindings.WordWrap = $false
 $txtTroubleshootingFindings.Font = $FontCode
 $txtTroubleshootingFindings.ReadOnly = $true
 $txtTroubleshootingFindings.Text = "Findings will appear here after a scan."
-$tabPackageHelper.Controls.Add($txtTroubleshootingFindings)
+$tabTroubleshooting.Controls.Add($txtTroubleshootingFindings)
 
 $txtTroubleshootingRecommendations = New-Object System.Windows.Forms.TextBox
 $txtTroubleshootingRecommendations.Location = New-Object System.Drawing.Point(20, 442)
@@ -6004,35 +6877,7 @@ $txtTroubleshootingRecommendations.WordWrap = $false
 $txtTroubleshootingRecommendations.Font = $FontCode
 $txtTroubleshootingRecommendations.ReadOnly = $true
 $txtTroubleshootingRecommendations.Text = "Suggested fixes will appear here after a scan."
-$tabPackageHelper.Controls.Add($txtTroubleshootingRecommendations)
-
-function Update-TroubleshootingTabContent {
-    $insights = Get-TroubleshootingLogInsights
-
-    if ($txtTroubleshootingLog) {
-        $logText = New-Object System.Collections.Generic.List[string]
-        [void]$logText.Add(("Log files scanned: {0}" -f (@($insights.LogPaths).Count)))
-        foreach ($path in @($insights.LogPaths)) {
-            [void]$logText.Add(("- {0}" -f $path))
-        }
-        [void]$logText.Add("")
-        [void]$logText.Add($insights.Summary)
-        $txtTroubleshootingLog.Text = ($logText -join [Environment]::NewLine)
-    }
-
-    if ($txtTroubleshootingFindings) {
-        $txtTroubleshootingFindings.Text = @($insights.Findings) -join [Environment]::NewLine
-    }
-
-    if ($txtTroubleshootingRecommendations) {
-        $txtTroubleshootingRecommendations.Text = @($insights.Recommendations) -join [Environment]::NewLine
-    }
-
-    if ($script:lblPackageHelperContext) {
-        $script:lblPackageHelperContext.Text = "Scanned $(@($insights.LogPaths).Count) log file(s). Refresh while a process is running to watch live updates."
-        $script:lblPackageHelperContext.ForeColor = [System.Drawing.Color]::FromArgb(0, 110, 0)
-    }
-}
+$tabTroubleshooting.Controls.Add($txtTroubleshootingRecommendations)
 
 $btnRefreshTroubleshooting.Add_Click({
     Update-TroubleshootingTabContent
@@ -6042,11 +6887,196 @@ $btnAnalyzeTroubleshooting.Add_Click({
     Update-TroubleshootingTabContent
 })
 
+$btnInsertStartProcessFallback.Add_Click({
+    if ([string]::IsNullOrWhiteSpace($script:LastStartProcessFallbackTemplate)) {
+        [System.Windows.Forms.MessageBox]::Show(
+            "No Start-Process fallback template has been generated yet. Run 'Scan Logs + Code' after an Execute-Process failure is detected in the logs.",
+            "Insert Start-Process Fallback",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information
+        )
+        return
+    }
+
+    $targetBox = if ($script:LastTroubleshootingContext -eq "Uninstall") { $txtCustomUninstall } else { $txtCustomInstall }
+    $targetLabel = if ($script:LastTroubleshootingContext -eq "Uninstall") { "Custom Uninstall" } else { "Custom Install" }
+
+    if (-not $targetBox) {
+        [System.Windows.Forms.MessageBox]::Show(
+            "The $targetLabel command box is not available.",
+            "Insert Start-Process Fallback",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        )
+        return
+    }
+
+    $separator = if ([string]::IsNullOrWhiteSpace($targetBox.Text)) { "" } else { [Environment]::NewLine + [Environment]::NewLine }
+    $targetBox.Text += $separator + $script:LastStartProcessFallbackTemplate
+    $targetBox.Visible = $true
+    Write-ProcessOutputLine -Message ("Inserted Start-Process fallback template into {0} command box." -f $targetLabel) -Level "INFO"
+})
+
 Update-TroubleshootingTabContent
 
 #endregion Tab 4
 
-#region Tab 5: Globals Assistant
+#region Tab 5: Package Helper
+$tabPackageHelper = New-Object System.Windows.Forms.TabPage
+$tabPackageHelper.Text = "Package Helper"
+$tabPackageHelper.BackColor = $Colors.Background
+$tabPackageHelper.AutoScroll = $true
+$tabControl.Controls.Add($tabPackageHelper)
+
+$lblPackageHelperHeader = New-Object System.Windows.Forms.Label
+$lblPackageHelperHeader.Text = "Package Helper - Suggested Uninstall Media, Switches, and Commands"
+$lblPackageHelperHeader.Location = New-Object System.Drawing.Point(20, 10)
+$lblPackageHelperHeader.Size = New-Object System.Drawing.Size(800, 22)
+$lblPackageHelperHeader.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
+$tabPackageHelper.Controls.Add($lblPackageHelperHeader)
+
+$script:lblPackageHelperContext = New-Object System.Windows.Forms.Label
+$script:lblPackageHelperContext.Text = "Fill in App Vendor and App Name on Main Settings, then click Package Helper to generate suggestions."
+$script:lblPackageHelperContext.Location = New-Object System.Drawing.Point(20, 34)
+$script:lblPackageHelperContext.Size = New-Object System.Drawing.Size(800, 18)
+$script:lblPackageHelperContext.ForeColor = [System.Drawing.Color]::Gray
+$tabPackageHelper.Controls.Add($script:lblPackageHelperContext)
+
+$packageHelperSectionDefs = @(
+    @{ Key = "UninstallExecutable";     Title = "Uninstall Media";                  IsSwitchOnly = $true }
+    @{ Key = "InstallCommand";          Title = "Install Command-line Switch";      IsSwitchOnly = $true }
+    @{ Key = "UninstallCommand";        Title = "Uninstall Command-Line Switch";    IsSwitchOnly = $true }
+    @{ Key = "PreInstallCommands";      Title = "Pre-Install Commands";             IsSwitchOnly = $false }
+    @{ Key = "CustomInstallCommands";   Title = "Custom Install Commands";          IsSwitchOnly = $false }
+    @{ Key = "PostInstallCommands";     Title = "Post-Install Commands";            IsSwitchOnly = $false }
+    @{ Key = "PreUninstallCommands";    Title = "Pre-Uninstall Commands";           IsSwitchOnly = $false }
+    @{ Key = "CustomUninstallCommands"; Title = "Custom Uninstall Commands";        IsSwitchOnly = $false }
+    @{ Key = "PostUninstallCommands";   Title = "Post-Uninstall Commands";          IsSwitchOnly = $false }
+)
+$packageHelperSwitchOnlyKeys = @($packageHelperSectionDefs | Where-Object { $_.IsSwitchOnly } | ForEach-Object { $_.Key })
+
+$packageHelperNextY = 70
+foreach ($sectionDef in $packageHelperSectionDefs) {
+    $sectionKey = $sectionDef.Key
+    $outputHeight = if ($sectionDef.IsSwitchOnly) { 30 } else { 90 }
+    $groupHeight = if ($sectionDef.IsSwitchOnly) { 160 } else { 220 }
+
+    $grpSection = New-Object System.Windows.Forms.GroupBox
+    $grpSection.Text = $sectionDef.Title
+    $grpSection.Location = New-Object System.Drawing.Point(20, $packageHelperNextY)
+    $grpSection.Size = New-Object System.Drawing.Size(800, $groupHeight)
+    $grpSection.BackColor = $Colors.GroupBackground
+    $tabPackageHelper.Controls.Add($grpSection)
+
+    $lblSummary = New-Object System.Windows.Forms.Label
+    $lblSummary.Text = "No data generated for this section yet."
+    $lblSummary.Location = New-Object System.Drawing.Point(18, 28)
+    $lblSummary.Size = New-Object System.Drawing.Size(764, 36)
+    $lblSummary.ForeColor = [System.Drawing.Color]::FromArgb(90, 90, 90)
+    $grpSection.Controls.Add($lblSummary)
+
+    $txtOutput = New-Object System.Windows.Forms.TextBox
+    $txtOutput.Location = New-Object System.Drawing.Point(18, 74)
+    $txtOutput.Size = New-Object System.Drawing.Size(764, $outputHeight)
+    $txtOutput.Multiline = (-not $sectionDef.IsSwitchOnly)
+    $txtOutput.ScrollBars = if ($sectionDef.IsSwitchOnly) { 'None' } else { 'Both' }
+    $txtOutput.WordWrap = $false
+    $txtOutput.Font = $FontCode
+    $txtOutput.ReadOnly = $true
+    $grpSection.Controls.Add($txtOutput)
+
+    $navY = 74 + $outputHeight + 20
+
+    $btnPrev = New-Object System.Windows.Forms.Button
+    $btnPrev.Text = "< Prev"
+    $btnPrev.Location = New-Object System.Drawing.Point(18, $navY)
+    $btnPrev.Size = New-Object System.Drawing.Size(70, 28)
+    $grpSection.Controls.Add($btnPrev)
+
+    $lblIndex = New-Object System.Windows.Forms.Label
+    $lblIndex.Text = "Suggestion 0 of 0"
+    $lblIndex.Location = New-Object System.Drawing.Point(96, $navY + 6)
+    $lblIndex.Size = New-Object System.Drawing.Size(150, 18)
+    $grpSection.Controls.Add($lblIndex)
+
+    $btnNext = New-Object System.Windows.Forms.Button
+    $btnNext.Text = "Next >"
+    $btnNext.Location = New-Object System.Drawing.Point(255, $navY)
+    $btnNext.Size = New-Object System.Drawing.Size(70, 28)
+    $grpSection.Controls.Add($btnNext)
+
+    $btnInsert = New-Object System.Windows.Forms.Button
+    $btnInsert.Text = if ($sectionDef.IsSwitchOnly) { "Use This" } else { "Copy to Clipboard" }
+    $btnInsert.Location = New-Object System.Drawing.Point(340, $navY)
+    $btnInsert.Size = New-Object System.Drawing.Size(150, 28)
+    $btnInsert.BackColor = $Colors.AccentTeal
+    $btnInsert.ForeColor = [System.Drawing.Color]::White
+    $btnInsert.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnInsert.FlatAppearance.BorderSize = 0
+    $grpSection.Controls.Add($btnInsert)
+
+    $lblFeedback = New-Object System.Windows.Forms.Label
+    $lblFeedback.Text = "Did this help?"
+    $lblFeedback.Location = New-Object System.Drawing.Point(18, $navY + 36)
+    $lblFeedback.Size = New-Object System.Drawing.Size(764, 18)
+    $lblFeedback.ForeColor = [System.Drawing.Color]::Gray
+    $grpSection.Controls.Add($lblFeedback)
+
+    $script:PackageHelperControls[$sectionKey] = @{
+        Group          = $grpSection
+        SummaryLabel   = $lblSummary
+        OutputTextBox  = $txtOutput
+        IndexLabel     = $lblIndex
+        FeedbackLabel  = $lblFeedback
+        Suggestions    = @()
+        CurrentIndex   = 0
+        DefaultTitle   = $sectionDef.Title
+    }
+
+    $btnPrev.Add_Click({
+        $state = $script:PackageHelperControls[$this.Tag]
+        if (-not $state -or $state.Suggestions.Count -eq 0) { return }
+        $newIndex = $state.CurrentIndex - 1
+        if ($newIndex -lt 0) { $newIndex = $state.Suggestions.Count - 1 }
+        Set-PackageHelperSectionSuggestion -SectionKey $this.Tag -SuggestionIndex $newIndex
+    }.GetNewClosure())
+    $btnPrev.Tag = $sectionKey
+
+    $btnNext.Add_Click({
+        $state = $script:PackageHelperControls[$this.Tag]
+        if (-not $state -or $state.Suggestions.Count -eq 0) { return }
+        $newIndex = $state.CurrentIndex + 1
+        if ($newIndex -gt ($state.Suggestions.Count - 1)) { $newIndex = 0 }
+        Set-PackageHelperSectionSuggestion -SectionKey $this.Tag -SuggestionIndex $newIndex
+    }.GetNewClosure())
+    $btnNext.Tag = $sectionKey
+
+    $btnInsert.Add_Click({
+        $key = $this.Tag
+        $state = $script:PackageHelperControls[$key]
+        if (-not $state -or [string]::IsNullOrWhiteSpace($state.OutputTextBox.Text)) { return }
+
+        if ($packageHelperSwitchOnlyKeys -contains $key) {
+            if (Apply-PackageHelperSectionToGui -SectionKey $key) {
+                $state.FeedbackLabel.Text = "Applied to Main Settings."
+            } else {
+                $state.FeedbackLabel.Text = "Could not apply this suggestion."
+            }
+        } else {
+            [System.Windows.Forms.Clipboard]::SetText($state.OutputTextBox.Text)
+            $state.FeedbackLabel.Text = "Copied to clipboard. Paste into the matching command section."
+        }
+    }.GetNewClosure())
+    $btnInsert.Tag = $sectionKey
+
+    $packageHelperNextY += $groupHeight + 24
+}
+
+Set-PackageHelperTabContent -HelperData ([hashtable]@{ Sections = [ordered]@{} })
+
+#endregion Tab 5
+
+#region Tab 6: Globals Assistant
 $tabGlobalsAssistant = New-Object System.Windows.Forms.TabPage
 $tabGlobalsAssistant.Text = "Globals Assistant"
 $tabGlobalsAssistant.BackColor = $Colors.Background
@@ -6338,6 +7368,12 @@ function Load-ExistingPackageDataIfPresent {
         }
         if ($script:lblUninstallSwitch) { $script:lblUninstallSwitch.Visible = $true }
 
+        # Rehydrate Advanced Package Settings (Milestone B) from the existing package
+        $script:AdvancedStopProcesses = @(ConvertFrom-AppStopRequiredProcessesString -Value $loadResult.AppStopRequiredProcesses)
+        $script:AdvancedAppPrompt = [bool]$loadResult.AppPrompt
+        $script:AdvancedAppReboot = [bool]$loadResult.AppReboot
+        Write-ProcessOutputLine -Message ("Advanced Package Settings loaded from existing package - StopProcesses={0} AppPrompt={1} AppReboot={2}" -f $script:AdvancedStopProcesses.Count, $script:AdvancedAppPrompt, $script:AdvancedAppReboot) -Level "INFO"
+
         Sync-CommandSectionExpansionState
         Ensure-CustomUninstallTextBound -ExpectedText $loadResult.CustomUninstall -Stage "post-sync"
 
@@ -6417,6 +7453,20 @@ $txtName.Add_TextChanged({ Check-PackageFolderExists })
 $txtEdition.Add_TextChanged({ Check-PackageFolderExists })
 $txtVersion.Add_TextChanged({ Check-PackageFolderExists })
 
+# Advanced Package Settings Button Click Event
+$btnAdvancedSettings.Add_Click({
+    $result = Show-AdvancedPackageSettingsDialog -ExistingProcesses $script:AdvancedStopProcesses `
+                                                  -ExistingAppPrompt $script:AdvancedAppPrompt `
+                                                  -ExistingAppReboot $script:AdvancedAppReboot
+
+    if ($result) {
+        $script:AdvancedStopProcesses = @($result.Processes)
+        $script:AdvancedAppPrompt = [bool]$result.AppPrompt
+        $script:AdvancedAppReboot = [bool]$result.AppReboot
+        Write-ProcessOutputLine -Message ("Advanced Package Settings saved - StopProcesses={0} AppPrompt={1} AppReboot={2}" -f $script:AdvancedStopProcesses.Count, $script:AdvancedAppPrompt, $script:AdvancedAppReboot) -Level "INFO"
+    }
+})
+
 # Browse Button Click Event
 $btnBrowse.Add_Click({
     $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
@@ -6426,6 +7476,8 @@ $btnBrowse.Add_Click({
     
     if ($openFileDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
         $script:InstallationMediaPath = $openFileDialog.FileName
+        $script:DetectedMsiProductCode = ""
+        $script:DetectedMsiTransformPath = ""
         $txtMedia.Text = [System.IO.Path]::GetFileName($script:InstallationMediaPath)
         
         # Use MetadataEngine to extract metadata
@@ -6491,7 +7543,7 @@ $btnBrowse.Add_Click({
             $lblMediaType.Text = "Type: MSI - Using DetectionEngine..."
             $lblMediaType.ForeColor = [System.Drawing.Color]::Blue
             $form.Refresh()
-            
+
             try {
                 # Use DetectionEngine to detect MSI installer type
                 $detectionResult = Get-InstallerType -FilePath $script:InstallationMediaPath
@@ -6502,8 +7554,31 @@ $btnBrowse.Add_Click({
                 $script:DetectedInstallerType = "Generic"
             }
 
+            # Auto-detect ProductCode and a matching .mst transform - no GUI field needed
+            # for either in the common case (see Milestone B, Recommended changes.txt item 1).
+            try {
+                $script:DetectedMsiProductCode = Get-MsiProductCode -FilePath $script:InstallationMediaPath
+                if (-not [string]::IsNullOrWhiteSpace($script:DetectedMsiProductCode)) {
+                    Write-ProcessOutputLine -Message ("Detected MSI ProductCode: {0}" -f $script:DetectedMsiProductCode) -Level "INFO"
+                }
+            }
+            catch {
+                $script:DetectedMsiProductCode = ""
+                Write-ProcessOutputLine -Message ("Failed to read MSI ProductCode: {0}" -f $_.Exception.Message) -Level "WARN"
+            }
+
+            try {
+                $script:DetectedMsiTransformPath = Get-MatchingTransformFile -MsiPath $script:InstallationMediaPath
+                if (-not [string]::IsNullOrWhiteSpace($script:DetectedMsiTransformPath)) {
+                    Write-ProcessOutputLine -Message ("Detected matching MST: {0}" -f $script:DetectedMsiTransformPath) -Level "INFO"
+                }
+            }
+            catch {
+                $script:DetectedMsiTransformPath = ""
+            }
+
             Invoke-InstallContextDetectionPrompt -FilePath $script:InstallationMediaPath -InstallerType $script:DetectedInstallerType
-            
+
             # Show MSI-specific controls (same as EXE)
             $lblUninstallExecutable.Visible = $true
             $lblInstallSwitch.Visible = $true
@@ -6534,7 +7609,12 @@ $btnBrowse.Add_Click({
 })
 
 $btnAnalyzePackage.Add_Click({
-    Start-ProcessSession
+    # Deliberately NOT calling Start-ProcessSession here: Analyze Package is a
+    # re-runnable diagnostic the technician may click repeatedly during one
+    # packaging session, not the start of a new session. Clearing the live
+    # Process Log on every click destroyed history the technician was
+    # actively watching. Start-ProcessSession stays reserved for Start
+    # Packaging (btnCreate), which is a genuine new-session boundary.
     if ($script:ProcessTab) {
         $tabControl.SelectedTab = $script:ProcessTab
     }

@@ -395,9 +395,12 @@ function Set-ValidationDetails {
         
         [Parameter()]
         [ValidateSet("Yes", "No")]
-        [string]$RebootRequired = "No"
+        [string]$RebootRequired = "No",
+
+        [Parameter()]
+        [switch]$VerificationSkipped
     )
-    
+
     Write-Verbose "Setting installation details"
 
     Add-Type -AssemblyName System.Net
@@ -412,8 +415,15 @@ function Set-ValidationDetails {
         return [System.Net.WebUtility]::HtmlEncode($text).Replace("`r`n", '<br>').Replace("`n", '<br>').Replace("`r", '<br>')
     }
 
+    $skippedNotice = if ($VerificationSkipped) {
+        "<p><strong>Note:</strong> Installation details could not be automatically verified for this package. The technician chose to continue without them.</p>"
+    } else {
+        ""
+    }
+
     $detailsTable = @"
 <h2>3.1 Installation Details</h2>
+$skippedNotice
 <table class="details-table">
     <tr><td>Installation Directory:</td><td>$(& $encodeWithBreaks $safeInstallDirectory)</td></tr>
     <tr><td>Install Registry Keys:</td><td>$(& $encodeWithBreaks $safeRegistryKeys)</td></tr>
@@ -462,7 +472,10 @@ function Set-VendorDocumentationDetails {
         [string]$ApplicationConflictsText = "The Vendor has nothing to report",
 
         [Parameter()]
-        [string]$UpgradePathsText = "The Vendor has nothing to report"
+        [string]$UpgradePathsText = "The Vendor has nothing to report",
+
+        [Parameter()]
+        [object]$HelpAboutVerification = $null
     )
 
     Add-Type -AssemblyName System.Net
@@ -496,7 +509,24 @@ function Set-VendorDocumentationDetails {
     $confLegacy = [System.Net.WebUtility]::HtmlEncode($conf).Replace([Environment]::NewLine, '<br>')
     $upgLegacy = [System.Net.WebUtility]::HtmlEncode($upg).Replace([Environment]::NewLine, '<br>')
 
-    $helpAboutContent = "<li>Help/About verification evidence captured in Figure 5.</li>"
+    $helpAboutContent = if (-not $HelpAboutVerification) {
+        "<li>Help/About verification was not attempted for this package.</li>"
+    }
+    elseif (-not $HelpAboutVerification.Verified) {
+        "<li>Help/About verification could not run: " + [System.Net.WebUtility]::HtmlEncode([string]$HelpAboutVerification.Reason) + "</li>"
+    }
+    elseif ($HelpAboutVerification.Matched) {
+        $evidence = $HelpAboutVerification.Evidence
+        $evidenceText = if ($evidence) {
+            $productName = if ($evidence.ProductName) { [string]$evidence.ProductName } else { [string]$evidence.WindowTitle }
+            $version = if ($evidence.FileVersion) { [string]$evidence.FileVersion } elseif ($evidence.ProductVersion) { [string]$evidence.ProductVersion } else { "unknown" }
+            " (Product: $productName, Version: $version)"
+        } else { "" }
+        "<li>Help/About evidence matched the claimed application name and version$([System.Net.WebUtility]::HtmlEncode($evidenceText)).</li>"
+    }
+    else {
+        "<li><strong>Verification could not confirm the installed software matches the claimed package identity.</strong> " + [System.Net.WebUtility]::HtmlEncode([string]$HelpAboutVerification.Reason) + "</li>"
+    }
 
     # New template tokens.
     $HtmlContent = $HtmlContent.Replace('[OS_COMPATIBILITY_CONTENT]', $osList)

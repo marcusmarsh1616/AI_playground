@@ -59,7 +59,13 @@ function Invoke-PythonScraperForPackageHelper {
         [string]$Version = "",
 
         [int]$TimeoutSeconds = 30,
-        [int]$MaxResultsPerSite = 12
+        [int]$MaxResultsPerSite = 12,
+
+        # Optional callback invoked immediately for each stderr progress line
+        # as the scraper produces it (scraper.py prints step-by-step [INFO]/
+        # [STEP]/[ERROR] lines to stderr in real time). Lets callers stream
+        # live progress instead of only seeing output after the process exits.
+        [scriptblock]$OnOutputLine = $null
     )
 
     $result = [ordered]@{
@@ -140,6 +146,13 @@ function Invoke-PythonScraperForPackageHelper {
 
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
+    # Accumulators shared with the async event handlers below. These are
+    # PowerShell collections captured by reference into the event action
+    # scriptblocks via -MessageData, since event handlers run on a separate
+    # thread and can't close over local variables directly.
+    $stdoutBuilder = New-Object System.Text.StringBuilder
+    $stderrLinesList = New-Object System.Collections.Generic.List[string]
+
     try {
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = $precheck.PythonPath
@@ -152,22 +165,71 @@ function Invoke-PythonScraperForPackageHelper {
 
         $proc = New-Object System.Diagnostics.Process
         $proc.StartInfo = $psi
-        [void]$proc.Start()
+        $proc.EnableRaisingEvents = $true
 
-        $proc.StandardInput.Write($configJson)
-        $proc.StandardInput.Close()
+        $outputHandlerState = [PSCustomObject]@{
+            StdoutBuilder = $stdoutBuilder
+        }
+        $errorHandlerState = [PSCustomObject]@{
+            StderrLines = $stderrLinesList
+            OnOutputLine = $OnOutputLine
+        }
 
-        $stdout = $proc.StandardOutput.ReadToEnd()
-        $stderr = $proc.StandardError.ReadToEnd()
-        $proc.WaitForExit()
+        $outputAction = {
+            param($sender, $e)
+            if ($null -ne $e.Data) {
+                [void]$Event.MessageData.StdoutBuilder.AppendLine($e.Data)
+            }
+        }
+        $errorAction = {
+            param($sender, $e)
+            if ($null -ne $e.Data -and -not [string]::IsNullOrWhiteSpace($e.Data)) {
+                [void]$Event.MessageData.StderrLines.Add($e.Data)
+                if ($Event.MessageData.OnOutputLine) {
+                    try {
+                        & $Event.MessageData.OnOutputLine $e.Data
+                    }
+                    catch {
+                        # Never let a callback failure break the scrape itself.
+                    }
+                }
+            }
+        }
+
+        $outputSub = Register-ObjectEvent -InputObject $proc -EventName OutputDataReceived -Action $outputAction -MessageData $outputHandlerState
+        $errorSub = Register-ObjectEvent -InputObject $proc -EventName ErrorDataReceived -Action $errorAction -MessageData $errorHandlerState
+
+        try {
+            [void]$proc.Start()
+            $proc.BeginOutputReadLine()
+            $proc.BeginErrorReadLine()
+
+            $proc.StandardInput.Write($configJson)
+            $proc.StandardInput.Close()
+
+            # Poll rather than block on WaitForExit(): a blocking wait on this
+            # thread prevents PowerShell from pumping the queued
+            # OutputDataReceived/ErrorDataReceived events until the process
+            # has already exited, which defeats live streaming entirely.
+            while (-not $proc.HasExited) {
+                Start-Sleep -Milliseconds 100
+            }
+
+            # Drain any events still queued immediately after exit.
+            Start-Sleep -Milliseconds 100
+        }
+        finally {
+            Unregister-Event -SourceIdentifier $outputSub.Name -ErrorAction SilentlyContinue
+            Unregister-Event -SourceIdentifier $errorSub.Name -ErrorAction SilentlyContinue
+            Remove-Job -Job $outputSub -Force -ErrorAction SilentlyContinue
+            Remove-Job -Job $errorSub -Force -ErrorAction SilentlyContinue
+        }
 
         $stopwatch.Stop()
         $result.DurationSeconds = [Math]::Round($stopwatch.Elapsed.TotalSeconds, 2)
 
-        $stderrLines = @()
-        if (-not [string]::IsNullOrWhiteSpace($stderr)) {
-            $stderrLines = @($stderr -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-        }
+        $stdout = $stdoutBuilder.ToString()
+        $stderrLines = @($stderrLinesList)
 
         $result.StderrLines = $stderrLines
         $result.Diagnostics = @{ Precheck = $precheck; ExitCode = $proc.ExitCode }

@@ -325,5 +325,208 @@ function Export-InstallMediaIconToDocs {
     }
 }
 
+function New-PackageMetadataFile {
+    <#
+    .SYNOPSIS
+        Generates a per-package metadata.json from the Master Template's
+        metadata_template.json, populated with values already known to the
+        GUI (Vendor/Name/Version/RITM/switches/InstallContext).
+    .DESCRIPTION
+        Reads the template with ConvertFrom-Json (matching the structured
+        JSON convention used everywhere else in this codebase, e.g.
+        app.config.json), sets properties on the resulting object, and
+        writes <PackagePath>\Docs\metadata.json with ConvertTo-Json. Fields
+        with no GUI equivalent (deployment target groups, dependencies,
+        testing tracking, etc.) are left at template defaults for manual
+        fill-in later.
+    .PARAMETER TemplatePath
+        Path to Master Template\Docs\metadata_template.json
+    .PARAMETER PackagePath
+        Path to the per-package folder (metadata.json is written under its
+        Docs subfolder)
+    .OUTPUTS
+        Hashtable with keys: Success (bool), OutputPath (string), Message (string)
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TemplatePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$PackagePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Vendor,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Version,
+
+        [Parameter(Mandatory = $false)]
+        [string]$Ritm = "",
+
+        [Parameter(Mandatory = $false)]
+        [string]$InstallCommandLine = "",
+
+        [Parameter(Mandatory = $false)]
+        [string]$UninstallCommandLine = "",
+
+        [Parameter(Mandatory = $false)]
+        [string]$InstallContext = "System",
+
+        [Parameter(Mandatory = $false)]
+        [string]$PackagedBy = ""
+    )
+
+    Write-Verbose "FolderEngine: Generating package metadata.json"
+
+    try {
+        if (-not (Test-Path $TemplatePath)) {
+            throw "Metadata template not found: $TemplatePath"
+        }
+
+        $docsFolder = Join-Path $PackagePath "Docs"
+        if (-not (Test-Path $docsFolder)) {
+            New-Item -Path $docsFolder -ItemType Directory -Force | Out-Null
+        }
+
+        $metadata = Get-Content -Path $TemplatePath -Raw -Encoding UTF8 | ConvertFrom-Json
+
+        $displayName = "{0} {1}" -f $Name, $Version
+        $metadata.package.ritm_number = $Ritm
+        $metadata.package.display_name = $displayName
+        $metadata.package.publisher = $Vendor
+        $metadata.package.developer = $Vendor
+        $metadata.package.version = $Version
+
+        if (-not [string]::IsNullOrWhiteSpace($InstallCommandLine)) {
+            $metadata.installation.install_command_line = $InstallCommandLine
+        }
+        if (-not [string]::IsNullOrWhiteSpace($UninstallCommandLine)) {
+            $metadata.installation.uninstall_command_line = $UninstallCommandLine
+        }
+        $runAsAccount = if ($InstallContext -eq "User") { "user" } else { "system" }
+        $metadata.installation.install_experience.run_as_account = $runAsAccount
+        $metadata.deployment.deployment_type = $InstallContext
+
+        $metadata.audit.servicenow_ritm = $Ritm
+
+        if (-not [string]::IsNullOrWhiteSpace($PackagedBy)) {
+            $metadata.metadata.packaged_by = $PackagedBy
+            $metadata.metadata.last_modified_by = $PackagedBy
+        }
+        $nowIso = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+        $metadata.metadata.packaged_date = $nowIso
+        $metadata.metadata.last_modified_date = $nowIso
+
+        $outputPath = Join-Path $docsFolder "metadata.json"
+        $metadata | ConvertTo-Json -Depth 12 | Set-Content -Path $outputPath -Encoding UTF8 -Force
+
+        Write-Verbose "FolderEngine: metadata.json written to $outputPath"
+        return @{
+            Success = $true
+            OutputPath = $outputPath
+            Message = "metadata.json generated successfully"
+        }
+    }
+    catch {
+        Write-Error "FolderEngine: Error generating metadata.json - $($_.Exception.Message)"
+        return @{
+            Success = $false
+            OutputPath = ""
+            Message = $_.Exception.Message
+        }
+    }
+}
+
+function New-PackageDocFiles {
+    <#
+    .SYNOPSIS
+        Generates per-package README.md and CHANGELOG.md from the Master
+        Template's README_Template.md/CHANGELOG_Template.md.
+    .DESCRIPTION
+        Fills each template's placeholders with chained literal .Replace()
+        calls, matching the substitution technique already established in
+        ValidationReportEngine's DocumentGeneratorEngine.psm1 (New-ValidationDocument),
+        rather than introducing a new templating convention. The two
+        templates use different placeholder styles as shipped
+        (README_Template.md's "# Package Name" heading is literal text, not
+        a {token}; CHANGELOG_Template.md uses {Application Name}/{version}/
+        {revision}/{Author Name}) - both are handled here.
+    .PARAMETER TemplateFolderPath
+        Path to the Master Template root (contains README_Template.md and
+        CHANGELOG_Template.md)
+    .PARAMETER PackagePath
+        Path to the per-package folder (README.md/CHANGELOG.md are written
+        at the package root, matching where the *_Template.md files
+        themselves live)
+    .OUTPUTS
+        Hashtable with keys: Success (bool), GeneratedFiles (string[]), Message (string)
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TemplateFolderPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$PackagePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Version,
+
+        [Parameter(Mandatory = $false)]
+        [string]$PackagedBy = ""
+    )
+
+    Write-Verbose "FolderEngine: Generating README.md/CHANGELOG.md"
+
+    $generatedFiles = @()
+
+    try {
+        $readmeTemplatePath = Join-Path $TemplateFolderPath "README_Template.md"
+        if (Test-Path $readmeTemplatePath) {
+            $readmeContent = Get-Content -Path $readmeTemplatePath -Raw -Encoding UTF8
+            $readmeContent = $readmeContent.Replace("# Package Name", ("# {0} {1}" -f $Name, $Version))
+
+            $readmeOutputPath = Join-Path $PackagePath "README.md"
+            $readmeContent | Set-Content -Path $readmeOutputPath -Encoding UTF8 -Force
+            $generatedFiles += $readmeOutputPath
+        }
+
+        $changelogTemplatePath = Join-Path $TemplateFolderPath "CHANGELOG_Template.md"
+        if (Test-Path $changelogTemplatePath) {
+            $changelogContent = Get-Content -Path $changelogTemplatePath -Raw -Encoding UTF8
+            $changelogContent = $changelogContent.Replace("{Application Name}", $Name)
+            $changelogContent = $changelogContent.Replace("{version}", $Version)
+            $changelogContent = $changelogContent.Replace("{revision}", "1")
+            $changelogContent = $changelogContent.Replace("{Author Name}", $PackagedBy)
+
+            $changelogOutputPath = Join-Path $PackagePath "CHANGELOG.md"
+            $changelogContent | Set-Content -Path $changelogOutputPath -Encoding UTF8 -Force
+            $generatedFiles += $changelogOutputPath
+        }
+
+        Write-Verbose "FolderEngine: Generated $($generatedFiles.Count) doc file(s)"
+        return @{
+            Success = $true
+            GeneratedFiles = $generatedFiles
+            Message = "README.md/CHANGELOG.md generated successfully"
+        }
+    }
+    catch {
+        Write-Error "FolderEngine: Error generating README/CHANGELOG - $($_.Exception.Message)"
+        return @{
+            Success = $false
+            GeneratedFiles = $generatedFiles
+            Message = $_.Exception.Message
+        }
+    }
+}
+
 # Export public functions
-Export-ModuleMember -Function New-PackagingFolderStructure, Copy-TemplateFiles, Copy-InstallerToPackage, Export-InstallMediaIconToDocs
+Export-ModuleMember -Function New-PackagingFolderStructure, Copy-TemplateFiles, Copy-InstallerToPackage, Export-InstallMediaIconToDocs, New-PackageMetadataFile, New-PackageDocFiles

@@ -27,6 +27,8 @@ $script:Form = $null
 $script:Controls = @{}
 $script:UiRunResult = $null
 $script:CurrentAppVendor = ""
+$script:HelpAboutVerificationResult = $null
+$script:InstallationDetailsVerificationSkipped = $false
 
 #endregion
 
@@ -472,15 +474,26 @@ function Start-AutomatedDocumentation {
     )
     # Validate inputs
     if ([string]::IsNullOrWhiteSpace($script:Controls.txtAppName.Text)) {
-        [System.Windows.Forms.MessageBox]::Show("Please enter Application Name", "Required", 'OK', 'Warning')
+        Write-UIStatus "Application Name is required before starting documentation capture." "Red"
+        $script:Controls.txtAppName.BackColor = [System.Drawing.Color]::FromArgb(255, 235, 235)
         return
     }
-    
+    else {
+        $script:Controls.txtAppName.BackColor = [System.Drawing.Color]::White
+    }
+
     if ([string]::IsNullOrWhiteSpace($script:Controls.txtAppVersion.Text)) {
-        [System.Windows.Forms.MessageBox]::Show("Please enter Application Version", "Required", 'OK', 'Warning')
+        Write-UIStatus "Application Version is required before starting documentation capture." "Red"
+        $script:Controls.txtAppVersion.BackColor = [System.Drawing.Color]::FromArgb(255, 235, 235)
         return
     }
-    
+    else {
+        $script:Controls.txtAppVersion.BackColor = [System.Drawing.Color]::White
+    }
+
+    $script:HelpAboutVerificationResult = $null
+    $script:InstallationDetailsVerificationSkipped = $false
+
     # Disable controls during processing
     $script:Controls.btnStart.Enabled = $false
     if ($script:Controls.btnManual) { $script:Controls.btnManual.Enabled = $false }
@@ -490,6 +503,7 @@ function Start-AutomatedDocumentation {
     try {
         # Step 1: Create session
         Write-UIStatus "Creating documentation session..." "Blue"
+        Write-DocumentationProcessLog "Validation documentation session starting." 'INFO'
         if ([string]::IsNullOrWhiteSpace($CaptureWorkingDirectory)) {
             $script:CurrentSession = New-DocumentationSession `
                 -AppName $script:Controls.txtAppName.Text `
@@ -525,6 +539,7 @@ function Start-AutomatedDocumentation {
             $script:CurrentSession.AppName
         }
         Write-UIStatus "Capture names set. Figure2='$captureInstalledAppsName' Figure3/4/5='$captureStartMenuName' Section1/3='$captureValidationLookupName'" "Blue"
+        Write-DocumentationProcessLog ("Capture names set | Figure2={0} | Figure3/4/5={1} | Section1/3={2}" -f $captureInstalledAppsName, $captureStartMenuName, $captureValidationLookupName) 'INFO'
         Start-Sleep -Milliseconds 500
 
         # Section 1 vendor documentation is intentionally collected before capture steps.
@@ -561,13 +576,14 @@ function Start-AutomatedDocumentation {
                 @{ Figure = 2; Label = "Programs & Features"; Runner = { param($outPath) Invoke-AutomatedInstalledAppsCapture -AppName $captureInstalledAppsName -OutputPath $outPath } },
                 @{ Figure = 3; Label = "Start Menu"; Runner = { param($outPath) Invoke-AutomatedStartMenuCapture -AppName $captureStartMenuName -OutputPath $outPath } },
                 @{ Figure = 4; Label = "Application Opened"; Runner = { param($outPath) Invoke-AutomatedApplicationOpenedCapture -AppName $captureStartMenuName -OutputPath $outPath } },
-                @{ Figure = 5; Label = "Help/About Window"; Runner = { param($outPath) Invoke-AutomatedAboutWindowCapture -AppName $captureStartMenuName -OutputPath $outPath } }
+                @{ Figure = 5; Label = "Help/About Window"; Runner = { param($outPath) Invoke-AutomatedAboutWindowCapture -AppName $captureStartMenuName -OutputPath $outPath -AppVersion $script:CurrentSession.AppVersion } }
             )
 
             foreach ($step in $captureSteps) {
                 $captured = $false
                 while (-not $captured) {
                     Write-UIStatus ("Capturing Figure {0} ({1})..." -f $step.Figure, $step.Label) "Blue"
+                    Write-DocumentationProcessLog ("Capturing Figure {0} ({1})..." -f $step.Figure, $step.Label) 'INFO'
                     $script:Form.WindowState = 'Minimized'
                     Start-Sleep -Milliseconds 500
 
@@ -582,18 +598,33 @@ function Start-AutomatedDocumentation {
                     if ($result.Success) {
                         $script:CurrentSession = Update-DocumentationSessionCapture -Session $script:CurrentSession -FigureNumber $step.Figure -FilePath $outputPath
                         Write-UIStatus ("Figure {0} captured successfully" -f $step.Figure) "Green"
+                        Write-DocumentationProcessLog ("Figure {0} ({1}) captured successfully." -f $step.Figure, $step.Label) 'INFO'
+                        if ($step.Figure -eq 5 -and $result.PSObject.Properties.Name -contains 'Verification') {
+                            $script:HelpAboutVerificationResult = $result.Verification
+                            if ($result.Verification -and $result.Verification.Matched) {
+                                Write-UIStatus "Help/About evidence matched claimed app name and version." "Green"
+                                Write-DocumentationProcessLog "Help/About verification: matched claimed app name and version." 'INFO'
+                            }
+                            elseif ($result.Verification -and $result.Verification.Verified) {
+                                Write-UIStatus ("Help/About verification did not confirm a match: {0}" -f $result.Verification.Reason) "Orange"
+                                Write-DocumentationProcessLog ("Help/About verification did not confirm a match: {0}" -f $result.Verification.Reason) 'WARN'
+                            }
+                        }
                         $captured = $true
                         continue
                     }
 
                     $reason = if ($result.ErrorMessage) { [string]$result.ErrorMessage } else { "unknown reason" }
+                    Write-DocumentationProcessLog ("Figure {0} ({1}) capture failed: {2}" -f $step.Figure, $step.Label, $reason) 'WARN'
                     $action = Show-CaptureFailureActionDialog -FigureNumber $step.Figure -FailureReason $reason
                     if ($action -eq 'Retry') {
+                        Write-DocumentationProcessLog ("Figure {0} capture retry requested by technician." -f $step.Figure) 'INFO'
                         continue
                     }
                     if ($action -eq 'Skip') {
                         if ($step.Figure -eq 5) {
                             Write-UIStatus "Figure 5 automation skipped. Capture Help/About manually with Snagit and save as Figure5.jpg in the images folder." "Orange"
+                            Write-DocumentationProcessLog "Figure 5 automation skipped; manual capture requested." 'WARN'
                             try {
                                 Start-Process explorer.exe $script:CurrentSession.WorkingDirectory | Out-Null
                             }
@@ -612,6 +643,7 @@ function Start-AutomatedDocumentation {
                             if ($manualFigure5Path) {
                                 $script:CurrentSession = Update-DocumentationSessionCapture -Session $script:CurrentSession -FigureNumber 5 -FilePath $manualFigure5Path
                                 Write-UIStatus "Figure 5 captured manually and accepted." "Green"
+                                Write-DocumentationProcessLog "Figure 5 captured manually and accepted." 'INFO'
                                 $captured = $true
                                 continue
                             }
@@ -620,6 +652,7 @@ function Start-AutomatedDocumentation {
                         }
 
                         Write-UIStatus ("Figure {0} skipped. Manual capture will be required later." -f $step.Figure) "Orange"
+                        Write-DocumentationProcessLog ("Figure {0} skipped. Manual capture will be required later." -f $step.Figure) 'WARN'
                         $captured = $true
                         continue
                     }
@@ -631,6 +664,7 @@ function Start-AutomatedDocumentation {
         $missingBeforeManual = Get-MissingCaptureFigures -Session $script:CurrentSession
         if ($missingBeforeManual.Count -gt 0) {
             Write-UIStatus ("Manual capture required for Figure(s): {0}" -f ($missingBeforeManual -join ', ')) "Orange"
+            Write-DocumentationProcessLog ("Manual capture required for Figure(s): {0}" -f ($missingBeforeManual -join ', ')) 'WARN'
             $manualReady = Show-ManualCaptureChecklistDialog -Session $script:CurrentSession
             if (-not $manualReady) {
                 throw "Manual capture checklist was cancelled. Report was not generated."
@@ -645,9 +679,11 @@ function Start-AutomatedDocumentation {
         # Step 5: Collect installation details
         $detailsRunMode = if ($InstallContext -eq 'User') { 'User-level (non-elevated)' } else { 'System-level (elevated)' }
         Write-UIStatus "Collecting installation details ($detailsRunMode)..." "Blue"
+        Write-DocumentationProcessLog "Collecting installation details ($detailsRunMode)..." 'INFO'
 
         $helperFullPath = Resolve-ElevatedInstallInfoScriptPath
         Write-UIStatus "Installation details helper resolved: $helperFullPath" "Blue"
+        Write-DocumentationProcessLog "Installation details helper resolved: $helperFullPath" 'INFO'
         $detailsCollected = $false
         $detailsAttempt = 0
         $detailLookupNames = New-Object System.Collections.Generic.List[string]
@@ -681,9 +717,10 @@ function Start-AutomatedDocumentation {
 #Requires -Version 5.1
 `$helperScriptPath = '$($helperFullPath.Replace("'", "''"))'
 `$appName = '$($lookupName.Replace("'", "''"))'
+`$appVersion = '$($script:CurrentSession.AppVersion.Replace("'", "''"))'
 `$outputFile = '$($tempFile.Replace("'", "''"))'
 
-& "`$helperScriptPath" -AppName "`$appName" -OutputFile "`$outputFile"
+& "`$helperScriptPath" -AppName "`$appName" -AppVersion "`$appVersion" -OutputFile "`$outputFile"
 exit `$LASTEXITCODE
 "@
 
@@ -728,6 +765,7 @@ exit `$LASTEXITCODE
 
                         $detailsCollected = $true
                         Write-UIStatus "Installation details collected successfully" "Green"
+                        Write-DocumentationProcessLog "Installation details collected successfully using app identity '$lookupName'." 'INFO'
                         Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
                         break
                     }
@@ -761,6 +799,7 @@ exit `$LASTEXITCODE
             }
 
             Write-UIStatus "Installation details attempt $detailsAttempt failed: $attemptFailureReason" "Orange"
+            Write-DocumentationProcessLog "Installation details attempt $detailsAttempt failed: $attemptFailureReason" 'WARN'
 
             $response = [System.Windows.Forms.MessageBox]::Show(
                 "Installation details collection failed.`n`nMode: $detailsRunMode`nReason: $attemptFailureReason`n`nYes = Retry collection`nNo = Continue without details`nCancel = Stop validation workflow",
@@ -771,14 +810,18 @@ exit `$LASTEXITCODE
 
             if ($response -eq [System.Windows.Forms.DialogResult]::Yes) {
                 Write-UIStatus "Retrying installation details collection..." "Orange"
+                Write-DocumentationProcessLog "Technician chose to retry installation details collection." 'INFO'
                 continue
             }
 
             if ($response -eq [System.Windows.Forms.DialogResult]::No) {
                 Write-UIStatus "Installation details skipped by technician." "Orange"
+                Write-DocumentationProcessLog "Installation details collection skipped by technician; verification will be marked skipped in the report." 'WARN'
+                $script:InstallationDetailsVerificationSkipped = $true
                 break
             }
 
+            Write-DocumentationProcessLog "Validation workflow stopped by technician during installation details collection." 'WARN'
             throw "Installation details collection failed: $attemptFailureReason"
         }
         
@@ -786,7 +829,8 @@ exit `$LASTEXITCODE
         
         # Step 6: Generate validation document
         Write-UIStatus "Generating validation document..." "Blue"
-        
+        Write-DocumentationProcessLog "Generating validation document..." 'INFO'
+
         $doc = New-ValidationDocument `
             -AppName $script:CurrentSession.AppName `
             -AppVersion $script:CurrentSession.AppVersion `
@@ -816,14 +860,16 @@ exit `$LASTEXITCODE
             -InstallDirectory $formattedDirs `
             -RegistryKeys $formattedKeys `
             -ServicesCreated $script:CurrentSession.InstallDetails.ServicesCreated `
-            -UninstallKeys $formattedUninstall
+            -UninstallKeys $formattedUninstall `
+            -VerificationSkipped:$script:InstallationDetailsVerificationSkipped
 
         $doc = Set-VendorDocumentationDetails `
             -HtmlContent $doc `
             -OSCompatibilityText $vendorSummary.OSCompatibility `
             -PrerequisitesText $vendorSummary.Prerequisites `
             -ApplicationConflictsText $vendorSummary.ApplicationConflicts `
-            -UpgradePathsText $vendorSummary.UpgradePaths
+            -UpgradePathsText $vendorSummary.UpgradePaths `
+            -HelpAboutVerification $script:HelpAboutVerificationResult
 
         if ($doc -match '\[OS_COMPATIBILITY_CONTENT\]|\[CONFLICT_CONTENT\]|\[PREREQUISITE_CONTENT\]|\[UPGRADE_PATH_CONTENT\]') {
             Write-UIStatus "Section 1 placeholders remained after rendering; applying explicit fallback content." "Orange"
@@ -857,6 +903,7 @@ exit `$LASTEXITCODE
         # Session cleanup handled by setting to null
         
         Write-UIStatus "Documentation complete." "Green"
+        Write-DocumentationProcessLog ("Validation documentation completed successfully. Output: {0}" -f $outputPath) 'INFO'
         Close-Snagit
         Close-InstalledAppsWindow
         
@@ -880,6 +927,7 @@ exit `$LASTEXITCODE
         Close-Snagit
         Close-InstalledAppsWindow
         Write-UIStatus "Error: $($_.Exception.Message)" "Red"
+        Write-DocumentationProcessLog ("Validation documentation failed: {0}" -f $_.Exception.Message) 'ERROR'
         [System.Windows.Forms.MessageBox]::Show("Error occurred:" + [Environment]::NewLine + [Environment]::NewLine + $_.Exception.Message, "Error", 'OK', 'Error')
         
         # Re-enable UI

@@ -44,6 +44,150 @@ function Get-HelpAboutAutomationModulePath {
     return $null
 }
 
+function Get-HelpAboutDetectionModulePath {
+    $candidatePaths = @(
+        (Join-Path $PSScriptRoot "..\..\..\..\Installation_Validation_Report\PowerShell\Modules\HelpAboutDetection.psm1"),
+        (Join-Path (Split-Path -Parent $PSScriptRoot) "Installation_Validation_Report\PowerShell\Modules\HelpAboutDetection.psm1"),
+        (Join-Path (Get-Location).Path "Installation_Validation_Report\PowerShell\Modules\HelpAboutDetection.psm1")
+    )
+
+    foreach ($candidatePath in $candidatePaths) {
+        if (Test-Path $candidatePath) {
+            return (Resolve-Path $candidatePath).Path
+        }
+    }
+
+    return $null
+}
+
+function Test-HelpAboutVersionMatch {
+    <#
+    .SYNOPSIS
+        Compares Help/About window evidence against the claimed app name/version.
+
+    .DESCRIPTION
+        Calls Get-HelpAboutVerification to enumerate visible About/Version-like
+        windows and their owning executable's FileVersionInfo, then checks whether
+        any candidate's ProductName/FileVersion/ProductVersion plausibly matches
+        the technician-entered AppName/AppVersion. Returns a structured result so
+        the report can state explicitly whether verification matched, mismatched,
+        or found no evidence at all.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$AppName,
+
+        [Parameter(Mandatory)]
+        [string]$AppVersion
+    )
+
+    $result = [PSCustomObject]@{
+        Verified = $false
+        Matched = $false
+        Evidence = $null
+        Reason = "Help/About verification was not attempted."
+    }
+
+    $modulePath = Get-HelpAboutDetectionModulePath
+    if ([string]::IsNullOrWhiteSpace($modulePath)) {
+        $result.Reason = "Help/About detection module not found."
+        return $result
+    }
+
+    try {
+        Import-Module $modulePath -Force -ErrorAction Stop
+    }
+    catch {
+        $result.Reason = "Failed to load Help/About detection module: $($_.Exception.Message)"
+        return $result
+    }
+
+    try {
+        $candidates = @(Get-HelpAboutVerification -ApplicationName $AppName)
+    }
+    catch {
+        $result.Reason = "Help/About window scan failed: $($_.Exception.Message)"
+        return $result
+    }
+
+    $result.Verified = $true
+
+    if ($candidates.Count -eq 0) {
+        $result.Reason = "No About/Version-style window was found for '$AppName'."
+        return $result
+    }
+
+    $nameNormalized = ($AppName -replace '[^a-zA-Z0-9]', '').ToLowerInvariant()
+    $versionNormalized = ($AppVersion -replace '[^0-9.]', '')
+
+    $bestMatch = $null
+    foreach ($candidate in $candidates) {
+        $candidateNameFields = @($candidate.ProductName, $candidate.CompanyName, $candidate.WindowTitle, $candidate.ProcessName) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        $nameHit = $false
+        foreach ($field in $candidateNameFields) {
+            $fieldNormalized = ($field -replace '[^a-zA-Z0-9]', '').ToLowerInvariant()
+            if (-not [string]::IsNullOrWhiteSpace($fieldNormalized) -and
+                (-not [string]::IsNullOrWhiteSpace($nameNormalized)) -and
+                ($fieldNormalized -like "*$nameNormalized*" -or $nameNormalized -like "*$fieldNormalized*")) {
+                $nameHit = $true
+                break
+            }
+        }
+
+        $candidateVersionFields = @($candidate.FileVersion, $candidate.ProductVersion) | Where-Object { $_ }
+        $versionHit = $false
+        foreach ($versionField in $candidateVersionFields) {
+            if (-not [string]::IsNullOrWhiteSpace($versionNormalized) -and
+                ([string]$versionField).Contains($versionNormalized)) {
+                $versionHit = $true
+                break
+            }
+        }
+
+        if ($nameHit -and $versionHit) {
+            $bestMatch = $candidate
+            break
+        }
+        if ($nameHit -and -not $bestMatch) {
+            $bestMatch = $candidate
+        }
+    }
+
+    if (-not $bestMatch) {
+        $bestMatch = $candidates[0]
+    }
+
+    $result.Evidence = $bestMatch
+
+    if ($bestMatch) {
+        $nameField = @($bestMatch.ProductName, $bestMatch.WindowTitle, $bestMatch.ProcessName) | Where-Object { $_ } | Select-Object -First 1
+        $nameFieldNormalized = if ($nameField) { ($nameField -replace '[^a-zA-Z0-9]', '').ToLowerInvariant() } else { "" }
+        $nameMatched = (-not [string]::IsNullOrWhiteSpace($nameNormalized)) -and (-not [string]::IsNullOrWhiteSpace($nameFieldNormalized)) -and
+            ($nameFieldNormalized -like "*$nameNormalized*" -or $nameNormalized -like "*$nameFieldNormalized*")
+
+        $versionField = @($bestMatch.FileVersion, $bestMatch.ProductVersion) | Where-Object { $_ } | Select-Object -First 1
+        $versionMatched = (-not [string]::IsNullOrWhiteSpace($versionNormalized)) -and $versionField -and
+            ([string]$versionField).Contains($versionNormalized)
+
+        if ($nameMatched -and $versionMatched) {
+            $result.Matched = $true
+            $result.Reason = "Matched claimed name and version against Help/About evidence."
+        }
+        elseif ($nameMatched) {
+            $result.Matched = $false
+            $result.Reason = "Name matched but version could not be confirmed from Help/About evidence (found: $versionField)."
+        }
+        else {
+            $result.Matched = $false
+            $result.Reason = "Help/About evidence found but did not match the claimed application name or version."
+        }
+    }
+
+    return $result
+}
+
 function Get-ForegroundProcessId {
     [CmdletBinding()]
     param()
@@ -533,7 +677,10 @@ function Invoke-AutomatedAboutWindowCapture {
         [string]$AppName,
 
         [Parameter(Mandatory)]
-        [string]$OutputPath
+        [string]$OutputPath,
+
+        [Parameter()]
+        [string]$AppVersion = ""
     )
 
     Write-Verbose "Starting automated Help/About capture for: $AppName"
@@ -586,11 +733,26 @@ function Invoke-AutomatedAboutWindowCapture {
                 Success = $false
                 ErrorMessage = $failureReason
                 OutputPath = $null
+                Verification = [PSCustomObject]@{
+                    Verified = $false
+                    Matched = $false
+                    Evidence = $null
+                    Reason = "About window could not be opened; no evidence to verify."
+                }
             }
         }
 
         Start-Sleep -Seconds 1
-        return Invoke-ScreenCapture -OutputPath $OutputPath -FigureNumber 5 -Description "Help/About: $AppName"
+
+        $verification = Test-HelpAboutVersionMatch -AppName $AppName -AppVersion $AppVersion
+        $captureResult = Invoke-ScreenCapture -OutputPath $OutputPath -FigureNumber 5 -Description "Help/About: $AppName"
+
+        return [PSCustomObject]@{
+            Success = $captureResult.Success
+            ErrorMessage = $captureResult.ErrorMessage
+            OutputPath = $captureResult.OutputPath
+            Verification = $verification
+        }
     }
     catch {
         Write-Error "Automation error: $($_.Exception.Message)"
@@ -598,6 +760,12 @@ function Invoke-AutomatedAboutWindowCapture {
             Success = $false
             ErrorMessage = $_.Exception.Message
             OutputPath = $null
+            Verification = [PSCustomObject]@{
+                Verified = $false
+                Matched = $false
+                Evidence = $null
+                Reason = "Verification not attempted due to an automation error: $($_.Exception.Message)"
+            }
         }
     }
 }

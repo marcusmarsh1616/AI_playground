@@ -717,6 +717,11 @@ function Get-PlaywrightScrapedPackageHelperSections {
 
     $writeProcessLine = {
         param([string]$Message, [string]$Level = "INFO")
+        # Runs inside a background job (separate process), so Write-ProcessOutputLine
+        # from the main script is never available here. Write-Progress is the one
+        # stream PowerShell marshals back to the parent process while the job is
+        # still running, which is what lets the busy dialog/log show live status.
+        Write-Progress -Activity "Package Helper" -Status $Message
         if (Get-Command Write-ProcessOutputLine -ErrorAction SilentlyContinue) {
             Write-ProcessOutputLine -Message $Message -Level $Level
         }
@@ -867,24 +872,26 @@ function Get-PlaywrightScrapedPackageHelperSections {
 
     & $writeProcessLine -Message "Package Helper scrape: running integrated PythonScraperEngine (may take up to a minute)." -Level "INFO"
 
-    $scrapeResult = Invoke-PythonScraperForPackageHelper -InstallMediaPath $InstallMediaPath -AppName $AppName -Vendor $Vendor -Version $Version
-    $emptyResult.DurationSeconds = [double]$scrapeResult.DurationSeconds
+    $convertToHighSignalScraperLineFn = ${function:ConvertTo-HighSignalScraperLine}
 
-    if ($scrapeResult.StderrLines) {
-        foreach ($line in @($scrapeResult.StderrLines)) {
-            $highSignal = ConvertTo-HighSignalScraperLine -Line ([string]$line)
-            if ([string]::IsNullOrWhiteSpace($highSignal)) {
-                continue
-            }
+    $onScraperOutputLine = {
+        param([string]$Line)
 
-            $lineLevel = "INFO"
-            if ($highSignal -match '^\[(ERROR|WARN)\]') {
-                $lineLevel = "WARN"
-            }
-
-            & $writeProcessLine -Message ("[Scraper] {0}" -f $highSignal) -Level $lineLevel
+        $highSignal = & $convertToHighSignalScraperLineFn -Line $Line
+        if ([string]::IsNullOrWhiteSpace($highSignal)) {
+            return
         }
-    }
+
+        $lineLevel = "INFO"
+        if ($highSignal -match '^\[(ERROR|WARN)\]') {
+            $lineLevel = "WARN"
+        }
+
+        & $writeProcessLine -Message ("[Scraper] {0}" -f $highSignal) -Level $lineLevel
+    }.GetNewClosure()
+
+    $scrapeResult = Invoke-PythonScraperForPackageHelper -InstallMediaPath $InstallMediaPath -AppName $AppName -Vendor $Vendor -Version $Version -OnOutputLine $onScraperOutputLine
+    $emptyResult.DurationSeconds = [double]$scrapeResult.DurationSeconds
 
     if (-not $scrapeResult.Success) {
         $emptyResult.Error = $scrapeResult.Error

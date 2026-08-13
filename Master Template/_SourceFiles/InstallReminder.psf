@@ -1741,7 +1741,8 @@ $formReminder_Load={
 	Write-Log "Initial Goal Height Reminder = $goalHeightReminder"
 	$Script:parentFormHeightCollapse = $buttonDelay.Location.Y + $buttonDelay.Height
 	#--Initiate and start timer
-	$script:EndTime = (Get-Date).AddMinutes(10) # this 'Minutes' is the number of minutes the dialog will stay up. 
+	$script:DialogTimingConfig = Get-DialogTimingConfig
+	$script:EndTime = (Get-Date).AddMinutes($script:DialogTimingConfig.InstallReminderTimeoutMinutes) # this 'Minutes' is the number of minutes the dialog will stay up.
 	$timerReminder.Enabled = $true
 	$timerReminder.Interval = 1000 # internval is in milliseconds, so 1000 means a second. 
 	$timerReminder.Start()
@@ -1790,8 +1791,8 @@ $buttonDelay_Click={
 	$buttonDelay.BackColor = $ButtonEnableColor
 	If (!$FinalMinsCancelSelected)
 	{
-		$timeSelected=10
-		$script:EndTime = (Get-Date).AddMinutes($timeSelected) # this 'Minutes' is the number of minutes the dialog will stay up. 
+		$timeSelected = (Get-DialogTimingConfig).LastCallMinutes
+		$script:EndTime = (Get-Date).AddMinutes($timeSelected) # this 'Minutes' is the number of minutes the dialog will stay up.
 		$script:span = $script:span + ($script:EndTime - (Get-Date))
 		$buttonDelay.Enabled = $false
 		$buttonDelay.BackColor = $ButtonDisableColor		

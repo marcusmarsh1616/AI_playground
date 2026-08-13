@@ -607,7 +607,7 @@ $formFinalMinsDropDown_Load={
 	#TODO: Initialize Form Controls here
 	$formFinalMinsDropDown.AutoScaleMode = 'DPI'
 	$formFinalMinsDropDown.AutoSize = $false
-	$finalminutes = 10
+	$finalminutes = (Get-DialogTimingConfig).LastCallMinutes
 	$yloc = $parentFormLocY + $goalHeight - 2
 	#$yloc = $parentFormLocY + $parentFormHeight - $parentFormHeightCollapse -2
 	$xloc = $parentFormLocX + ($parentFormWidth - $formFinalMinsDropDown.Width)

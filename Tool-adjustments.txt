@@ -1,0 +1,20 @@
+1.	A messagebox or functioning progress bar for the webscrape.
+2.	Trigger for the Troubleshooting tab.  Should be if No is clicked for did the software install or    uninstall as designed.
+3.	Troubleshooting should be reading three or four logs, not just two.  It should be looking at "C:\Program Files (x86)\Common Files\InstallLogs" and C:\Users\P1MAM08\AppData\Local\Temp\InstallLogs for more logs
+4.	Coding provided from other packages to wrap the start-process to function properly is not working.
+5.	Need to test to ensure the application application task is ended before the uninstall happens.
+6.      I would like to know if the code below has been wired into tool as a replacement process if execute-process does not work properly based on the errors in the logs
+	try {
+	                    # Bypass Execute-Process since it errors out due to filename
+	                    Write-Log -Message "Uninstalling $appName $appVersion..."
+	                    Start-Process -FilePath $uninstallerPath -ArgumentList '/uninstall', '/quiet', '/NoRestart' -Wait -ErrorAction Stop
+	                    Write-Log -Message "Uninstall completed."
+	             }
+	             catch
+	             {
+	                    Write-Log -Message "Failed to uninstall $appName $appVersion. Error: $($_.Exception.Message)"
+	             } 
+
+7.	Is there a way to have the Custom Command textboxes function just like a powershell_ise script pane with all the bells and whistles.
+8.	Find out why the uninstall validation report does not return Green when nothing is found.
+9.      Also let's make sure that Live Process Logs also shows what is happening in all the logs including the two folders that were added in #3

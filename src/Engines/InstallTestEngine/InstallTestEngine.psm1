@@ -42,26 +42,53 @@ function Get-SearchTokens {
         [string]$Vendor
     )
 
-    $tokens = @()
-    foreach ($raw in @($AppName, $Vendor)) {
+    function Split-IntoTokens([string]$raw) {
+        $result = @()
         if ([string]::IsNullOrWhiteSpace($raw)) {
-            continue
+            return $result
         }
 
         $trimmed = $raw.Trim()
         if (-not [string]::IsNullOrWhiteSpace($trimmed)) {
-            $tokens += $trimmed
+            $result += $trimmed
         }
 
         foreach ($part in ($trimmed -split '[^A-Za-z0-9]+')) {
             if (-not [string]::IsNullOrWhiteSpace($part) -and $part.Length -ge 3) {
-                $tokens += $part
+                $result += $part
             }
         }
+
+        return $result
     }
 
-    return @($tokens | Sort-Object -Unique)
+    $appNameTokens = @(Split-IntoTokens $AppName | Sort-Object -Unique)
+    $vendorTokens = @(Split-IntoTokens $Vendor | Sort-Object -Unique)
+
+    return [PSCustomObject]@{
+        AppNameTokens = $appNameTokens
+        VendorTokens  = $vendorTokens
+        AllTokens     = @(@($appNameTokens) + @($vendorTokens) | Sort-Object -Unique)
+    }
 }
+
+# Processes that must never be terminated by AppName/Vendor token matching, even on an
+# apparent match, because they are shared system/management agents rather than the
+# packaged application (e.g. a generic Vendor like "Microsoft" would otherwise match them).
+$script:ProtectedProcessNames = @(
+    'IntuneWindowsAgent',
+    'Microsoft.Management.Services.IntuneWindowsAgent',
+    'explorer',
+    'winlogon',
+    'csrss',
+    'services',
+    'lsass',
+    'svchost',
+    'MsMpEng',
+    'SecurityHealthService',
+    'SearchIndexer',
+    'dwm'
+)
 
 function Get-ShortcutTargetPath {
     [CmdletBinding()]
@@ -111,7 +138,9 @@ function Stop-RunningAppExecutables {
     }
 
     $tokens = Get-SearchTokens -AppName $AppName -Vendor $Vendor
-    if ($tokens.Count -eq 0) {
+    if ($tokens.AppNameTokens.Count -eq 0) {
+        # Vendor alone (e.g. "Microsoft", "Adobe") is too generic to safely match against
+        # every running process - require at least one AppName-derived token.
         return $result
     }
 
@@ -130,8 +159,12 @@ function Stop-RunningAppExecutables {
         catch {
         }
 
+        if ($processName -in $script:ProtectedProcessNames) {
+            continue
+        }
+
         $matched = $false
-        foreach ($token in $tokens) {
+        foreach ($token in $tokens.AppNameTokens) {
             if ($processName -like "*$token*" -or (-not [string]::IsNullOrWhiteSpace($processPath) -and $processPath -like "*$token*")) {
                 $matched = $true
                 break
@@ -144,12 +177,37 @@ function Stop-RunningAppExecutables {
 
         try {
             Stop-Process -Id $proc.Id -Force -ErrorAction Stop
-            $result.Terminated += [PSCustomObject]@{
-                Name = $processName
-                Id = $proc.Id
-                Path = $processPath
+
+            $exited = $true
+            try {
+                Wait-Process -Id $proc.Id -Timeout 5 -ErrorAction Stop
             }
-            Write-Verbose "InstallTestEngine: Terminated running process before uninstall - $processName (PID: $($proc.Id))"
+            catch [System.Management.Automation.PSArgumentException] {
+                # PID no longer exists - already gone, which is the success case.
+                $exited = $true
+            }
+            catch {
+                # Timed out waiting, or Wait-Process itself failed - poll once more to confirm.
+                $exited = -not (Get-Process -Id $proc.Id -ErrorAction SilentlyContinue)
+            }
+
+            if ($exited) {
+                $result.Terminated += [PSCustomObject]@{
+                    Name = $processName
+                    Id = $proc.Id
+                    Path = $processPath
+                }
+                Write-Verbose "InstallTestEngine: Terminated running process before uninstall - $processName (PID: $($proc.Id))"
+            }
+            else {
+                $result.Failed += [PSCustomObject]@{
+                    Name = $processName
+                    Id = $proc.Id
+                    Path = $processPath
+                    Error = "Process did not exit within timeout after Stop-Process."
+                }
+                Write-Warning "InstallTestEngine: Process $processName (PID: $($proc.Id)) did not exit within timeout after Stop-Process."
+            }
         }
         catch {
             $result.Failed += [PSCustomObject]@{
@@ -185,7 +243,7 @@ function Remove-InstalledDesktopShortcuts {
     }
 
     $tokens = Get-SearchTokens -AppName $AppName -Vendor $Vendor
-    if ($tokens.Count -eq 0) {
+    if ($tokens.AllTokens.Count -eq 0) {
         return $result
     }
 
@@ -205,7 +263,7 @@ function Remove-InstalledDesktopShortcuts {
             $shortcutName = [string]$Shortcut.Name
             $shortcutTarget = Get-ShortcutTargetPath -ShortcutPath $Shortcut.FullName
             $isMatch = $false
-            foreach ($token in $tokens) {
+            foreach ($token in $tokens.AllTokens) {
                 if ($shortcutName -like "*$token*" -or (-not [string]::IsNullOrWhiteSpace($shortcutTarget) -and $shortcutTarget -like "*$token*")) {
                     $isMatch = $true
                     break

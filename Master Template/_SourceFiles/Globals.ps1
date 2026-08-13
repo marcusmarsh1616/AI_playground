@@ -11158,6 +11158,76 @@ There is no uer interaction.
 }
 #endregion Function Set-PsadtAppLock 
 
+#region Function Get-DialogTimingConfig
+function Get-DialogTimingConfig
+{
+<#
+.SYNOPSIS
+
+Reads per-package dialog timer/delay-option overrides.
+
+.DESCRIPTION
+
+Looks for Data\dialog-config.json (per-package, optional). If present,
+returns its values merged over the built-in defaults below; if absent or
+unreadable, returns the defaults unchanged. This lets a package override
+just the specific timer/delay values technicians have identified as real
+pain points, without touching any dialog's layout, wording, or branding.
+
+Supported keys (all optional - only override what you need):
+  CloseOpenAppsTimeoutMinutes      (default 5)   - CloseOpenApps.psf countdown
+  InstallInformationTimeoutMinutes (default 10)  - InstallInformation.psf countdown
+  InstallReminderTimeoutMinutes    (default 10)  - InstallReminder.psf countdown
+  DelayOptionsNormalMinutes        (default [30, 60, 120])  - 3 delay choices, normal install
+  DelayOptionsForceRebootMinutes   (default [60, 120, 180]) - 3 delay choices, forced reboot
+  LastCallMinutes                  (default 10)  - TimeDelayLastCall.psf single option
+
+.OUTPUTS
+
+Hashtable with the keys above, always fully populated (defaults filled in
+for anything the JSON file didn't specify).
+
+.EXAMPLE
+
+$dialogConfig = Get-DialogTimingConfig
+$script:EndTimeOpenProcess = (Get-Date).AddMinutes($dialogConfig.CloseOpenAppsTimeoutMinutes)
+#>
+
+	$defaults = @{
+		CloseOpenAppsTimeoutMinutes = 5
+		InstallInformationTimeoutMinutes = 10
+		InstallReminderTimeoutMinutes = 10
+		DelayOptionsNormalMinutes = @(30, 60, 120)
+		DelayOptionsForceRebootMinutes = @(60, 120, 180)
+		LastCallMinutes = 10
+	}
+
+	try
+	{
+		$configPath = Join-Path -Path $dirFiles -ChildPath 'dialog-config.json'
+		if (-not (Test-Path -LiteralPath $configPath -PathType Leaf))
+		{
+			return $defaults
+		}
+
+		$overrides = Get-Content -Path $configPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+		foreach ($key in @($defaults.Keys))
+		{
+			if ($overrides.PSObject.Properties[$key] -and $null -ne $overrides.$key)
+			{
+				$defaults[$key] = $overrides.$key
+			}
+		}
+	}
+	catch
+	{
+		# Malformed or unreadable config - fall back to defaults rather than block the install
+	}
+
+	return $defaults
+}
+#endregion Function Get-DialogTimingConfig
+
 #region Function Get-QuarterInfo
 function Get-QuarterInfo
 {

@@ -50,6 +50,7 @@ function Main
 	[version]$appScriptBuildVersion = '1.0.0'
 	[string]$appInstallCommandLine = '' # the default commandline line is "REBOOT=ReallySuppress /QB!". The command line here will be appended to the default
 	[string]$appUninstallCommandLine = '' # the default commandline line is "REBOOT=ReallySuppress /QN". The command line here will be appended to the default
+	[string]$appUninstallRemoveFiles = '' # files/shortcuts to remove after uninstall (JSON zero-config appUninstallRemoveFiles); kept distinct from $appInstallRemoveFiles
 	[string]$appStopRequiredProcesses = '' # any executables that need be closed prior to an install EXAMPLE: Notepad,notepad.exe,true;
 	[string]$installContext = 'System' # shows what context this app should run in; System or User
 	[boolean]$appPrompt = $false
@@ -203,12 +204,26 @@ function Main
 					$appVersion = $($Matches[1])
 				}
 				if (($jsonContent.Apps[0]).appInstallCommandLine -ne '') { $appInstallCommandLine = ($jsonContent.Apps[0]).appInstallCommandLine }
-				if (($jsonContent.Apps[0]).appUninstallExeName -ne '') { $appUninstallExeName = ($jsonContent.Apps[0]).appUninstallExeName }
-				if (($jsonContent.Apps[0]).appUninstallCommandLine -ne '') { $appUninstallExeNameRegex = ($jsonContent.Apps[0]).appUninstallCommandLine }
+				if (($jsonContent.Apps[0]).appUninstallExeName -ne '')
+				{
+					$appUninstallExeName = ($jsonContent.Apps[0]).appUninstallExeName
+				}
+				Elseif (($jsonContent.Apps[0]).appUninstallExeNameRegex -ne '')
+				{
+					Try
+					{
+						$appUninstallExeName = (Get-ChildItem -Path $dirFiles | Where-Object { $_.Name -match ($jsonContent.Apps[0]).appUninstallExeNameRegex }).Name
+					}
+					catch
+					{
+						Write-Log -Message "Unable to find specified uninstaller in $dirFiles " -Severity 3 -LogType CMTrace
+					}
+				}
+				if (($jsonContent.Apps[0]).appUninstallCommandLine -ne '') { $appUninstallCommandLine = ($jsonContent.Apps[0]).appUninstallCommandLine }
 				if (($jsonContent.Apps[0]).appStopRequiredProcesses -ne '') { $appStopRequiredProcesses = ($jsonContent.Apps[0]).appStopRequiredProcesses }
 				if (($jsonContent.Apps[0]).appInstallDir -ne '') { $appInstallDir = ($jsonContent.Apps[0]).appInstallDir }
 				if (($jsonContent.Apps[0]).appInstallRemoveFiles -ne '') { $appInstallRemoveFiles = ($jsonContent.Apps[0]).appInstallRemoveFiles }
-				if (($jsonContent.Apps[0]).appUninstallRemoveFiles -ne '') { $appInstallRemoveFiles = ($jsonContent.Apps[0]).appUninstallRemoveFiles }
+				if (($jsonContent.Apps[0]).appUninstallRemoveFiles -ne '') { $appUninstallRemoveFiles = ($jsonContent.Apps[0]).appUninstallRemoveFiles }
 				if (($jsonContent.Apps[0]).appActiveSetup -ne '') { $appActiveSetup = ($jsonContent.Apps[0]).appActiveSetup }
 				#Override Vendor, AppName, AppVersion values with Global Property
 				if ($jsonContent.globalAppVendor -ne '') { $appVendor = $jsonContent.globalVendor }
